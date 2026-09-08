@@ -19,6 +19,14 @@ export interface IProject extends Document {
   description?: string;
   startDate?: Date;
   endDate?: Date;
+  /** Emails notified before project end date (expiry reminders). */
+  reminderEmails: string[];
+  /** When true, project auto-archives after endDate (default true). */
+  autoArchiveEnabled: boolean;
+  /** Last endDate value a pre-expiry warning was sent for (idempotency). */
+  expiryWarningSentFor?: Date;
+  archivedAt?: Date;
+  archivedReason?: 'manual' | 'end_date_reached';
   enabledServices: AdminServiceKey[];
   status: ProjectStatus;
   /** Platform User or TenantUser id depending on creator. */
@@ -46,6 +54,17 @@ const projectSchema = new Schema<IProject>(
     description: { type: String, trim: true, maxlength: 1000 },
     startDate: { type: Date },
     endDate: { type: Date },
+    reminderEmails: {
+      type: [String],
+      default: [],
+    },
+    autoArchiveEnabled: { type: Boolean, default: true },
+    expiryWarningSentFor: { type: Date },
+    archivedAt: { type: Date },
+    archivedReason: {
+      type: String,
+      enum: ['manual', 'end_date_reached'],
+    },
     enabledServices: {
       type: [String],
       default: [],
