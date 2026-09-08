@@ -41,6 +41,8 @@ function buildEmail(emailPrefix: string, index: number): string {
   return `${local}${index}${domain}`;
 }
 
+export { buildEmail as buildTenantUserEmail };
+
 function toTenantUserProfile(user: {
   _id: mongoose.Types.ObjectId;
   email: string;
@@ -170,9 +172,10 @@ export class TenantUserService {
     const results: BulkCreateTenantUsersResult['users'] = [];
     let created = 0;
     let failed = 0;
+    const normalizedPrefix = dto.emailPrefix.toLowerCase().trim();
 
     for (let i = 1; i <= dto.count; i++) {
-      const email = buildEmail(dto.emailPrefix, i);
+      const email = buildEmail(normalizedPrefix, i).toLowerCase().trim();
       const plainPassword = dto.password ?? generateSecurePassword();
 
       try {
@@ -183,7 +186,7 @@ export class TenantUserService {
           continue;
         }
 
-        await TenantUser.create({
+        const user = await TenantUser.create({
           tenantId,
           email,
           passwordHash: await hashPassword(plainPassword),
@@ -193,7 +196,12 @@ export class TenantUserService {
           createdBy,
         });
 
-        results.push({ email, password: plainPassword, status: 'created' });
+        results.push({
+          email: user.email,
+          password: plainPassword,
+          status: 'created',
+          userId: user._id.toString(),
+        });
         created++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error';

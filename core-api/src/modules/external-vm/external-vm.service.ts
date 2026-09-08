@@ -18,7 +18,7 @@ import { guacamoleClient } from '../../utils/guacamoleClient';
 import { AccessWindowDeniedError, ConflictError, NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { managedUsersService } from '../managedUsers/managedUsers.service';
-import { tenantUserService } from '../tenantUser/tenantUser.service';
+import { tenantUserService, buildTenantUserEmail } from '../tenantUser/tenantUser.service';
 import type { TenantUserRole } from '../../middleware/requireTenantAuth.middleware';
 import {
   accessSchedulePublicView,
@@ -34,6 +34,7 @@ import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAs
 import { ExternalVmUserAssignmentModel } from '../../models/externalVmUserAssignment.model';
 import {
   createExternalVmTenantAssignments,
+  createSingleExternalVmTenantAssignment,
   getAssignmentCountsByTenantUser,
   getAssignmentMapForExternalVms,
   getExternalVmIdsForTenantUser,
@@ -57,6 +58,15 @@ interface TenantExternalVmActor {
   id: string;
   tenantId: string;
   role: TenantUserRole;
+}
+
+function canAssignToTenantEndUser(
+  user: { createdBy?: mongoose.Types.ObjectId | null },
+  actor: TenantExternalVmActor
+): boolean {
+  if (actor.role === 'tenant_admin') return true;
+  const actorId = new mongoose.Types.ObjectId(actor.id);
+  return Boolean(user.createdBy && user.createdBy.toString() === actorId.toString());
 }
 
 function toAccessScheduleView(doc: IExternalVM): NonNullable<ExternalVMResponse['accessSchedule']> {
@@ -1000,7 +1010,7 @@ class ExternalVMService {
     externalVmIds: mongoose.Types.ObjectId[],
     targetUserId: mongoose.Types.ObjectId,
     tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId,
+    actor: TenantExternalVmActor,
     accessSchedule?: AccessScheduleInput
   ): Promise<{ assigned: number; skipped: number }> {
     if (externalVmIds.length === 0) throw new ValidationError('No servers specified.');
@@ -1008,11 +1018,18 @@ class ExternalVMService {
 
     await migrateLegacyExternalVmAssignments(tenantId);
 
-    const user = await TenantUser.findOne({ _id: targetUserId, tenantId, role: 'tenant_user' });
+    const user = await TenantUser.findOne({
+      _id: targetUserId,
+      tenantId,
+      role: 'tenant_user',
+      isConsoleOperator: { $ne: true },
+    });
     if (!user) throw new NotFoundError('Tenant user not found.');
-    if (!user.createdBy || user.createdBy.toString() !== createdBy.toString()) {
+    if (!canAssignToTenantEndUser(user, actor)) {
       throw new ForbiddenError('You can only assign servers to tenant users you created.');
     }
+
+    const assignedBy = new mongoose.Types.ObjectId(actor.id);
 
     const docs = await ExternalVMModel.find({ _id: { $in: externalVmIds }, tenantId });
     if (docs.length !== externalVmIds.length) {
@@ -1047,7 +1064,7 @@ class ExternalVMService {
       tenantId,
       externalVmIds: toAssign,
       tenantUserId: targetUserId,
-      assignedByTenantUserId: createdBy,
+      assignedByTenantUserId: assignedBy,
     });
 
     for (const externalVmId of toAssign) {
@@ -1060,13 +1077,14 @@ class ExternalVMService {
   async bulkAssignTenantOneToOne(
     dto: TenantBulkAssignExternalPairsDto,
     tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId
+    actor: TenantExternalVmActor
   ): Promise<BulkAssignExternalPairsResult> {
     await migrateLegacyExternalVmAssignments(tenantId);
 
     const schedulePatch = parseAccessScheduleInput(dto.accessSchedule);
     const externalVmObjectIds = dto.externalVmIds.map((id) => new mongoose.Types.ObjectId(id));
     const pairs: BulkAssignExternalPairsResult['pairs'] = [];
+    const assignedBy = new mongoose.Types.ObjectId(actor.id);
 
     const docs = await ExternalVMModel.find({
       _id: { $in: externalVmObjectIds },
@@ -1080,44 +1098,71 @@ class ExternalVMService {
       throw new ValidationError('One or more servers were not found for this tenant.');
     }
 
-    type UserSlot = { userId?: mongoose.Types.ObjectId; email: string; password?: string };
+    type UserSlot = {
+      userId?: mongoose.Types.ObjectId;
+      email: string;
+      password?: string;
+      error?: string;
+    };
     const userSlots: UserSlot[] = [];
 
     if (dto.mode === 'create') {
-      const bulkResult = await tenantUserService.createBulk(
-        {
-          emailPrefix: dto.emailPrefix!,
-          count: dto.externalVmIds.length,
-          password: dto.passwordMode === 'shared' ? dto.sharedPassword : undefined,
-        },
-        tenantId,
-        createdBy
-      );
+      const normalizedPrefix = dto.emailPrefix!.toLowerCase().trim();
+      const passwordMode = dto.passwordMode ?? 'auto';
 
-      for (const row of bulkResult.users) {
-        if (row.status !== 'created') {
-          userSlots.push({ email: row.email, password: row.password });
+      for (let i = 1; i <= dto.externalVmIds.length; i++) {
+        const email = buildTenantUserEmail(normalizedPrefix, i);
+        const onboard = await tenantUserService.createOneForOnboard(
+          email,
+          passwordMode,
+          dto.sharedPassword,
+          tenantId,
+          assignedBy
+        );
+
+        if (onboard.status === 'created' && onboard.userId) {
+          userSlots.push({
+            userId: new mongoose.Types.ObjectId(onboard.userId),
+            email: onboard.email,
+            password: onboard.password,
+          });
           continue;
         }
-        const user = await TenantUser.findOne({
+
+        const existing = await TenantUser.findOne({
           tenantId,
-          email: row.email,
+          email: onboard.email,
           role: 'tenant_user',
-        }).select('_id email');
-        userSlots.push({
-          userId: user?._id,
-          email: row.email,
-          password: row.password,
-        });
+          isConsoleOperator: { $ne: true },
+        }).select('_id createdBy email');
+
+        if (existing && canAssignToTenantEndUser(existing, actor)) {
+          userSlots.push({
+            userId: existing._id,
+            email: onboard.email,
+            password: onboard.password,
+          });
+        } else {
+          userSlots.push({
+            email: onboard.email,
+            password: onboard.password,
+            error: onboard.error ?? 'Tenant user creation failed',
+          });
+        }
       }
     } else {
       const userObjectIds = dto.userIds!.map((id) => new mongoose.Types.ObjectId(id));
-      const users = await TenantUser.find({
+      const userFilter: Record<string, unknown> = {
         _id: { $in: userObjectIds },
         tenantId,
         role: 'tenant_user',
-        createdBy,
-      }).lean();
+        isConsoleOperator: { $ne: true },
+      };
+      if (actor.role !== 'tenant_admin') {
+        userFilter['createdBy'] = assignedBy;
+      }
+
+      const users = await TenantUser.find(userFilter).lean();
       const userById = new Map(users.map((u) => [u._id.toString(), u]));
 
       for (const userId of dto.userIds!) {
@@ -1143,7 +1188,7 @@ class ExternalVMService {
           userEmail: slot.email,
           password: slot.password,
           status: 'failed',
-          error: 'Tenant user creation failed',
+          error: slot.error ?? 'Tenant user creation failed',
         });
         failed++;
         continue;
@@ -1172,14 +1217,14 @@ class ExternalVMService {
         await ExternalVMModel.updateOne({ _id: doc._id, tenantId }, { $set: schedulePatch });
       }
 
-      const created = await createExternalVmTenantAssignments({
+      const assignResult = await createSingleExternalVmTenantAssignment({
         tenantId,
-        externalVmIds: [doc._id],
+        externalVmId: doc._id,
         tenantUserId: slot.userId,
-        assignedByTenantUserId: createdBy,
+        assignedByTenantUserId: assignedBy,
       });
 
-      if (created === 0) {
+      if (!assignResult.ok) {
         pairs.push({
           externalVmId: doc._id.toString(),
           externalVmName: doc.name,
@@ -1187,7 +1232,7 @@ class ExternalVMService {
           userEmail: slot.email,
           password: slot.password,
           status: 'failed',
-          error: 'Assignment failed',
+          error: assignResult.error ?? 'Assignment failed',
         });
         failed++;
         continue;

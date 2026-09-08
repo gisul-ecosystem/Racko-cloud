@@ -146,8 +146,14 @@ export default function TenantElasticBulkAssignPage() {
   function downloadCSV() {
     if (!result) return;
     const rows = [
-      ['Server', 'Email', 'Password', 'Status'],
-      ...result.pairs.map((p) => [p.externalVmName, p.userEmail, p.password ?? '', p.status]),
+      ['Server', 'Email', 'Password', 'Status', 'Error'],
+      ...result.pairs.map((p) => [
+        p.externalVmName,
+        p.userEmail,
+        p.password ?? '',
+        p.status,
+        p.error ?? '',
+      ]),
     ];
     const csv = rows.map((r) => r.join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -192,6 +198,18 @@ export default function TenantElasticBulkAssignPage() {
               <Download className="w-4 h-4" /> Download CSV
             </button>
           </div>
+          {result.failed > 0 ? (
+            <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-red-100 bg-red-50/50 p-3">
+              {result.pairs
+                .filter((p) => p.status === 'failed')
+                .map((p) => (
+                  <p key={`${p.externalVmId}-${p.userEmail}`} className="text-xs text-red-800">
+                    <span className="font-medium">{p.externalVmName}</span>
+                    {p.userEmail ? ` → ${p.userEmail}` : ''}: {p.error ?? 'Failed'}
+                  </p>
+                ))}
+            </div>
+          ) : null}
           <button type="button" onClick={() => setResult(null)} className="text-sm hover:underline" style={tenantAccentText(accentColor)}>
             Assign more
           </button>

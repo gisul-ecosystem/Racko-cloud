@@ -31,7 +31,7 @@ export function ServiceShellLayout({
         }`}
       >
         {topBar}
-        <main className={mainClassName}>
+        <main className={`relative z-0 ${mainClassName}`}>
           <ErrorBoundary>{children}</ErrorBoundary>
         </main>
       </div>
