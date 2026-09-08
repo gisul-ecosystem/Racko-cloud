@@ -108,7 +108,7 @@ export class TenantExternalVmController {
 
   async assign(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { tenantId, tenantUserId } = tenantIds(req);
+      const { tenantId } = tenantIds(req);
       const { userId, externalVmIds, accessSchedule } = req.body as {
         userId: string;
         externalVmIds: string[];
