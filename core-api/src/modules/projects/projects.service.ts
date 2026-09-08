@@ -6,6 +6,8 @@ import { Tenant } from '../../models/tenant.model';
 import { CatalogVmModel } from '../../models/catalogVm.model';
 import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
 import { ExternalVMModel } from '../external-vm/external-vm.model';
+import { ExternalVmUserAssignmentModel } from '../../models/externalVmUserAssignment.model';
+import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
 import { VM } from '../vm/vm.model';
 import { AdminWalletTransaction } from '../../models/adminWalletTransaction.model';
 import { WalletTransaction } from '../../models/walletTransaction.model';
@@ -18,6 +20,7 @@ import { tenantServiceConfigService } from '../tenant/tenantServiceConfig.servic
 import { serviceCatalogService } from '../serviceCatalog/serviceCatalog.service';
 import { resolvePlatformOrgOwnerId } from '../platformRbac/platformRbac.service';
 import {
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   ValidationError,
@@ -320,6 +323,50 @@ function assertServicesSubset(
     if (!out.includes(key)) out.push(key);
   }
   return out;
+}
+
+async function cascadeDeleteProjectResources(projectId: mongoose.Types.ObjectId): Promise<{
+  catalogVms: number;
+  dedicatedServers: number;
+  managedVms: number;
+  externalVms: number;
+  externalAssignments: number;
+}> {
+  const externalVms = await ExternalVMModel.find({ projectId }).select('_id inventoryLocked').lean();
+  const locked = externalVms.filter((vm) => vm.inventoryLocked);
+  if (locked.length > 0) {
+    throw new ConflictError(
+      `Cannot delete project: ${locked.length} inventory-locked elastic server(s) are still assigned. Unlock them first.`
+    );
+  }
+
+  const externalVmIds = externalVms.map((vm) => vm._id);
+  const [platformAssignResult, tenantAssignResult] = await Promise.all([
+    externalVmIds.length
+      ? ExternalVmUserAssignmentModel.deleteMany({ externalVmId: { $in: externalVmIds } })
+      : Promise.resolve({ deletedCount: 0 }),
+    externalVmIds.length
+      ? ExternalVmTenantAssignmentModel.deleteMany({ externalVmId: { $in: externalVmIds } })
+      : Promise.resolve({ deletedCount: 0 }),
+  ]);
+
+  const [catalogResult, dedicatedResult, managedResult, externalResult] = await Promise.all([
+    CatalogVmModel.deleteMany({ projectId }),
+    DedicatedServerRequestModel.deleteMany({ projectId }),
+    VM.deleteMany({ projectId }),
+    externalVmIds.length
+      ? ExternalVMModel.deleteMany({ _id: { $in: externalVmIds } })
+      : Promise.resolve({ deletedCount: 0 }),
+  ]);
+
+  return {
+    catalogVms: catalogResult.deletedCount ?? 0,
+    dedicatedServers: dedicatedResult.deletedCount ?? 0,
+    managedVms: managedResult.deletedCount ?? 0,
+    externalVms: externalResult.deletedCount ?? 0,
+    externalAssignments:
+      (platformAssignResult.deletedCount ?? 0) + (tenantAssignResult.deletedCount ?? 0),
+  };
 }
 
 async function countResourcesForService(
@@ -713,9 +760,71 @@ export class ProjectsService {
       tenantId,
     });
     if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status === 'archived') {
+      throw new ValidationError('Project is already archived.');
+    }
     doc.status = 'archived';
     await doc.save();
     return toPublic(doc, await resourceCountsByService(doc));
+  }
+
+  /** Super-admin: permanently delete a tenant project and all resources under it. */
+  async deleteForTenant(
+    tenantId: string,
+    projectId: string
+  ): Promise<{
+    projectId: string;
+    deleted: Awaited<ReturnType<typeof cascadeDeleteProjectResources>>;
+  }> {
+    await assertTenantExists(tenantId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      ownerType: 'tenant',
+      tenantId,
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+
+    const deleted = await cascadeDeleteProjectResources(doc._id);
+    await ProjectModel.deleteOne({ _id: doc._id });
+    return { projectId: doc._id.toString(), deleted };
+  }
+
+  /** Super-admin: archive an organization project. */
+  async archiveForAdmin(targetAdminId: string, projectId: string): Promise<ProjectPublic> {
+    const orgId = await resolveTargetOrgOwnerId(targetAdminId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+      $or: [{ ownerType: 'org' }, { ownerType: { $exists: false } }, { ownerType: null }],
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status === 'archived') {
+      throw new ValidationError('Project is already archived.');
+    }
+    doc.status = 'archived';
+    await doc.save();
+    return toPublic(doc, await resourceCountsByService(doc));
+  }
+
+  /** Super-admin: permanently delete an org project and all resources under it. */
+  async deleteForAdmin(
+    targetAdminId: string,
+    projectId: string
+  ): Promise<{
+    projectId: string;
+    deleted: Awaited<ReturnType<typeof cascadeDeleteProjectResources>>;
+  }> {
+    const orgId = await resolveTargetOrgOwnerId(targetAdminId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+      $or: [{ ownerType: 'org' }, { ownerType: { $exists: false } }, { ownerType: null }],
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+
+    const deleted = await cascadeDeleteProjectResources(doc._id);
+    await ProjectModel.deleteOne({ _id: doc._id });
+    return { projectId: doc._id.toString(), deleted };
   }
 
   async assertUsableForTenantService(params: {

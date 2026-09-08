@@ -18,6 +18,7 @@ import {
   projectReportsQuerySchema,
   removeProjectServiceSchema,
   tenantIdParamSchema,
+  tenantProjectParamSchema,
   updateProjectSchema,
 } from './projects.validation';
 
@@ -98,6 +99,24 @@ router.patch(
   }
 );
 
+router.post(
+  '/admins/:adminId/:projectId/archive',
+  requirePermission('admin_users.manage'),
+  validateRequest(adminProjectParamSchema),
+  (req, res, next) => {
+    projectsController.archiveForAdmin(req, res, next);
+  }
+);
+
+router.delete(
+  '/admins/:adminId/:projectId',
+  requirePermission('admin_users.manage'),
+  validateRequest(adminProjectParamSchema),
+  (req, res, next) => {
+    projectsController.deleteForAdmin(req, res, next);
+  }
+);
+
 /** Super-admin: manage projects for a white-label tenant */
 router.get(
   '/tenants/:tenantId',
@@ -156,8 +175,27 @@ router.post(
 router.patch(
   '/tenants/:tenantId/:projectId',
   requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
   (req, res, next) => {
     projectsController.updateForTenantSuperAdmin(req, res, next);
+  }
+);
+
+router.post(
+  '/tenants/:tenantId/:projectId/archive',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
+  (req, res, next) => {
+    projectsController.archiveForTenantSuperAdmin(req, res, next);
+  }
+);
+
+router.delete(
+  '/tenants/:tenantId/:projectId',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
+  (req, res, next) => {
+    projectsController.deleteForTenantSuperAdmin(req, res, next);
   }
 );
 
