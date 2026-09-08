@@ -71,6 +71,7 @@ const roleBadgeStyles: Record<SupportCommentAuthorRole, string> = {
   user: 'bg-gray-100 text-gray-600',
   tenant_admin: 'bg-violet-100 text-violet-700',
   support_agent: 'bg-sky-100 text-sky-700',
+  super_admin: 'bg-indigo-100 text-indigo-700',
   admin: 'bg-red-100 text-red-700',
 };
 
