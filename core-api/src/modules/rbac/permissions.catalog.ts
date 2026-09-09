@@ -11,14 +11,14 @@ export interface PermissionDef {
 export const PERMISSION_CATALOG: PermissionDef[] = [
   // VM management / cluster control
   { key: 'vm_management.manage', label: 'Manage VM management dashboard', group: 'VM Management' },
-  { key: 'vm_inventory.read', label: 'View unified VM inventory', group: 'VM Management' },
-  { key: 'vm_inventory.write', label: 'Import provider metadata for VM inventory', group: 'VM Management' },
-  { key: 'machine_manager.manage', label: 'Manage machine manager', group: 'Machine Manager' },
+  { key: 'vm_inventory.read', label: 'View unified VM inventory', group: 'VM Inventory' },
+  { key: 'vm_inventory.write', label: 'Import, assign & edit VM inventory', group: 'VM Inventory' },
   {
-    key: 'elastic_servers.superadmin',
-    label: 'Bulk import, assign & overview elastic servers',
-    group: 'Elastic Servers',
+    key: 'vm_inventory.reveal_credentials',
+    label: 'Reveal stored VM passwords',
+    group: 'VM Inventory',
   },
+  { key: 'machine_manager.manage', label: 'Manage machine manager', group: 'Machine Manager' },
   { key: 'admin_users.manage', label: 'Manage admin users & services', group: 'Admin Users' },
 
   // Webyne VM requests
@@ -114,8 +114,8 @@ export const SYSTEM_ROLE_SEEDS: Array<{
       'vm_management.manage',
       'vm_inventory.read',
       'vm_inventory.write',
+      'vm_inventory.reveal_credentials',
       'machine_manager.manage',
-      'elastic_servers.superadmin',
       'admin_users.manage',
       'white_labelling.manage',
       'azure.manage',

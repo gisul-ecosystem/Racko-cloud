@@ -541,6 +541,30 @@ async function powerOwnedVm(req: Request, res: Response, next: NextFunction): Pr
   }
 }
 
+async function extendExpiry(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = (req.body || {}) as { expiresAt: string | Date };
+    const vm = await vmCatalogService.extendCatalogVmExpiry(id, new Date(body.expiresAt));
+    success(res, 'Provider term extended.', { vm });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteCatalogVm(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = (req.body || {}) as { confirmTerminatedAtProvider?: boolean };
+    const result = await vmCatalogService.deleteCatalogVmForSuperAdmin(id, {
+      confirmTerminatedAtProvider: Boolean(body.confirmTerminatedAtProvider),
+    });
+    success(res, `${result.planName} removed from Racko.`, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 function powerActionSuccessMessage(
   action: 'virtualizor' | 'start' | 'stop' | 'reboot' | 'terminate'
 ): string {
@@ -677,6 +701,8 @@ export const vmCatalogController = {
   changeTemplate,
   powerAction,
   powerOwnedVm,
+  extendExpiry,
+  deleteCatalogVm,
   reject,
   calculatePricing,
   listPricing,

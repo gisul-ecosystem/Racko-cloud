@@ -73,6 +73,28 @@ export const catalogVmPowerActionSchema = z.object({
   }),
 });
 
+export const extendCatalogVmExpirySchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z.object({
+    expiresAt: z.coerce.date(),
+  }),
+});
+
+export const deleteCatalogVmSchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z
+    .object({
+      /**
+       * Set by the super admin to assert the machine is already gone at the
+       * provider. Required while a VM is still live, since Racko cannot
+       * terminate Webyne itself and a deleted record would keep on billing.
+       */
+      confirmTerminatedAtProvider: z.boolean().optional().default(false),
+    })
+    .optional()
+    .default({}),
+});
+
 export const listCatalogVmRequestsQuerySchema = z.object({
   query: z.object({
     status: z
