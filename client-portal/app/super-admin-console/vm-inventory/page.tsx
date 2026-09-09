@@ -6,8 +6,6 @@ import {
   BellRing,
   ChevronLeft,
   ChevronRight,
-  Eye,
-  EyeOff,
   Loader2,
   Lock,
   LockOpen,
@@ -21,19 +19,22 @@ import {
 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
-  bulkDeleteInventoryServers,
   deleteInventoryServer,
   fetchInventoryFilterOptions,
   fetchVmInventory,
   type InventoryFilterOptions,
-  revealCredentialPassword,
   setInventoryServerLock,
   SOURCE_LABELS,
   type InventorySource,
   type VmInventoryRow,
 } from '@/lib/vmInventoryApi';
+import {
+  VmInventoryBulkDeleteModal,
+  type BulkDeleteTarget,
+} from '@/components/super-admin-console/vm-inventory/VmInventoryBulkDeleteModal';
 import { VmInventoryBulkOverrideModal } from '@/components/super-admin-console/vm-inventory/VmInventoryBulkOverrideModal';
 import { VmInventoryBulkUnassignModal } from '@/components/super-admin-console/vm-inventory/VmInventoryBulkUnassignModal';
+import { VmInventoryCatalogDeleteModal } from '@/components/super-admin-console/vm-inventory/VmInventoryCatalogDeleteModal';
 import { VmInventoryExpiryAlertsModal } from '@/components/super-admin-console/vm-inventory/VmInventoryExpiryAlertsModal';
 import { VmInventoryImportModal } from '@/components/super-admin-console/vm-inventory/VmInventoryImportModal';
 import { VmInventoryManageModal } from '@/components/super-admin-console/vm-inventory/VmInventoryManageModal';
@@ -45,13 +46,38 @@ const inputClass =
 const fmtDate = (iso: string | null): string => (iso ? iso.slice(0, 10) : '—');
 
 /**
- * Why a row has no actions. VPS, catalog and dedicated machines are shown here
- * read-only: they live in their own subsystem, and deleting one from the
- * inventory would leave the real machine running with nothing tracking it.
+ * Why a row has no actions. VPS and dedicated machines are shown here read-only:
+ * they live in their own subsystem, and deleting one from the inventory would
+ * leave the real machine running with nothing tracking it. Catalog VMs are the
+ * exception — they can be deleted from here, since this is the only place a
+ * super admin sees the ones bought by platform and tenant admins.
  */
 function ownedElsewhere(row: VmInventoryRow): string {
   const where = row.sources.map((s) => SOURCE_LABELS[s]).join(' / ');
   return `This VM is managed by ${where}. Delete or edit it there — the inventory only reads it.`;
+}
+
+/**
+ * Why a bulk action other than delete is unavailable. Reset, override and
+ * unassign all act on inventory logins, which catalog machines do not have.
+ */
+function inventoryOnlyHint(inventoryCount: number): string | undefined {
+  return inventoryCount === 0
+    ? 'Only VMs added to the inventory can be reset, overridden or unassigned'
+    : undefined;
+}
+
+/**
+ * Reduce a row to what a delete needs. An IP carrying both an inventory server
+ * and a catalog machine deletes as the inventory one, matching the row action.
+ */
+function toDeleteTarget(row: VmInventoryRow): BulkDeleteTarget {
+  return {
+    ipAddress: row.ipAddress,
+    serverId: row.serverId,
+    catalogVmId: row.serverId ? null : row.catalogVmId,
+    catalogQuantity: row.catalogQuantity,
+  };
 }
 
 /** Matches the "expiring soon" window used by projects and tenant plans. */
@@ -177,13 +203,17 @@ export default function VmInventoryPage() {
   const [vmSpec, setVmSpec] = useState('');
   const [filterOptions, setFilterOptions] = useState<InventoryFilterOptions | null>(null);
 
-  /** Selected server IDs, kept across pages so a multi-page delete is possible. */
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [bulkBusy, setBulkBusy] = useState(false);
+  /**
+   * Selection, keyed by IP and kept across pages so a multi-page delete is
+   * possible. The IDs are stored with it because a row scrolled off the current
+   * page is no longer in `rows` to look them up from.
+   */
+  const [selected, setSelected] = useState<Map<string, BulkDeleteTarget>>(new Map());
   const [notice, setNotice] = useState<string | null>(null);
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [unassignOpen, setUnassignOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   /** Optional columns are collapsed by default. */
   const [extraColumns, setExtraColumns] = useState<Set<OptionalColumnKey>>(new Set());
@@ -212,11 +242,10 @@ export default function VmInventoryPage() {
     [extraColumns]
   );
 
-  const [revealed, setRevealed] = useState<Record<string, string>>({});
-  const [revealing, setRevealing] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [manageRow, setManageRow] = useState<VmInventoryRow | null>(null);
+  const [catalogDeleteRow, setCatalogDeleteRow] = useState<VmInventoryRow | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   /** Inventory-wide count, kept from the most recent unfiltered load. */
   const [unfilteredTotal, setUnfilteredTotal] = useState<number | null>(null);
@@ -310,92 +339,54 @@ export default function VmInventoryPage() {
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
 
-  // Bulk actions only reach inventory-owned rows. Locked ones stay selectable
-  // because an override is still valid on them; the delete call skips them.
-  const selectableRows = useMemo(() => rows.filter((r) => r.serverId), [rows]);
-
-  /** IPs of the selected rows on this page, for the reset confirmation list. */
-  const selectedIps = useMemo(
-    () => rows.filter((r) => r.serverId && selected.has(r.serverId)).map((r) => r.ipAddress),
-    [rows, selected]
+  // Inventory rows and catalog VMs can both be deleted, so both are selectable.
+  // Locked ones stay selectable because an override is still valid on them; the
+  // delete call skips them. VPS and dedicated rows have no delete path at all.
+  const selectableRows = useMemo(
+    () => rows.filter((r) => r.serverId || r.catalogVmId),
+    [rows]
   );
-  const allOnPageSelected =
-    selectableRows.length > 0 && selectableRows.every((r) => selected.has(r.serverId!));
 
-  const toggleRow = useCallback((serverId: string) => {
+  const selectedVms = useMemo(() => [...selected.values()], [selected]);
+
+  /**
+   * Inventory servers in the selection. Every bulk action except delete works
+   * only on these, since the other sources live in their own subsystem.
+   */
+  const selectedServerIds = useMemo(
+    () => selectedVms.flatMap((v) => (v.serverId ? [v.serverId] : [])),
+    [selectedVms]
+  );
+  /** IPs of the selected inventory rows, for the reset confirmation list. */
+  const selectedIps = useMemo(
+    () => selectedVms.filter((v) => v.serverId).map((v) => v.ipAddress),
+    [selectedVms]
+  );
+  const catalogSelectedCount = selectedVms.length - selectedServerIds.length;
+
+  const allOnPageSelected =
+    selectableRows.length > 0 && selectableRows.every((r) => selected.has(r.ipAddress));
+
+  const toggleRow = useCallback((row: VmInventoryRow) => {
     setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(serverId)) next.delete(serverId);
-      else next.add(serverId);
+      const next = new Map(prev);
+      if (next.has(row.ipAddress)) next.delete(row.ipAddress);
+      else next.set(row.ipAddress, toDeleteTarget(row));
       return next;
     });
   }, []);
 
   const togglePage = useCallback(() => {
     setSelected((prev) => {
-      const next = new Set(prev);
-      const ids = selectableRows.map((r) => r.serverId!);
-      if (ids.every((id) => next.has(id))) ids.forEach((id) => next.delete(id));
-      else ids.forEach((id) => next.add(id));
+      const next = new Map(prev);
+      const allSelected = selectableRows.every((r) => next.has(r.ipAddress));
+      for (const row of selectableRows) {
+        if (allSelected) next.delete(row.ipAddress);
+        else next.set(row.ipAddress, toDeleteTarget(row));
+      }
       return next;
     });
   }, [selectableRows]);
-
-  const bulkDelete = useCallback(async () => {
-    const ids = [...selected];
-    if (ids.length === 0) return;
-    if (
-      !window.confirm(
-        `Delete ${ids.length} VM${ids.length === 1 ? '' : 's'} from the inventory, along with all of their logins and assignments?`
-      )
-    ) {
-      return;
-    }
-
-    setBulkBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const result = await bulkDeleteInventoryServers(ids);
-      setSelected(new Set());
-      const skippedNote =
-        result.skipped.length > 0
-          ? ` ${result.skipped.length} skipped: ${result.skipped
-              .slice(0, 3)
-              .map((s) => `${s.ipAddress ?? s.serverId} (${s.reason})`)
-              .join('; ')}${result.skipped.length > 3 ? '…' : ''}`
-          : '';
-      setNotice(`Deleted ${result.deleted} VM${result.deleted === 1 ? '' : 's'}.${skippedNote}`);
-      reload();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not delete those VMs.');
-    } finally {
-      setBulkBusy(false);
-    }
-  }, [selected, reload]);
-
-  const toggleReveal = useCallback(
-    async (credentialId: string) => {
-      if (revealed[credentialId]) {
-        setRevealed((prev) => {
-          const next = { ...prev };
-          delete next[credentialId];
-          return next;
-        });
-        return;
-      }
-      setRevealing(credentialId);
-      try {
-        const { password } = await revealCredentialPassword(credentialId);
-        setRevealed((prev) => ({ ...prev, [credentialId]: password }));
-      } catch (err) {
-        setError(err instanceof ApiError ? err.message : 'Could not reveal that password.');
-      } finally {
-        setRevealing(null);
-      }
-    },
-    [revealed]
-  );
 
   const toggleLock = useCallback(
     async (row: VmInventoryRow) => {
@@ -610,20 +601,26 @@ export default function VmInventoryPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#B91C1C]/20 bg-[#B91C1C]/5 px-4 py-3">
           <p className="text-sm font-medium text-gray-800">
             {selected.size} VM{selected.size === 1 ? '' : 's'} selected
+            {catalogSelectedCount > 0 ? (
+              <span className="font-normal text-gray-500">
+                {' '}
+                · {catalogSelectedCount} from the VM catalog, deletable only
+              </span>
+            ) : null}
           </p>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setSelected(new Set())}
-              disabled={bulkBusy}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 transition hover:bg-gray-50 disabled:opacity-40"
+              onClick={() => setSelected(new Map())}
+              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 transition hover:bg-gray-50"
             >
               Clear
             </button>
             <button
               type="button"
               onClick={() => setResetOpen(true)}
-              disabled={bulkBusy}
+              disabled={selectedServerIds.length === 0}
+              title={inventoryOnlyHint(selectedServerIds.length)}
               className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 transition hover:bg-gray-50 disabled:opacity-40"
             >
               <RotateCcw className="h-4 w-4" />
@@ -632,7 +629,8 @@ export default function VmInventoryPage() {
             <button
               type="button"
               onClick={() => setOverrideOpen(true)}
-              disabled={bulkBusy}
+              disabled={selectedServerIds.length === 0}
+              title={inventoryOnlyHint(selectedServerIds.length)}
               className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 transition hover:bg-gray-50 disabled:opacity-40"
             >
               <ShieldCheck className="h-4 w-4" />
@@ -641,8 +639,11 @@ export default function VmInventoryPage() {
             <button
               type="button"
               onClick={() => setUnassignOpen(true)}
-              disabled={bulkBusy}
-              title="Release every login on these VMs and return them to the free pool"
+              disabled={selectedServerIds.length === 0}
+              title={
+                inventoryOnlyHint(selectedServerIds.length) ??
+                'Release every login on these VMs and return them to the free pool'
+              }
               className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 transition hover:bg-gray-50 disabled:opacity-40"
             >
               <UserMinus className="h-4 w-4" />
@@ -650,15 +651,10 @@ export default function VmInventoryPage() {
             </button>
             <button
               type="button"
-              onClick={() => void bulkDelete()}
-              disabled={bulkBusy}
-              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white transition hover:bg-[#991B1B] disabled:opacity-60"
+              onClick={() => setDeleteOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white transition hover:bg-[#991B1B]"
             >
-              {bulkBusy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4" />
-              )}
+              <Trash2 className="h-4 w-4" />
               Delete selected
             </button>
           </div>
@@ -704,7 +700,7 @@ export default function VmInventoryPage() {
                   checked={allOnPageSelected}
                   onChange={togglePage}
                   disabled={selectableRows.length === 0}
-                  aria-label="Select all inventory VMs on this page"
+                  aria-label="Select all deletable VMs on this page"
                   className="h-4 w-4 cursor-pointer rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C] disabled:cursor-not-allowed disabled:opacity-40"
                 />
               </th>
@@ -823,16 +819,18 @@ export default function VmInventoryPage() {
                     <td className="px-4 py-3">
                       <input
                         type="checkbox"
-                        checked={Boolean(row.serverId && selected.has(row.serverId))}
-                        onChange={() => row.serverId && toggleRow(row.serverId)}
-                        disabled={!row.serverId}
+                        checked={selected.has(row.ipAddress)}
+                        onChange={() => toggleRow(row)}
+                        disabled={!row.serverId && !row.catalogVmId}
                         aria-label={`Select ${row.ipAddress}`}
                         title={
-                          !row.serverId
-                            ? 'Only VMs added to the inventory can be selected'
-                            : row.inventoryLocked
-                              ? 'Locked — a bulk delete will skip this VM'
-                              : `Select ${row.ipAddress}`
+                          !row.serverId && !row.catalogVmId
+                            ? ownedElsewhere(row)
+                            : !row.serverId
+                              ? 'Catalog VM — can be deleted, but not reset or assigned from here'
+                              : row.inventoryLocked
+                                ? 'Locked — a bulk delete will skip this VM'
+                                : `Select ${row.ipAddress}`
                         }
                         className="h-4 w-4 cursor-pointer rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C] disabled:cursor-not-allowed disabled:opacity-30"
                       />
@@ -902,45 +900,34 @@ export default function VmInventoryPage() {
                     <td className="px-4 py-3">
                       <StackedCell>
                         {lines.map((cred, i) => {
+                          const key = cred?.credentialId ?? `p-${i}`;
                           if (!cred?.hasPassword) {
                             return (
-                              <p key={cred?.credentialId ?? `p-${i}`} className="text-xs text-gray-400">
+                              <p key={key} className="text-xs text-gray-400">
                                 —
                               </p>
                             );
                           }
-                          if (!cred.canReveal || !cred.credentialId) {
+                          if (!cred.password) {
                             return (
                               <p
-                                key={cred.credentialId ?? `p-${i}`}
-                                className="text-xs text-gray-400"
-                                title="Managed in its own console"
+                                key={key}
+                                className="text-xs text-amber-600"
+                                title="The stored value could not be decrypted — the encryption key may have changed. Re-enter it in Manage."
                               >
-                                ••••••••
+                                unreadable
                               </p>
                             );
                           }
-                          const shown = revealed[cred.credentialId];
                           return (
-                            <div key={cred.credentialId} className="flex items-center gap-1.5">
-                              <span className="font-mono text-xs text-gray-900">
-                                {shown ?? '••••••••'}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => void toggleReveal(cred.credentialId!)}
-                                className="text-gray-400 transition hover:text-gray-700"
-                                aria-label={shown ? 'Hide password' : 'Reveal password'}
-                              >
-                                {revealing === cred.credentialId ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : shown ? (
-                                  <EyeOff className="h-3.5 w-3.5" />
-                                ) : (
-                                  <Eye className="h-3.5 w-3.5" />
-                                )}
-                              </button>
-                            </div>
+                            <p
+                              key={key}
+                              // Click-to-select, since these get pasted into
+                              // consoles constantly.
+                              className="select-all break-all font-mono text-xs text-gray-900"
+                            >
+                              {cred.password}
+                            </p>
                           );
                         })}
                       </StackedCell>
@@ -1090,15 +1077,23 @@ export default function VmInventoryPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => void removeServer(row)}
-                          disabled={!row.serverId || row.inventoryLocked}
+                          onClick={() =>
+                            row.serverId
+                              ? void removeServer(row)
+                              : setCatalogDeleteRow(row)
+                          }
+                          disabled={
+                            (!row.serverId && !row.catalogVmId) || row.inventoryLocked
+                          }
                           className="rounded-lg p-1.5 text-gray-400 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-30"
                           title={
-                            !row.serverId
+                            !row.serverId && !row.catalogVmId
                               ? ownedElsewhere(row)
                               : row.inventoryLocked
                                 ? 'Unlock before deleting'
-                                : 'Delete VM'
+                                : !row.serverId
+                                  ? 'Delete catalog VM'
+                                  : 'Delete VM'
                           }
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1154,13 +1149,13 @@ export default function VmInventoryPage() {
 
       {resetOpen && (
         <VmInventoryResetModal
-          serverIds={[...selected]}
+          serverIds={selectedServerIds}
           ipAddresses={selectedIps}
           onClose={() => setResetOpen(false)}
           onFinished={(message) => {
             setResetOpen(false);
             setNotice(message);
-            setSelected(new Set());
+            setSelected(new Map());
             reload();
           }}
         />
@@ -1168,13 +1163,13 @@ export default function VmInventoryPage() {
 
       {unassignOpen && (
         <VmInventoryBulkUnassignModal
-          serverIds={[...selected]}
-          rows={rows.filter((r) => r.serverId && selected.has(r.serverId))}
+          serverIds={selectedServerIds}
+          rows={rows.filter((r) => r.serverId && selected.has(r.ipAddress))}
           onClose={() => setUnassignOpen(false)}
           onApplied={(message) => {
             setUnassignOpen(false);
             setNotice(message);
-            setSelected(new Set());
+            setSelected(new Map());
             reload();
           }}
         />
@@ -1182,12 +1177,24 @@ export default function VmInventoryPage() {
 
       {overrideOpen && (
         <VmInventoryBulkOverrideModal
-          serverIds={[...selected]}
+          serverIds={selectedServerIds}
           onClose={() => setOverrideOpen(false)}
           onApplied={(message) => {
             setOverrideOpen(false);
             setNotice(message);
-            setSelected(new Set());
+            setSelected(new Map());
+            reload();
+          }}
+        />
+      )}
+
+      {deleteOpen && (
+        <VmInventoryBulkDeleteModal
+          targets={selectedVms}
+          onClose={() => setDeleteOpen(false)}
+          onDone={(message) => {
+            setNotice(message);
+            setSelected(new Map());
             reload();
           }}
         />
@@ -1198,6 +1205,17 @@ export default function VmInventoryPage() {
           row={manageRowLive}
           onClose={() => setManageRow(null)}
           onChanged={reload}
+        />
+      )}
+
+      {catalogDeleteRow && (
+        <VmInventoryCatalogDeleteModal
+          row={catalogDeleteRow}
+          onClose={() => setCatalogDeleteRow(null)}
+          onDeleted={(message) => {
+            setNotice(message);
+            reload();
+          }}
         />
       )}
     </div>

@@ -23,6 +23,7 @@ import {
 import { CreateProjectModal } from '@/components/console/CreateProjectModal';
 import { ProjectSelect } from '@/components/console/ProjectSelect';
 import { InstallProgressPanel } from '@/components/super-admin-console/server-assign/InstallProgressPanel';
+import { InstallRunHistory } from '@/components/super-admin-console/server-assign/InstallRunHistory';
 import {
   JsonAssignUpload,
   type JsonAssignPair,
@@ -124,6 +125,8 @@ export default function ServerAssignPage() {
   const [softwareIds, setSoftwareIds] = useState<string[]>([]);
   const [installResult, setInstallResult] = useState<InstallSoftwareResult | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
+  /** Bumped after an install so the history section pulls in the new run. */
+  const [runsKey, setRunsKey] = useState(0);
 
   // ── Series ───────────────────────────────────────────────────────────
   /** `project` derives the base address from the client and its start day. */
@@ -416,10 +419,25 @@ export default function ServerAssignPage() {
         } else {
           // Only the logins that actually landed are worth installing on, and a
           // Machine Manager failure must not swallow the assignment results.
-          const assigned = res.rows.filter((r) => r.status === 'assigned').map((r) => r.credentialId);
+          const landed = res.rows.filter((r) => r.status === 'assigned');
+          const assigned = landed.map((r) => r.credentialId);
           if (softwareIds.length > 0 && assigned.length > 0) {
             try {
-              setInstallResult(await installInventorySoftware(assigned, softwareIds));
+              setInstallResult(
+                // The context is what lets the run be read back later as "this
+                // install, for this project and these users".
+                await installInventorySoftware(assigned, softwareIds, {
+                  targetType,
+                  targetId,
+                  ...(projectId ? { projectId } : {}),
+                  assignedCount: landed.length,
+                  assigned: landed.flatMap((r) =>
+                    r.ipAddress ? [{ ipAddress: r.ipAddress, email: r.email }] : []
+                  ),
+                  ...(prepareNotice ? { resetSummary: prepareNotice } : {}),
+                })
+              );
+              setRunsKey((k) => k + 1);
             } catch (err) {
               setInstallError(
                 err instanceof ApiError ? err.message : 'Could not queue the install jobs.'
@@ -452,6 +470,7 @@ export default function ServerAssignPage() {
       scheduleEnabled,
       scheduleValue,
       softwareIds,
+      prepareNotice,
       loadLogins,
     ]
   );
@@ -607,6 +626,14 @@ export default function ServerAssignPage() {
           <span>{error}</span>
         </div>
       )}
+
+      {/* Installs outlive the page they were started from, so the tracking for
+          past batches lives here rather than only on the result screen. */}
+      <InstallRunHistory
+        catalog={catalog}
+        isAuthenticated={isAuthenticated}
+        refreshKey={runsKey}
+      />
 
       {/* ── 1. Owner + project ───────────────────────────────────────── */}
       <section className={cardClass}>

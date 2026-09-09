@@ -11,6 +11,7 @@
     "migrate:external-vm-source": "ts-node src/scripts/migrateExternalVmSource.ts",
     "migrate:backfill-my-vms": "ts-node src/scripts/migrateBackfillMyVms.ts",
     "backfill:inventory-mirrors": "ts-node src/scripts/backfillInventoryMirrors.ts",
+    "backfill:catalog-vm-expiry": "ts-node src/scripts/backfillCatalogVmExpiry.ts",
     "cleanup:lab-users": "ts-node src/scripts/cleanupLabUsers.ts",
     "delete:vm-leases": "ts-node src/scripts/deleteVmHostLease.ts",
     "typecheck": "tsc --noEmit",

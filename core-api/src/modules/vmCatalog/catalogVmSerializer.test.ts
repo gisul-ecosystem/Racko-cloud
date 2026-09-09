@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {
   stripProviderLeakFields,
   resolveDurationDays,
+  computeExpiresFrom,
+  hasFixedProviderTerm,
   specsToCanonicalSpec,
 } from './catalogVmSerializer';
 import type { CatalogVmResponse } from './vmCatalog.types';
@@ -60,6 +62,36 @@ test('resolveDurationDays maps billing periods', () => {
   assert.equal(resolveDurationDays('monthly'), 30);
   assert.equal(resolveDurationDays('yearly'), 365);
   assert.equal(resolveDurationDays('hourly', 2), 2);
+});
+
+test('hasFixedProviderTerm excludes continuously billed plans', () => {
+  assert.equal(hasFixedProviderTerm('monthly'), true);
+  assert.equal(hasFixedProviderTerm('quarterly'), true);
+  assert.equal(hasFixedProviderTerm('yearly'), true);
+  assert.equal(hasFixedProviderTerm('hourly'), false);
+  assert.equal(hasFixedProviderTerm('daily'), false);
+});
+
+test('computeExpiresFrom counts the term from the attach date', () => {
+  const attached = new Date('2026-01-15T10:30:00.000Z');
+  assert.equal(
+    computeExpiresFrom(attached, resolveDurationDays('monthly')).toISOString(),
+    '2026-02-14T10:30:00.000Z'
+  );
+  // Spans a leap day and a year boundary without drifting.
+  assert.equal(
+    computeExpiresFrom(new Date('2028-02-27T00:00:00.000Z'), 3).toISOString(),
+    '2028-03-01T00:00:00.000Z'
+  );
+  assert.equal(
+    computeExpiresFrom(new Date('2026-12-30T00:00:00.000Z'), 7).toISOString(),
+    '2027-01-06T00:00:00.000Z'
+  );
+  // A zero or negative term still lands in the future, never on the start day.
+  assert.equal(
+    computeExpiresFrom(new Date('2026-01-15T00:00:00.000Z'), 0).toISOString(),
+    '2026-01-16T00:00:00.000Z'
+  );
 });
 
 test('specsToCanonicalSpec', () => {
