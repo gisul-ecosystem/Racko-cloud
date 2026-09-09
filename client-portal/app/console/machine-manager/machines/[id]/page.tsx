@@ -9,7 +9,7 @@ import { ApiError } from '../../../../../lib/apiClient';
 import {
   fetchMachine,
   createJobs,
-  fetchJobs,
+  fetchMachineJobs,
   fetchMachines,
   deleteMachine,
   execCommand,
@@ -139,7 +139,7 @@ function LiveJobEntry({ job: initialJob, isAuthenticated, onViewLogs }: {
 export default function MachineDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
   const { addToast, toasts, dismiss } = useToast();
   const { catalog, loading: catalogLoading } = useSoftwareCatalog(isAuthenticated);
 
@@ -195,12 +195,12 @@ export default function MachineDetailPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [m, allJobs] = await Promise.all([
+      const [m, machineJobs] = await Promise.all([
         fetchMachine(id),
-        fetchJobs(),
+        fetchMachineJobs(id),
       ]);
       setMachine(m);
-      setJobs(allJobs.filter((j) => j.machineId === id));
+      setJobs(machineJobs);
     } catch {
       addToast('error', 'Failed to load machine.');
     } finally {
@@ -209,8 +209,8 @@ export default function MachineDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    if (isAuthenticated) void load();
-  }, [load, isAuthenticated]);
+    if (!authLoading && isAuthenticated) void load();
+  }, [load, isAuthenticated, authLoading]);
 
   const toggle = (swId: string) =>
     setSelected((prev) => prev.includes(swId) ? prev.filter((s) => s !== swId) : [...prev, swId]);
