@@ -11,15 +11,22 @@ import { CatalogVmModel } from '../../models/catalogVm.model';
 import { CatalogVmInstanceModel } from '../../models/catalogVmInstance.model';
 import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
 import { getVmInventorySettings } from '../../models/vmInventorySettings.model';
+import { InstallRunModel } from '../../models/installRun.model';
 import { VM } from '../vm/vm.model';
+import { SoftwareCatalogModel } from '../software-catalog/software-catalog.model';
 import { decrypt, encrypt } from '../../utils/crypto';
 import { NotFoundError, ValidationError } from '../../utils/errors';
+import { logger } from '../../utils/logger';
 import { inventoryExternalVmMirrorService } from './inventoryExternalVmMirror.service';
 import type { PushVmInput } from '../machine-manager/machine-manager.service';
 import type { JobResponse } from '../machine-manager/machine-manager.types';
 import type {
   BulkDeleteResult,
   BulkDeleteSkip,
+  InstallRunDetail,
+  InstallRunSummary,
+  InstallRunTarget,
+  InstallSoftwareContext,
   InventoryAssignmentView,
   InventoryCredentialView,
   InventoryNotificationSettings,
@@ -57,6 +64,14 @@ interface NormalizedEntry {
   projectId: mongoose.Types.ObjectId | null;
   srcUsername: string | null;
   srcHasPassword: boolean;
+  /** As stored, so still encrypted for every source but a public-network VPS. */
+  srcPassword: string | null;
+  /** Platform VPS only, and the one thing that says whether srcPassword is encrypted. */
+  srcNetworkType: string | null;
+  /** Parent catalog VM, on catalog entries only. Deletion happens at that level. */
+  catalogVmId: mongoose.Types.ObjectId | null;
+  /** Machines in the parent purchase, so the operator knows the blast radius. */
+  catalogQuantity: number | null;
   hasAssignment: boolean;
   /**
    * Projects and assignees taken from the credential assignments, which is
@@ -114,6 +129,8 @@ const NULL_FIELDS = {
   hasAssignment: { $literal: false },
   asgProjectIds: { $literal: [] },
   asgAssigneeIds: { $literal: [] },
+  catalogVmId: { $literal: null },
+  catalogQuantity: { $literal: null },
 };
 
 /**
@@ -128,6 +145,36 @@ const LIVE_CATALOG_STATUSES = ['ready_to_attach', 'active', 'suspended'];
 
 /** Platform VPS states that mean the machine is being torn down or already is. */
 const DEAD_VPS_STATUSES = ['deleted', 'deleting', 'delete_failed'];
+
+/**
+ * Decrypt a stored secret for display, or null if it will not come back.
+ *
+ * A single credential written under a rotated key must not fail the whole page,
+ * so the row shows the password as unreadable instead of the list 500ing.
+ */
+function safeDecrypt(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    return decrypt(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The password of a machine owned by another subsystem.
+ *
+ * Catalog and dedicated servers encrypt theirs. Platform VPS encrypts only
+ * private-network ones and keeps public ones in plaintext, which mirrors
+ * resolveConsolePassword() in the VM service.
+ */
+function sourcePassword(entry: NormalizedEntry): string | null {
+  if (!entry.srcPassword) return null;
+  if (entry.source === 'platform_vm' && entry.srcNetworkType !== 'private') {
+    return entry.srcPassword;
+  }
+  return safeDecrypt(entry.srcPassword);
+}
 
 /** Distinct owners and projects of one source collection, for filter options. */
 const OWNER_GROUP: mongoose.PipelineStage.Group = {
@@ -209,8 +256,13 @@ class VmInventoryService {
           adminId: 1,
           tenantId: 1,
           projectId: 1,
+          // Inventory logins live in server_credentials, fetched during hydrate.
           srcUsername: { $literal: null },
           srcHasPassword: { $literal: false },
+          srcPassword: { $literal: null },
+          srcNetworkType: { $literal: null },
+          catalogVmId: { $literal: null },
+          catalogQuantity: { $literal: null },
           hasAssignment: { $gt: [{ $size: '$asgs' }, 0] },
           asgProjectIds: '$asgs.projectId',
           asgAssigneeIds: '$asgs.assigneeId',
@@ -251,6 +303,8 @@ class VmInventoryService {
                 srcHasPassword: {
                   $gt: [{ $strLenCP: { $ifNull: ['$consolePassword', ''] } }, 0],
                 },
+                srcPassword: '$consolePassword',
+                srcNetworkType: '$networkType',
                 searchText: [
                   { $toLower: { $ifNull: ['$ipAddress', ''] } },
                   { $toLower: { $ifNull: ['$consoleUsername', ''] } },
@@ -293,10 +347,16 @@ class VmInventoryService {
                 tenantId: 1,
                 // Instances carry no projectId; it lives on the parent.
                 projectId: { $first: '$parent.projectId' },
+                // Deleting a catalog VM is a parent-level operation, and the
+                // quantity tells the operator how many machines that covers.
+                catalogVmId: '$catalogVmId',
+                catalogQuantity: { $first: '$parent.quantity' },
                 srcUsername: '$username',
                 srcHasPassword: {
                   $gt: [{ $strLenCP: { $ifNull: ['$password', ''] } }, 0],
                 },
+                srcPassword: '$password',
+                srcNetworkType: { $literal: null },
                 searchText: [
                   { $toLower: { $ifNull: ['$ipAddress', ''] } },
                   { $toLower: { $ifNull: ['$username', ''] } },
@@ -334,6 +394,8 @@ class VmInventoryService {
                 srcHasPassword: {
                   $gt: [{ $strLenCP: { $ifNull: ['$password', ''] } }, 0],
                 },
+                srcPassword: '$password',
+                srcNetworkType: { $literal: null },
                 searchText: [
                   { $toLower: { $ifNull: ['$ipAddress', ''] } },
                   { $toLower: { $ifNull: ['$username', ''] } },
@@ -568,7 +630,7 @@ class VmInventoryService {
         source: 'inventory',
         username: c.username,
         hasPassword: Boolean(c.password),
-        canReveal: true,
+        password: safeDecrypt(c.password),
         assignments: assignmentsByCredential.get(c._id.toString()) ?? [],
       };
       const key = c.serverId.toString();
@@ -593,13 +655,14 @@ class VmInventoryService {
           source: entry.source,
           username: entry.srcUsername ?? null,
           hasPassword: entry.srcHasPassword,
-          // Platform VPS stores public-network passwords unencrypted, so reveal
-          // is not offered for read-only sources.
-          canReveal: false,
+          password: sourcePassword(entry),
           assignments: [],
         });
       }
 
+      // A catalog machine can share its IP with an inventory row, so the
+      // catalog entry is found rather than assumed to be the primary one.
+      const catalogEntry = row.entries.find((e) => e.source === 'catalog_vm') ?? null;
       const projectId = primary.projectId ?? row.entries.find((e) => e.projectId)?.projectId ?? null;
       const project = projectId ? projectMap.get(projectId.toString()) : undefined;
       const adminId = primary.adminId ?? row.entries.find((e) => e.adminId)?.adminId ?? null;
@@ -609,6 +672,8 @@ class VmInventoryService {
         ipAddress: row._id,
         sources: [...new Set(row.entries.map((e) => e.source))],
         serverId: owned ? owned.sourceId.toString() : null,
+        catalogVmId: catalogEntry?.catalogVmId?.toString() ?? null,
+        catalogQuantity: catalogEntry?.catalogQuantity ?? null,
         vmType: primary.vmType ?? null,
         vmSpec: owned?.vmSpec ?? null,
         planDuration: owned?.planDuration ?? null,
@@ -1060,14 +1125,20 @@ class VmInventoryService {
    * one VM, so the logins are collapsed to unique IPs before dispatch — the
    * software is installed once per machine, not once per user. Jobs are owned
    * by the initiating super admin so they show up in their Jobs & Status view.
+   *
+   * The batch is also saved as an install run, which is what lets the assign
+   * page show this progress again after the operator navigates away.
    */
   async installSoftware(
     credentialIds: string[],
     softwareIds: string[],
-    adminId: mongoose.Types.ObjectId
+    adminId: mongoose.Types.ObjectId,
+    context?: InstallSoftwareContext
   ): Promise<{
+    /** Null when the run could not be saved; the installs still went ahead. */
+    runId: string | null;
     jobs: JobResponse[];
-    targets: Array<{ machineId: string; ipAddress: string; machineName: string; online: boolean }>;
+    targets: InstallRunTarget[];
     notManaged: string[];
   }> {
     if (credentialIds.length === 0) throw new ValidationError('No logins selected.');
@@ -1080,7 +1151,7 @@ class VmInventoryService {
     }
 
     const credentials = await ServerCredentialModel.find({ _id: { $in: credentialIds } })
-      .select('serverId')
+      .select('serverId username')
       .lean();
     if (credentials.length === 0) throw new NotFoundError('None of those logins exist.');
 
@@ -1097,7 +1168,221 @@ class VmInventoryService {
       adminId
     );
 
-    return { jobs: result.jobs, targets: result.matched, notManaged: result.notManaged };
+    // Recording the run must not cost the caller their jobs, which are already
+    // queued and running by this point.
+    let runId: string | null = null;
+    try {
+      runId = await this.recordInstallRun({
+        adminId,
+        credentials,
+        servers,
+        softwareIds,
+        result,
+        context,
+      });
+    } catch (err) {
+      logger.warn('[VmInventory] Could not record the install run', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    return {
+      runId,
+      jobs: result.jobs,
+      targets: result.matched,
+      notManaged: result.notManaged,
+    };
+  }
+
+  /**
+   * Save the grouping for an install batch so it can be reopened later.
+   *
+   * Names are resolved here from the ids the client sent rather than trusting
+   * labels off the wire, and the per-VM rows are denormalized so the run still
+   * reads correctly once the inventory moves on.
+   */
+  private async recordInstallRun(input: {
+    adminId: mongoose.Types.ObjectId;
+    credentials: Array<{ serverId: mongoose.Types.ObjectId; username: string }>;
+    servers: Array<{ _id: mongoose.Types.ObjectId; ipAddress: string }>;
+    softwareIds: string[];
+    result: { jobs: JobResponse[]; matched: InstallRunTarget[]; notManaged: string[] };
+    context?: InstallSoftwareContext;
+  }): Promise<string> {
+    const { adminId, credentials, servers, softwareIds, result, context } = input;
+
+    const ipByServer = new Map(servers.map((s) => [s._id.toString(), s.ipAddress]));
+    /** One IP can carry several logins, so usernames collect per IP. */
+    const usernamesByIp = new Map<string, string[]>();
+    for (const cred of credentials) {
+      const ip = ipByServer.get(cred.serverId.toString());
+      if (!ip) continue;
+      const list = usernamesByIp.get(ip);
+      if (list) list.push(cred.username);
+      else usernamesByIp.set(ip, [cred.username]);
+    }
+
+    const emailByIp = new Map<string, string>();
+    for (const row of context?.assigned ?? []) {
+      if (row.ipAddress && row.email) emailByIp.set(row.ipAddress, row.email);
+    }
+
+    const targetByIp = new Map(result.matched.map((t) => [t.ipAddress, t]));
+    const notManaged = new Set(result.notManaged);
+
+    const vms = [...usernamesByIp.entries()].map(([ipAddress, usernames]) => {
+      const target = targetByIp.get(ipAddress);
+      return {
+        ipAddress,
+        vmUsername: usernames.join(', '),
+        email: emailByIp.get(ipAddress),
+        machineId: target ? new mongoose.Types.ObjectId(target.machineId) : undefined,
+        machineName: target?.machineName,
+        notManaged: notManaged.has(ipAddress),
+      };
+    });
+
+    const [software, project, targetLabel] = await Promise.all([
+      SoftwareCatalogModel.find({ _id: { $in: softwareIds } })
+        .select('name')
+        .lean(),
+      context?.projectId && mongoose.Types.ObjectId.isValid(context.projectId)
+        ? ProjectModel.findById(context.projectId).select('name clientName').lean()
+        : null,
+      this.resolveAssignTargetLabel(context),
+    ]);
+
+    const run = await InstallRunModel.create({
+      startedBy: adminId,
+      ...(context?.targetType ? { targetType: context.targetType } : {}),
+      ...(context?.targetId && mongoose.Types.ObjectId.isValid(context.targetId)
+        ? { targetId: new mongoose.Types.ObjectId(context.targetId) }
+        : {}),
+      ...(targetLabel ? { targetLabel } : {}),
+      ...(project ? { projectId: project._id, projectName: project.name } : {}),
+      ...(project?.clientName ? { clientName: project.clientName } : {}),
+      ...(context?.assignedCount !== undefined ? { assignedCount: context.assignedCount } : {}),
+      softwareIds: softwareIds.map((id) => new mongoose.Types.ObjectId(id)),
+      softwareNames: software.map((s) => s.name),
+      jobIds: result.jobs.map((j) => new mongoose.Types.ObjectId(j._id)),
+      vms,
+      ...(context?.resetSummary ? { resetSummary: context.resetSummary } : {}),
+    });
+
+    return run._id.toString();
+  }
+
+  /** The admin's email or the tenant's name, for the run header. */
+  private async resolveAssignTargetLabel(
+    context?: InstallSoftwareContext
+  ): Promise<string | null> {
+    if (!context?.targetId || !mongoose.Types.ObjectId.isValid(context.targetId)) return null;
+    if (context.targetType === 'tenant') {
+      const tenant = await Tenant.findById(context.targetId).select('name').lean();
+      return tenant?.name ?? null;
+    }
+    const admin = await User.findById(context.targetId).select('email').lean();
+    return admin?.email ?? null;
+  }
+
+  /**
+   * The operator's recent install runs, newest first.
+   *
+   * Job status is aggregated from `machine_jobs` on every read, so a run that
+   * was still installing when the page was closed shows its real state now.
+   */
+  async listInstallRuns(
+    adminId: mongoose.Types.ObjectId,
+    limit = 20
+  ): Promise<InstallRunSummary[]> {
+    const runs = await InstallRunModel.find({ startedBy: adminId })
+      .sort({ createdAt: -1 })
+      .limit(Math.min(limit, 50))
+      .lean();
+    if (runs.length === 0) return [];
+
+    const { JobModel } = await import('../machine-manager/machine-manager.model');
+    const jobIds = runs.flatMap((r) => r.jobIds);
+    const jobs = await JobModel.find({ _id: { $in: jobIds } })
+      .select('status')
+      .lean();
+    const statusByJob = new Map(jobs.map((j) => [j._id.toString(), j.status]));
+
+    return runs.map((run) => {
+      const counts = { pending: 0, installing: 0, success: 0, failed: 0, gone: 0 };
+      for (const id of run.jobIds) {
+        const status = statusByJob.get(id.toString());
+        if (!status) counts.gone += 1;
+        else if (status === 'success') counts.success += 1;
+        else if (status === 'failed') counts.failed += 1;
+        else if (status === 'installing') counts.installing += 1;
+        else counts.pending += 1;
+      }
+      return {
+        id: run._id.toString(),
+        createdAt: run.createdAt.toISOString(),
+        projectName: run.projectName ?? null,
+        clientName: run.clientName ?? null,
+        targetLabel: run.targetLabel ?? null,
+        targetType: run.targetType ?? null,
+        assignedCount: run.assignedCount ?? null,
+        softwareNames: run.softwareNames,
+        vmCount: run.vms.length,
+        notManagedCount: run.vms.filter((v) => v.notManaged).length,
+        resetSummary: run.resetSummary ?? null,
+        jobTotal: run.jobIds.length,
+        ...counts,
+      };
+    });
+  }
+
+  /**
+   * One run with its jobs, shaped like a fresh install response so the same
+   * progress panel renders both. Jobs deleted since the run are dropped rather
+   * than faked, and the VM rows still list the IP so nothing goes missing.
+   */
+  async getInstallRun(
+    adminId: mongoose.Types.ObjectId,
+    runId: string
+  ): Promise<InstallRunDetail> {
+    if (!mongoose.Types.ObjectId.isValid(runId)) {
+      throw new ValidationError('Invalid runId.');
+    }
+    const run = await InstallRunModel.findOne({ _id: runId, startedBy: adminId }).lean();
+    if (!run) throw new NotFoundError('Install run not found.');
+
+    const { machineManagerService } = await import('../machine-manager/machine-manager.service');
+    const jobs = await machineManagerService.getJobsByIds(run.jobIds, adminId);
+
+    return {
+      id: run._id.toString(),
+      createdAt: run.createdAt.toISOString(),
+      projectName: run.projectName ?? null,
+      clientName: run.clientName ?? null,
+      targetLabel: run.targetLabel ?? null,
+      targetType: run.targetType ?? null,
+      assignedCount: run.assignedCount ?? null,
+      softwareNames: run.softwareNames,
+      resetSummary: run.resetSummary ?? null,
+      vms: run.vms.map((v) => ({
+        ipAddress: v.ipAddress,
+        vmUsername: v.vmUsername ?? null,
+        email: v.email ?? null,
+        notManaged: v.notManaged,
+      })),
+      jobs,
+      // The panel groups by machineId, so it needs the same target shape a
+      // fresh install returns.
+      targets: run.vms
+        .filter((v) => v.machineId)
+        .map((v) => ({
+          machineId: v.machineId!.toString(),
+          ipAddress: v.ipAddress,
+          machineName: v.machineName ?? v.ipAddress,
+          online: true,
+        })),
+      notManaged: run.vms.filter((v) => v.notManaged).map((v) => v.ipAddress),
+    };
   }
 
   /** Delete an inventory-owned server plus its credentials and assignments. */

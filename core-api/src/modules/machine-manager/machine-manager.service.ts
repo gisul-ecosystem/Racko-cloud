@@ -368,6 +368,26 @@ class MachineManagerService {
     });
   }
 
+  /**
+   * Fetch a known set of jobs, still scoped to their owner.
+   *
+   * Used to reopen a recorded install run: the ids come from the run document,
+   * and any since cleared from the Jobs page simply drop out of the result.
+   */
+  async getJobsByIds(
+    jobIds: mongoose.Types.ObjectId[],
+    adminId: mongoose.Types.ObjectId
+  ): Promise<JobResponse[]> {
+    if (jobIds.length === 0) return [];
+    const docs = await JobModel.find({ _id: { $in: jobIds }, adminId })
+      .sort({ createdAt: 1 })
+      .populate<{ softwareIds: Array<{ _id: mongoose.Types.ObjectId; name: string }> }>('softwareIds', 'name');
+    return docs.map((d) => {
+      const swName = (d.softwareIds[0] as unknown as { name?: string } | undefined)?.name ?? '';
+      return this.toJobResponse(d as unknown as IJob, swName);
+    });
+  }
+
   /** Delete all jobs for an admin (used by "Clear All Logs" on the Jobs & Status page). */
   async clearAllJobs(adminId: mongoose.Types.ObjectId): Promise<{ deleted: number }> {
     const result = await JobModel.deleteMany({ adminId });

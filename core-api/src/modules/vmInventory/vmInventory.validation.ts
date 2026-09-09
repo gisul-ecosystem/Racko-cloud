@@ -193,6 +193,39 @@ export const installSoftwareSchema = z.object({
   body: z.object({
     credentialIds: z.array(mongoObjectId).min(1).max(250),
     softwareIds: z.array(mongoObjectId).min(1).max(20),
+    /**
+     * What the assign flow knows and the endpoint otherwise wouldn't, saved on
+     * the run so the tracking view can say who the install was for. Optional
+     * throughout: a bare install still records a usable run.
+     */
+    context: z
+      .object({
+        targetType: z.enum(['admin', 'tenant']).optional(),
+        targetId: mongoObjectId.optional(),
+        projectId: mongoObjectId.optional(),
+        assignedCount: z.number().int().min(0).optional(),
+        assigned: z
+          .array(
+            z.object({
+              ipAddress: z.string().trim().min(1).max(100),
+              email: z.string().trim().email().max(320),
+            })
+          )
+          .max(250)
+          .optional(),
+        resetSummary: z.string().trim().max(500).optional(),
+      })
+      .optional(),
+  }),
+});
+
+export const installRunIdParamSchema = z.object({
+  params: z.object({ runId: mongoObjectId }),
+});
+
+export const listInstallRunsSchema = z.object({
+  query: z.object({
+    limit: z.coerce.number().int().min(1).max(50).optional(),
   }),
 });
 

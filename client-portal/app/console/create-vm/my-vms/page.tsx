@@ -13,9 +13,21 @@ import {
   type ICatalogVm,
   type VmCatalogCategory,
 } from '../../../../lib/vmCatalogApi';
-import { ChevronDown, ChevronUp, Monitor, Plus, Server } from 'lucide-react';
+import {
+  CalendarClock,
+  ChevronDown,
+  ChevronUp,
+  Monitor,
+  Plus,
+  Server,
+  Trash2,
+} from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CatalogVmPowerControls } from '../../../../components/create-vm/CatalogVmPowerControls';
+import {
+  CatalogVmTermModal,
+  type CatalogVmTermMode,
+} from '../../../../components/create-vm/CatalogVmTermModal';
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('en-US', {
@@ -30,6 +42,65 @@ function formatDateTime(value: string) {
 function formatInr(amount: number | undefined): string {
   if (amount == null || Number.isNaN(amount)) return '—';
   return `₹ ${amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+/** Whole days from today until `iso`, in UTC so a date never lands off by one. */
+function daysUntil(iso: string): number | null {
+  const end = new Date(iso);
+  if (Number.isNaN(end.getTime())) return null;
+  const endDay = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  const now = new Date();
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.round((endDay - today) / 86_400_000);
+}
+
+const URGENT_TAG = 'bg-rose-50 text-rose-700 ring-rose-200';
+const SOON_TAG = 'bg-amber-50 text-amber-700 ring-amber-200';
+
+/** Days out at which the term starts showing a countdown tag. */
+const EXPIRING_SOON_DAYS = 7;
+
+/**
+ * Hourly plans bill continuously until the VM is terminated, so they have no
+ * term that can lapse and never carry an end date.
+ */
+function hasFixedTerm(billing: string): boolean {
+  const b = billing.toLowerCase();
+  return !b.includes('hour') && !b.includes('day');
+}
+
+/** Provider term end date, with a countdown tag once it is close. */
+function TermEnd({ iso, billing }: { iso: string | undefined; billing: string }) {
+  if (!iso) {
+    return (
+      <span className="text-xs text-gray-400">
+        {hasFixedTerm(billing) ? '—' : 'no fixed end'}
+      </span>
+    );
+  }
+
+  const days = daysUntil(iso);
+  let tag: { text: string; tone: string } | null = null;
+  if (days !== null) {
+    if (days < 0) tag = { text: 'expired', tone: URGENT_TAG };
+    else if (days === 0) tag = { text: 'ends today', tone: URGENT_TAG };
+    else if (days === 1) tag = { text: 'ends tomorrow', tone: SOON_TAG };
+    else if (days <= EXPIRING_SOON_DAYS)
+      tag = { text: `ends in ${days} days`, tone: SOON_TAG };
+  }
+
+  return (
+    <div>
+      <p className="text-xs text-gray-700">{iso.slice(0, 10)}</p>
+      {tag && (
+        <span
+          className={`mt-1 inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${tag.tone}`}
+        >
+          {tag.text}
+        </span>
+      )}
+    </div>
+  );
 }
 
 function CategoryBadge({ category }: { category: VmCatalogCategory }) {
@@ -104,6 +175,10 @@ export default function MyVmsPage() {
   const { routes, api } = useVmCatalogPortal();
   const { vms, loading, error, refetch } = useVmCatalogVms();
   const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
+  const [term, setTerm] = useState<{ vm: ICatalogVm; mode: CatalogVmTermMode } | null>(
+    null
+  );
+  const [notice, setNotice] = useState<string | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const filterProjectId = searchParams?.get('projectId')?.trim() || null;
@@ -112,6 +187,10 @@ export default function MyVmsPage() {
     if (!filterProjectId) return vms;
     return vms.filter((vm) => vm.projectId === filterProjectId);
   }, [vms, filterProjectId]);
+
+  // Only the super-admin portal wires these up, so the org and tenant portals
+  // render this same page without term controls.
+  const canManageTerm = Boolean(api.extendExpiry && api.deleteVm);
 
   return (
     <div className="max-w-screen-xl">
@@ -144,12 +223,28 @@ export default function MyVmsPage() {
         </Link>
       </div>
 
+      {notice ? (
+        <div
+          className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3"
+          role="status"
+        >
+          <p className="text-sm text-green-800">{notice}</p>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="text-xs font-semibold text-green-700 hover:text-green-900"
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+
       {error && !loading && <ErrorState message={error} onRetry={refetch} />}
 
       {!error && (
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           {loading ? (
-            <TableSkeleton rows={6} cols={8} embedded />
+            <TableSkeleton rows={6} cols={9} embedded />
           ) : visibleVms.length === 0 ? (
             <div className="p-12 text-center">
               <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100">
@@ -199,10 +294,13 @@ export default function MyVmsPage() {
                       Total
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Term ends
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Requested
                     </th>
                     <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Details
+                      Actions
                     </th>
                   </tr>
                 </thead>
@@ -231,6 +329,9 @@ export default function MyVmsPage() {
                         onOpenConsole={() => router.push(consoleHref)}
                         onPowerAction={api.powerAction}
                         onRefresh={refetch}
+                        canManageTerm={canManageTerm}
+                        onExtend={() => setTerm({ vm, mode: 'extend' })}
+                        onDelete={() => setTerm({ vm, mode: 'delete' })}
                       />
                     );
                   })}
@@ -240,6 +341,20 @@ export default function MyVmsPage() {
           )}
         </div>
       )}
+
+      {term && api.extendExpiry && api.deleteVm ? (
+        <CatalogVmTermModal
+          vm={term.vm}
+          mode={term.mode}
+          onClose={() => setTerm(null)}
+          onExtend={api.extendExpiry}
+          onDelete={api.deleteVm}
+          onDone={(message) => {
+            setNotice(message);
+            refetch();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -253,6 +368,9 @@ function FragmentRow({
   onOpenConsole,
   onPowerAction,
   onRefresh,
+  canManageTerm,
+  onExtend,
+  onDelete,
 }: {
   vm: ICatalogVm;
   index: number;
@@ -270,6 +388,9 @@ function FragmentRow({
     vm: ICatalogVm;
   }>;
   onRefresh: () => void;
+  canManageTerm: boolean;
+  onExtend: () => void;
+  onDelete: () => void;
 }) {
   const showAzurePowerInline =
     isActive && vm.powerControlMode === 'azure';
@@ -333,39 +454,67 @@ function FragmentRow({
         <td className="px-4 py-3.5 font-mono text-xs text-gray-600">
           {formatInr(vm.pricingSnapshot.total)}
         </td>
+        <td className="px-4 py-3.5">
+          <TermEnd iso={vm.expiresAt} billing={vm.billing} />
+        </td>
         <td className="px-4 py-3.5 text-gray-500">{formatDateTime(vm.createdAt)}</td>
         <td className="px-4 py-3.5 text-right">
-          {isActive ? (
-            <div className="inline-flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={onOpenConsole}
-                className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717]"
-              >
-                <Monitor className="h-3.5 w-3.5" />
-                Console
-              </button>
-              <button
-                type="button"
-                onClick={onToggle}
-                className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-              >
-                {isExpanded ? (
-                  <ChevronUp className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronDown className="h-3.5 w-3.5" />
-                )}
-                {isExpanded ? 'Hide' : 'Details'}
-              </button>
-            </div>
-          ) : (
-            <span className="text-xs text-gray-400">—</span>
-          )}
+          <div className="inline-flex flex-wrap items-center justify-end gap-2">
+            {isActive ? (
+              <>
+                <button
+                  type="button"
+                  onClick={onOpenConsole}
+                  className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717]"
+                >
+                  <Monitor className="h-3.5 w-3.5" />
+                  Console
+                </button>
+                <button
+                  type="button"
+                  onClick={onToggle}
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  {isExpanded ? (
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  )}
+                  {isExpanded ? 'Hide' : 'Details'}
+                </button>
+              </>
+            ) : null}
+            {canManageTerm ? (
+              <>
+                <button
+                  type="button"
+                  onClick={onExtend}
+                  title="Record a new provider end date after renewing"
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  <CalendarClock className="h-3.5 w-3.5" />
+                  Extend
+                </button>
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  title="Remove this VM from Racko"
+                  className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </button>
+              </>
+            ) : null}
+            {!isActive && !canManageTerm ? (
+              <span className="text-xs text-gray-400">—</span>
+            ) : null}
+          </div>
         </td>
       </tr>
       {isActive && showAzurePowerInline ? (
         <tr className="border-b border-green-100 bg-green-50/40">
-          <td colSpan={8} className="px-6 py-4">
+          <td colSpan={9} className="px-6 py-4">
             <CatalogVmPowerControls
               vmId={vm.parentRequestId ?? vm._id}
               instanceId={vm.instanceId}
@@ -378,7 +527,7 @@ function FragmentRow({
       ) : null}
       {isActive && isExpanded && !showAzurePowerInline ? (
         <tr className="border-b border-green-100 bg-green-50/40">
-          <td colSpan={8} className="px-6 py-4">
+          <td colSpan={9} className="px-6 py-4">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-green-800">
               Connection details
             </p>

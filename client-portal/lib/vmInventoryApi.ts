@@ -49,7 +49,8 @@ export interface InventoryCredentialView {
   source: InventorySource;
   username: string | null;
   hasPassword: boolean;
-  canReveal: boolean;
+  /** Plaintext. Null with `hasPassword` true means it would not decrypt. */
+  password: string | null;
   assignments: InventoryAssignmentView[];
 }
 
@@ -64,6 +65,10 @@ export interface VmInventoryRow {
   ipAddress: string;
   sources: InventorySource[];
   serverId: string | null;
+  /** Parent catalog VM, when this IP came from the VM catalog. */
+  catalogVmId: string | null;
+  /** Machines in that purchase; deleting removes all of them together. */
+  catalogQuantity: number | null;
   vmType: string | null;
   vmSpec: string | null;
   planDuration: string | null;
@@ -308,6 +313,8 @@ export interface InstallTarget {
 }
 
 export interface InstallSoftwareResult {
+  /** Null when the run could not be saved; the installs still went ahead. */
+  runId: string | null;
   /** One Machine Manager job per VM per software item, streamable by job id. */
   jobs: IJob[];
   targets: InstallTarget[];
@@ -316,17 +323,94 @@ export interface InstallSoftwareResult {
 }
 
 /**
+ * What the assign flow knows and the install endpoint otherwise wouldn't. Saved
+ * on the run so the tracking view can say who the install was for.
+ */
+export interface InstallSoftwareContext {
+  targetType?: 'admin' | 'tenant';
+  targetId?: string;
+  projectId?: string;
+  assignedCount?: number;
+  assigned?: Array<{ ipAddress: string; email: string }>;
+  resetSummary?: string;
+}
+
+/**
  * Queues Machine Manager install jobs on the VMs behind the selected logins.
  * Logins that share an IP collapse to a single machine server-side.
  */
 export async function installInventorySoftware(
   credentialIds: string[],
-  softwareIds: string[]
+  softwareIds: string[],
+  context?: InstallSoftwareContext
 ): Promise<InstallSoftwareResult> {
   const res = await apiRequest<ApiEnvelope<InstallSoftwareResult>>(`${BASE}/install-software`, {
     method: 'POST',
-    body: JSON.stringify({ credentialIds, softwareIds }),
+    body: JSON.stringify({ credentialIds, softwareIds, ...(context ? { context } : {}) }),
   });
+  return res.data;
+}
+
+/** One past install batch, with its jobs rolled up by status. */
+export interface InstallRunSummary {
+  id: string;
+  createdAt: string;
+  projectName: string | null;
+  clientName: string | null;
+  targetLabel: string | null;
+  targetType: 'admin' | 'tenant' | null;
+  assignedCount: number | null;
+  softwareNames: string[];
+  vmCount: number;
+  notManagedCount: number;
+  resetSummary: string | null;
+  jobTotal: number;
+  pending: number;
+  installing: number;
+  success: number;
+  failed: number;
+  /** Jobs cleared from the Machine Manager since the run. */
+  gone: number;
+}
+
+/** One VM as it stood when the run was queued. */
+export interface InstallRunVm {
+  ipAddress: string;
+  vmUsername: string | null;
+  email: string | null;
+  notManaged: boolean;
+}
+
+/**
+ * A run reopened for tracking. Extends `InstallSoftwareResult`'s shape so the
+ * same progress panel renders a live install and a revisited one alike.
+ */
+export interface InstallRunDetail {
+  id: string;
+  createdAt: string;
+  projectName: string | null;
+  clientName: string | null;
+  targetLabel: string | null;
+  targetType: 'admin' | 'tenant' | null;
+  assignedCount: number | null;
+  softwareNames: string[];
+  resetSummary: string | null;
+  vms: InstallRunVm[];
+  jobs: IJob[];
+  targets: InstallTarget[];
+  notManaged: string[];
+}
+
+export async function fetchInstallRuns(limit?: number): Promise<InstallRunSummary[]> {
+  const query = limit ? `?limit=${limit}` : '';
+  const res = await apiRequest<ApiEnvelope<{ runs: InstallRunSummary[] }>>(
+    `${BASE}/install-runs${query}`
+  );
+  return res.data.runs;
+}
+
+export async function fetchInstallRun(runId: string): Promise<InstallRunDetail> {
+  const res = await apiRequest<ApiEnvelope<InstallRunDetail>>(`${BASE}/install-runs/${runId}`);
   return res.data;
 }
 

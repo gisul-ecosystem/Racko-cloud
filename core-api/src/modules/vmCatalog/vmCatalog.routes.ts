@@ -15,6 +15,8 @@ import {
   rejectCatalogVmRequestSchema,
   changeCatalogVmTemplateSchema,
   catalogVmPowerActionSchema,
+  extendCatalogVmExpirySchema,
+  deleteCatalogVmSchema,
   calculateVmPricingSchema,
   listVmPricingQuerySchema,
   registerManualAzureCatalogVmSchema,
@@ -114,6 +116,29 @@ router.post(
   validateRequest(catalogVmPowerActionSchema),
   (req, res, next) => {
     vmCatalogController.powerOwnedVm(req, res, next);
+  }
+);
+
+/**
+ * Super-admin: provider term upkeep. Extend after renewing with the provider,
+ * or delete once the machine is gone. Restricted to super_admin because
+ * deleting drops the record for whichever tenant or admin owns the VM.
+ */
+router.patch(
+  '/vms/:id/extend',
+  requireRole('super_admin'),
+  validateRequest(extendCatalogVmExpirySchema),
+  (req, res, next) => {
+    vmCatalogController.extendExpiry(req, res, next);
+  }
+);
+
+router.delete(
+  '/vms/:id',
+  requireRole('super_admin'),
+  validateRequest(deleteCatalogVmSchema),
+  (req, res, next) => {
+    vmCatalogController.deleteCatalogVm(req, res, next);
   }
 );
 

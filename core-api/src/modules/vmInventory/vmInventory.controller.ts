@@ -207,9 +207,42 @@ class VmInventoryController {
       const data = await vmInventoryService.installSoftware(
         req.body.credentialIds,
         req.body.softwareIds,
-        new mongoose.Types.ObjectId(authReq.user.userId)
+        new mongoose.Types.ObjectId(authReq.user.userId),
+        req.body.context
       );
       success(res, `Queued ${data.jobs.length} install job(s).`, data, 202);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/v1/super-admin/vm-inventory/install-runs
+   * Past install batches started by this operator, newest first.
+   */
+  async listInstallRuns(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const limit = req.query['limit'] ? Number(req.query['limit']) : undefined;
+      const runs = await vmInventoryService.listInstallRuns(
+        new mongoose.Types.ObjectId(authReq.user.userId),
+        limit
+      );
+      success(res, 'Install runs fetched.', { runs });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** GET /api/v1/super-admin/vm-inventory/install-runs/:runId */
+  async getInstallRun(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const run = await vmInventoryService.getInstallRun(
+        new mongoose.Types.ObjectId(authReq.user.userId),
+        req.params['runId']!
+      );
+      success(res, 'Install run fetched.', run);
     } catch (err) {
       next(err);
     }

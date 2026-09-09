@@ -12,6 +12,10 @@ import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInv
 import { buildOrgAdminInviteTemplate } from './templates/orgAdminInvite';
 import { buildProjectExpiryWarningTemplate } from './templates/projectExpiryWarning';
 import { buildProviderExpiryWarningTemplate } from './templates/providerExpiryWarning';
+import {
+  buildCatalogVmExpiryWarningTemplate,
+  type CatalogVmExpiryAudience,
+} from './templates/catalogVmExpiryWarning';
 import type { EmailBrand } from './templates/brandedLayout';
 import {
   resolveTenantEmailBrand,
@@ -375,6 +379,42 @@ export async function sendProjectExpiryWarningEmail(input: {
     daysRemaining: input.daysRemaining,
     manageUrl: input.manageUrl,
     archiveUrl: input.archiveUrl,
+    brand: input.brand,
+  });
+  await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });
+}
+
+/**
+ * A single catalog VM whose paid provider term is about to end. Owners get a
+ * heads-up; super admins get the copy that explains renew-or-terminate.
+ */
+export async function sendCatalogVmExpiryWarningEmail(input: {
+  to: string;
+  audience: CatalogVmExpiryAudience;
+  planName: string;
+  providerLabel: string;
+  billingLabel: string;
+  ipAddress: string | null;
+  hostname: string | null;
+  ownerLabel: string | null;
+  expiresAtLabel: string;
+  daysRemaining: number;
+  canTerminateInRacko: boolean;
+  manageUrl: string;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const template = buildCatalogVmExpiryWarningTemplate({
+    audience: input.audience,
+    planName: input.planName,
+    providerLabel: input.providerLabel,
+    billingLabel: input.billingLabel,
+    ipAddress: input.ipAddress,
+    hostname: input.hostname,
+    ownerLabel: input.ownerLabel,
+    expiresAtLabel: input.expiresAtLabel,
+    daysRemaining: input.daysRemaining,
+    canTerminateInRacko: input.canTerminateInRacko,
+    manageUrl: input.manageUrl,
     brand: input.brand,
   });
   await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });

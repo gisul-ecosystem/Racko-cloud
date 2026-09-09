@@ -1,4 +1,5 @@
 import type { AssigneeType } from '../../models/credentialAssignment.model';
+import type { JobResponse } from '../machine-manager/machine-manager.types';
 
 /**
  * Which collection a row (or part of a merged row) came from.
@@ -48,8 +49,12 @@ export interface InventoryCredentialView {
   source: InventorySource;
   username: string | null;
   hasPassword: boolean;
-  /** False for read-only sources whose password is stored unencrypted. */
-  canReveal: boolean;
+  /**
+   * In plaintext, whatever the source. The inventory is a super-admin console
+   * and its whole job is handing these out, so nothing is masked here. Null
+   * with `hasPassword` true means the stored value would not decrypt.
+   */
+  password: string | null;
   assignments: InventoryAssignmentView[];
 }
 
@@ -66,6 +71,14 @@ export interface VmInventoryRow {
   sources: InventorySource[];
   /** Set only when an inventory-owned server exists for this IP. */
   serverId: string | null;
+  /**
+   * Parent catalog VM behind this IP, when it came from the VM catalog. Set
+   * whoever bought it — a super admin can delete another owner's catalog VM
+   * from here, which is the only place those are visible to them.
+   */
+  catalogVmId: string | null;
+  /** Machines in that purchase; deleting removes all of them together. */
+  catalogQuantity: number | null;
   vmType: string | null;
   vmSpec: string | null;
   /** Vendor billing cadence. Null for the three read-only sources. */
@@ -184,6 +197,82 @@ export interface BulkUnassignResult {
   loginsUnassigned: number;
   usersDeleted: number;
   serversFreed: number;
+}
+
+/** A VM the Machine Manager matched by IP and queued jobs against. */
+export interface InstallRunTarget {
+  machineId: string;
+  ipAddress: string;
+  machineName: string;
+  online: boolean;
+}
+
+/**
+ * What the assign flow knows that the install endpoint otherwise wouldn't.
+ *
+ * All of it is optional so a bare install still records a usable run. Ids are
+ * resolved to names server-side rather than trusting labels from the browser.
+ */
+export interface InstallSoftwareContext {
+  targetType?: 'admin' | 'tenant';
+  targetId?: string;
+  projectId?: string;
+  /** Logins granted in the same batch, so a run says who it was for. */
+  assignedCount?: number;
+  /** Maps a portal user onto the VM they were granted, for the run's VM list. */
+  assigned?: Array<{ ipAddress: string; email: string }>;
+  /** Outcome of the client-orchestrated reset step, when one ran. */
+  resetSummary?: string;
+}
+
+/** One past install batch, with its jobs rolled up by status. */
+export interface InstallRunSummary {
+  id: string;
+  createdAt: string;
+  projectName: string | null;
+  clientName: string | null;
+  targetLabel: string | null;
+  targetType: 'admin' | 'tenant' | null;
+  assignedCount: number | null;
+  softwareNames: string[];
+  vmCount: number;
+  notManagedCount: number;
+  resetSummary: string | null;
+  jobTotal: number;
+  pending: number;
+  installing: number;
+  success: number;
+  failed: number;
+  /** Jobs cleared from the Machine Manager since the run. */
+  gone: number;
+}
+
+/** One VM as it stood when the run was queued. */
+export interface InstallRunVmView {
+  ipAddress: string;
+  vmUsername: string | null;
+  email: string | null;
+  notManaged: boolean;
+}
+
+/**
+ * A run reopened for tracking. `jobs`, `targets` and `notManaged` match the
+ * shape of a fresh install response so one panel renders both.
+ */
+export interface InstallRunDetail {
+  id: string;
+  createdAt: string;
+  projectName: string | null;
+  clientName: string | null;
+  targetLabel: string | null;
+  targetType: 'admin' | 'tenant' | null;
+  assignedCount: number | null;
+  softwareNames: string[];
+  resetSummary: string | null;
+  vms: InstallRunVmView[];
+  jobs: JobResponse[];
+  targets: InstallRunTarget[];
+  notManaged: string[];
 }
 
 /** One server a bulk delete refused to touch, and why. */

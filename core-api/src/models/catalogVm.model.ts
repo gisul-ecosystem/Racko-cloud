@@ -97,8 +97,19 @@ export interface ICatalogVm extends Document {
   providerInstanceId?: string;
   /** Azure resource group for manual / auto Azure VMs. Super-admin only in API responses. */
   azureResourceGroup?: string;
-  /** Auto-teardown deadline for short-duration auto-provisioned VMs. */
+  /**
+   * End of the paid provider term.
+   *
+   * Auto-provisioned cloud VMs are torn down at this date. Manual Webyne VMs
+   * cannot be terminated programmatically, so for those this date only drives
+   * the expiry warning — a super admin terminates or extends on Webyne by hand.
+   */
   expiresAt?: Date;
+  /**
+   * The `expiresAt` value an expiry warning was already sent for. Extending the
+   * date leaves this behind, which re-arms the warning for the new date.
+   */
+  expiryWarningSentFor?: Date | null;
   /** true = AWS/Azure auto path; false = manual Webyne fulfillment. */
   autoProvisioned: boolean;
   /** Internal margin tracking. Super-admin only in API responses. */
@@ -256,6 +267,7 @@ const catalogVmSchema = new Schema<ICatalogVm>(
     providerInstanceId: { type: String, trim: true },
     azureResourceGroup: { type: String, trim: true },
     expiresAt: { type: Date, index: true },
+    expiryWarningSentFor: { type: Date, default: null },
     autoProvisioned: { type: Boolean, default: false, index: true },
     rawProviderCostPerHr: { type: Number, min: 0 },
     attachedAt: { type: Date },
