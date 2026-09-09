@@ -181,6 +181,14 @@ export async function fetchJobs(): Promise<IJob[]> {
   return res.data.jobs;
 }
 
+/** Fetch jobs scoped to a single machine — faster than fetchJobs() for the detail page. */
+export async function fetchMachineJobs(machineId: string): Promise<IJob[]> {
+  const res = await apiRequest<ApiResponse<{ jobs: IJob[]; total: number }>>(
+    `/api/v1/machines/${machineId}/jobs`
+  );
+  return res.data.jobs;
+}
+
 export async function fetchJob(id: string): Promise<IJob> {
   const res = await apiRequest<ApiResponse<{ job: IJob }>>(`/api/v1/machines/jobs/${id}`);
   return res.data.job;
