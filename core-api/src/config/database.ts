@@ -76,6 +76,41 @@ export async function connectDatabase(): Promise<void> {
         error: indexErr instanceof Error ? indexErr.message : String(indexErr),
       });
     }
+
+    // tenantusers: sparse unique on username:null only allows one null per tenant.
+    // Bulk elastic user creation stores username:null on every row → E11000 in production.
+    try {
+      const db = mongoose.connection.db;
+      if (db) {
+        const collection = db.collection('tenantusers');
+        const indexes = await collection.indexes();
+        const usernameIndex = indexes.find((idx) => idx.name === 'tenantId_1_username_1');
+        const needsRepair = Boolean(usernameIndex && !usernameIndex.partialFilterExpression);
+
+        if (needsRepair) {
+          await collection.dropIndex('tenantId_1_username_1');
+          const unsetResult = await collection.updateMany(
+            { username: null },
+            { $unset: { username: '' } }
+          );
+          await collection.createIndex(
+            { tenantId: 1, username: 1 },
+            {
+              unique: true,
+              partialFilterExpression: { username: { $type: 'string' } },
+              name: 'tenantId_1_username_1',
+            }
+          );
+          logger.info('[Migration] Repaired tenantusers username index', {
+            unsetCount: unsetResult.modifiedCount,
+          });
+        }
+      }
+    } catch (indexErr) {
+      logger.warn('[Migration] Could not repair tenantusers username index', {
+        error: indexErr instanceof Error ? indexErr.message : String(indexErr),
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     logger.error('Failed to connect to MongoDB', { error: message });

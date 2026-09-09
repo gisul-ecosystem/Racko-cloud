@@ -149,6 +149,18 @@ export class MachineManagerController {
     }
   }
 
+  /** GET /api/v1/machines/:id/jobs — list jobs for a specific machine */
+  async listMachineJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const machineId = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const jobs = await machineManagerService.listJobsByMachine(machineId, adminId);
+      success(res, 'Jobs retrieved.', { jobs, total: jobs.length });
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** DELETE /api/v1/machines/:id/jobs — clear jobs for a specific machine */
   async clearMachineJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -826,52 +838,6 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     }
   }
 
-  // ─── Super-Admin Machine Reset ─────────────────────────────────────────────
-
-  /**
-   * POST /api/v1/super-admin/machines/reset
-   * Reset machines by inventory IDs (super-admin scope).
-   * Looks up machine IDs from inventory and triggers reset.
-   */
-  async superAdminResetMachinesByInventory(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const { inventoryIds, sessionId } = req.body as { inventoryIds: string[]; sessionId?: string };
-
-      if (!Array.isArray(inventoryIds) || inventoryIds.length === 0) {
-        res.status(400).json({ success: false, message: 'inventoryIds array is required.' });
-        return;
-      }
-
-      const sid = sessionId ?? `reset-${Date.now()}`;
-      const result = await machineManagerService.superAdminResetMachinesByInventory(
-        inventoryIds,
-        sid
-      );
-      success(res, 'Reset initiated.', { ...result, sessionId: sid });
-    } catch (err) {
-      next(err);
-    }
-  }
-
-  /**
-   * POST /api/v1/super-admin/machines/reset-stream-ticket
-   * Issues a short-lived SSE stream ticket for a super-admin reset session.
-   */
-  async superAdminIssueResetStreamTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const userId = (req as AuthenticatedRequest).user.userId;
-      const { sessionId } = req.body as { sessionId: string };
-      if (!sessionId) {
-        res.status(400).json({ success: false, message: 'sessionId required.' });
-        return;
-      }
-      const { issueResetStreamTicket } = await import('./reset.streamTicket');
-      const ticket = issueResetStreamTicket(sessionId, userId);
-      success(res, 'Reset stream ticket issued.', ticket);
-    } catch (err) {
-      next(err);
-    }
-  }
 }
 
 export const machineManagerController = new MachineManagerController();

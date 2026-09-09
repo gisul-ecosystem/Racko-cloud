@@ -19,6 +19,9 @@ import { projectsService } from '../projects/projects.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
+import { config } from '../../config';
+import { sendCatalogVmExpiryWarningEmail } from '../../utils/email/sender';
+import { inventoryExternalVmMirrorService } from '../vmInventory/inventoryExternalVmMirror.service';
 import {
   callCatalogAgentPurchase,
   callCatalogAgentScrape,
@@ -51,6 +54,8 @@ import {
   planDimensionsToCanonicalSpec,
   projectAzureResourceGroupName,
   computeExpiresAt,
+  computeExpiresFrom,
+  hasFixedProviderTerm,
   isAutoCloudProvider,
   inferCategoryFromOsLabel,
   type CatalogVmCallerRole,
@@ -80,6 +85,10 @@ function catalogCategoryToMachineOs(
   return String(category).toLowerCase() === 'windows' ? 'windows' : 'linux';
 }
 const BILLING_PERIODS = ['hourly', 'monthly', 'quarterly', 'yearly'] as const;
+
+function portalBaseUrl(): string {
+  return config.FRONTEND_URL.replace(/\/$/, '');
+}
 
 function roundMoney(n: number): number {
   return Math.round(n * 100) / 100;
@@ -2117,6 +2126,15 @@ class VmCatalogService {
     doc.reviewedBy = reviewerId;
     doc.reviewedAt = new Date();
     doc.updatedAt = new Date();
+    // Manual Webyne VMs on a fixed term never got a deadline, so nothing could
+    // warn before the provider contract lapsed. Hourly plans are skipped: they
+    // bill continuously and have no end date to reach.
+    if (!doc.expiresAt && hasFixedProviderTerm(doc.billing)) {
+      doc.expiresAt = computeExpiresFrom(
+        doc.attachedAt,
+        resolveDurationDays(doc.billing)
+      );
+    }
     await doc.save();
 
     await CatalogVmInstanceModel.updateMany(
@@ -2671,6 +2689,254 @@ class VmCatalogService {
         planName: doc.planName,
       }
     );
+  }
+
+  /**
+   * Super-admin: push a provider term's end date out after renewing with the
+   * provider. Clearing the warning marker re-arms the alert for the new date.
+   */
+  async extendCatalogVmExpiry(
+    id: mongoose.Types.ObjectId,
+    expiresAt: Date
+  ): Promise<CatalogVmResponse> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM not found.');
+
+    if (Number.isNaN(expiresAt.getTime())) {
+      throw new ValidationError('Provide a valid end date.');
+    }
+    if (expiresAt.getTime() <= Date.now()) {
+      throw new ValidationError('The new end date must be in the future.');
+    }
+
+    const previous = doc.expiresAt ?? null;
+    doc.expiresAt = expiresAt;
+    doc.expiryWarningSentFor = null;
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    logger.info('[VmCatalog] Provider term extended', {
+      requestId: doc._id.toString(),
+      provider: doc.provider,
+      previousExpiresAt: previous ? previous.toISOString() : null,
+      expiresAt: expiresAt.toISOString(),
+    });
+
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
+  }
+
+  /**
+   * Super-admin: erase a catalog VM from Racko.
+   *
+   * Racko cannot destroy a Webyne machine — the panel is driven by browser
+   * automation that only exposes start/stop/reboot — so an active VM must have
+   * been terminated at the provider first, which the caller asserts. Ownership
+   * of a catalog VM lives on the document itself, so removing it also removes
+   * the owner's access; the mirror drop covers the separate case where the same
+   * IP was published to a tenant through the VM inventory.
+   */
+  async deleteCatalogVmForSuperAdmin(
+    id: mongoose.Types.ObjectId,
+    opts: { confirmTerminatedAtProvider: boolean }
+  ): Promise<{
+    planName: string;
+    ipAddresses: string[];
+    instancesDeleted: number;
+    ownerLabel: string | null;
+  }> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM not found.');
+
+    const liveStatuses: VmCatalogStatus[] = [
+      'active',
+      'provisioning',
+      'fulfilling',
+      'ready_to_attach',
+    ];
+    if (liveStatuses.includes(doc.status) && !opts.confirmTerminatedAtProvider) {
+      throw new ValidationError(
+        `This VM is still ${doc.status.replace(/_/g, ' ')}. Terminate it with the provider first, then confirm you have done so — deleting the record here does not stop provider billing.`
+      );
+    }
+
+    const owner = await this.resolveOwnerContact(doc);
+    const instances = await CatalogVmInstanceModel.find({ catalogVmId: doc._id })
+      .select('ipAddress')
+      .lean();
+
+    const ipAddresses = [
+      ...new Set(
+        [doc.ipAddress, ...instances.map((i) => i.ipAddress)].filter(
+          (ip): ip is string => Boolean(ip && ip.trim())
+        )
+      ),
+    ];
+
+    await inventoryExternalVmMirrorService.dropServersByIp(ipAddresses);
+
+    const { deletedCount } = await CatalogVmInstanceModel.deleteMany({
+      catalogVmId: doc._id,
+    });
+    await CatalogVmModel.deleteOne({ _id: doc._id });
+
+    logger.warn('[VmCatalog] Catalog VM deleted by super admin', {
+      requestId: doc._id.toString(),
+      provider: doc.provider,
+      status: doc.status,
+      planName: doc.planName,
+      ipAddresses,
+      instancesDeleted: deletedCount ?? 0,
+      owner: owner.label,
+    });
+
+    return {
+      planName: doc.planName,
+      ipAddresses,
+      instancesDeleted: deletedCount ?? 0,
+      ownerLabel: owner.label,
+    };
+  }
+
+  /** Human label for the tenant or admin a VM belongs to. */
+  private async resolveOwnerContact(
+    doc: ICatalogVm
+  ): Promise<{ email: string | null; label: string | null }> {
+    if (doc.adminId) {
+      const admin = await User.findById(doc.adminId).select('email').lean();
+      return { email: admin?.email ?? null, label: admin?.email ?? null };
+    }
+    if (doc.tenantId) {
+      const [tenant, tenantUser] = await Promise.all([
+        Tenant.findById(doc.tenantId).select('name').lean(),
+        doc.tenantUserId
+          ? TenantUser.findById(doc.tenantUserId).select('email').lean()
+          : Promise.resolve(null),
+      ]);
+      const parts = [tenantUser?.email, tenant?.name].filter(Boolean);
+      return {
+        email: tenantUser?.email ?? null,
+        label: parts.length > 0 ? parts.join(' · ') : null,
+      };
+    }
+    return { email: null, label: null };
+  }
+
+  /**
+   * Warn the owner and every super admin that a paid provider term is ending.
+   *
+   * This never terminates anything. Manual Webyne VMs have no programmatic
+   * teardown, so the whole point is to get a human to renew or terminate on the
+   * provider before the term lapses. Marking `expiryWarningSentFor` keeps it to
+   * one alert per end date, and extending the date re-arms it.
+   */
+  async warnExpiringCatalogVm(doc: ICatalogVm): Promise<void> {
+    if (!doc.expiresAt) return;
+
+    const expiresAt = doc.expiresAt;
+    const daysRemaining = Math.ceil(
+      (expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000)
+    );
+    const expiresAtLabel = expiresAt.toISOString().slice(0, 10);
+    const providerLabel = doc.provider === 'webyne' ? 'Webyne' : doc.provider.toUpperCase();
+    const canTerminateInRacko = isAutoCloudProvider(doc.provider);
+    const owner = await this.resolveOwnerContact(doc);
+    const machine = doc.ipAddress || doc.hostname || null;
+
+    const customerNames = await this.resolveCustomerPlanNames([doc]);
+    const customerPlanName = customerNames.get(doc.planId) ?? doc.planName;
+
+    await this.notifyOwner(
+      doc,
+      'VM term is ending',
+      `Your ${customerPlanName} VM term ends on ${expiresAtLabel}. Ask your administrator to extend it if you still need the VM.`,
+      {
+        requestId: doc._id.toString(),
+        event: 'expiring',
+        planName: customerPlanName,
+        expiresAt: expiresAtLabel,
+      }
+    );
+
+    if (owner.email) {
+      await sendCatalogVmExpiryWarningEmail({
+        to: owner.email,
+        audience: 'owner',
+        planName: customerPlanName,
+        providerLabel,
+        billingLabel: doc.billing,
+        ipAddress: machine,
+        hostname: doc.hostname ?? null,
+        ownerLabel: null,
+        expiresAtLabel,
+        daysRemaining,
+        canTerminateInRacko,
+        manageUrl: `${portalBaseUrl()}/console/create-vm/my-vms`,
+      }).catch((err: unknown) => {
+        logger.error('[VmCatalog] Expiry warning email to owner failed', {
+          requestId: doc._id.toString(),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
+    const superAdmins = await User.find({ role: 'super_admin', isActive: true })
+      .select('_id email')
+      .lean();
+
+    const requestId = doc._id.toString();
+    const superAdminMessage = `${doc.planName} (${doc.billing}) on ${providerLabel}${
+      machine ? ` — ${machine}` : ''
+    } ends on ${expiresAtLabel}.${
+      canTerminateInRacko ? '' : ' Terminate or extend it on Webyne manually.'
+    }`;
+
+    await Promise.allSettled(
+      superAdmins.flatMap((admin) => [
+        Notification.create({
+          userId: admin._id,
+          type: 'catalog_vm_request',
+          title: 'VM provider term ending',
+          message: superAdminMessage,
+          severity: 'warning',
+          read: false,
+          actionUrl: '/super-admin-console/create-vm/my-vms',
+          metadata: {
+            jobId: `${requestId}:expiring:${expiresAtLabel}`,
+            requestId,
+            event: 'catalog_expiring',
+            planName: doc.planName,
+            expiresAt: expiresAtLabel,
+          },
+        }),
+        sendCatalogVmExpiryWarningEmail({
+          to: admin.email,
+          audience: 'super_admin',
+          planName: doc.planName,
+          providerLabel,
+          billingLabel: doc.billing,
+          ipAddress: machine,
+          hostname: doc.hostname ?? null,
+          ownerLabel: owner.label,
+          expiresAtLabel,
+          daysRemaining,
+          canTerminateInRacko,
+          manageUrl: `${portalBaseUrl()}/super-admin-console/create-vm/my-vms`,
+        }),
+      ])
+    );
+
+    doc.expiryWarningSentFor = expiresAt;
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    logger.info('[VmCatalog] Sent provider term expiry warning', {
+      requestId,
+      provider: doc.provider,
+      expiresAt: expiresAtLabel,
+      daysRemaining,
+      superAdmins: superAdmins.length,
+      notifiedOwner: Boolean(owner.email),
+    });
   }
 
   // ─── Tenant portal (white-label) ─────────────────────────────────────────
@@ -3646,6 +3912,12 @@ class VmCatalogService {
     doc.reviewedBy = reviewerId;
     doc.reviewedAt = new Date();
     doc.updatedAt = new Date();
+    if (!doc.expiresAt && hasFixedProviderTerm(doc.billing)) {
+      doc.expiresAt = computeExpiresFrom(
+        doc.attachedAt,
+        resolveDurationDays(doc.billing)
+      );
+    }
     await doc.save();
 
     this.schedulePostReadySetup(doc);
