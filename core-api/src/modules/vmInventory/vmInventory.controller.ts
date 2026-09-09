@@ -21,6 +21,16 @@ class VmInventoryController {
     }
   }
 
+  /** GET /api/v1/super-admin/vm-inventory/filter-options */
+  async filterOptions(_req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = await vmInventoryService.listFilterOptions();
+      success(res, 'Filter options retrieved.', data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** GET /api/v1/super-admin/vm-inventory/credentials/:credentialId/password */
   async revealPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -88,6 +98,23 @@ class VmInventoryController {
     }
   }
 
+  /**
+   * POST /api/v1/super-admin/vm-inventory/resolve-logins
+   * Matches an uploaded assignment file against the inventory. Read-only.
+   */
+  async resolveLogins(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = await vmInventoryBulkAssignService.resolveLogins(req.body.rows);
+      success(
+        res,
+        `${data.summary.resolved} of ${data.summary.total} row(s) matched a login.`,
+        data
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** POST /api/v1/super-admin/vm-inventory/servers/bulk-delete */
   async bulkDeleteServers(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -97,6 +124,107 @@ class VmInventoryController {
           ? `Deleted ${data.deleted} server(s); ${data.skipped.length} skipped.`
           : `Deleted ${data.deleted} server(s).`;
       success(res, message, data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/v1/super-admin/vm-inventory/servers/bulk-reset
+   * Fire-and-forget: agents report progress on the machine-manager reset stream.
+   */
+  async bulkResetServers(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = await vmInventoryService.resetServers(req.body.serverIds);
+      success(res, `Reset initiated on ${data.accepted.length} VM(s).`, data, 202);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** GET /api/v1/super-admin/vm-inventory/notification-settings */
+  async getNotificationSettings(_req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = await vmInventoryService.getNotificationSettings();
+      success(res, 'Notification settings retrieved.', data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** PUT /api/v1/super-admin/vm-inventory/notification-settings */
+  async updateNotificationSettings(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const data = await vmInventoryService.updateNotificationSettings(
+        req.body.providerExpiryRecipients,
+        new mongoose.Types.ObjectId(authReq.user.userId)
+      );
+      success(res, 'Notification settings saved.', data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/v1/super-admin/vm-inventory/push-agent
+   * Fire-and-forget: pushes report progress on the machine-manager push stream.
+   */
+  async pushAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const data = await vmInventoryService.pushAgent(
+        req.body.serverIds,
+        new mongoose.Types.ObjectId(authReq.user.userId),
+        req.body.installRackoApp
+      );
+      const onlineNote =
+        data.alreadyOnline.length > 0
+          ? ` ${data.alreadyOnline.length} already had a running agent.`
+          : '';
+      success(
+        res,
+        `Agent push started on ${data.targets.length} VM(s).${onlineNote}`,
+        data,
+        202
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/v1/super-admin/vm-inventory/install-software
+   * Fire-and-forget: agents report progress on the machine-manager job stream.
+   */
+  async installSoftware(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const data = await vmInventoryService.installSoftware(
+        req.body.credentialIds,
+        req.body.softwareIds,
+        new mongoose.Types.ObjectId(authReq.user.userId)
+      );
+      success(res, `Queued ${data.jobs.length} install job(s).`, data, 202);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/super-admin/vm-inventory/servers/bulk-override */
+  async bulkSetOverride(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = await vmInventoryAssignmentService.bulkSetOverride(req.body);
+      const skipNote =
+        data.serversWithoutAssignments > 0
+          ? ` ${data.serversWithoutAssignments} VM(s) had no assignment.`
+          : '';
+      const verb = req.body.accessOverride ? 'Granted' : 'Removed';
+      success(res, `${verb} override on ${data.updated} assignment(s).${skipNote}`, data);
     } catch (err) {
       next(err);
     }
@@ -117,10 +245,32 @@ class VmInventoryController {
   }
 
   /** DELETE /api/v1/super-admin/vm-inventory/assignments/:assignmentId */
-  async revoke(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async unassign(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      await vmInventoryAssignmentService.revoke(req.params['assignmentId']!);
-      success(res, 'Assignment revoked.');
+      const data = await vmInventoryAssignmentService.unassign(req.params['assignmentId']!);
+      const parts = ['Login unassigned.'];
+      if (data.userDeleted) parts.push('Portal user removed.');
+      if (data.serverFreed) parts.push('VM returned to the free pool.');
+      else if (data.remainingLogins > 0) {
+        parts.push(
+          `VM still has ${data.remainingLogins} assigned login(s), so it keeps its owner.`
+        );
+      }
+      success(res, parts.join(' '), data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/super-admin/vm-inventory/servers/bulk-unassign */
+  async bulkUnassignServers(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = await vmInventoryAssignmentService.bulkUnassignServers(req.body.serverIds);
+      success(
+        res,
+        `Unassigned ${data.loginsUnassigned} login(s); freed ${data.serversFreed} VM(s).`,
+        data
+      );
     } catch (err) {
       next(err);
     }

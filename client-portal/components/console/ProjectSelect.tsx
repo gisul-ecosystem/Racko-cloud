@@ -11,6 +11,16 @@ import {
 import { fetchTenantProjectsForService } from '@/lib/tenantProjectsApi';
 import type { AdminServiceKey } from '@/lib/adminServicesApi';
 
+/** Minimal shape the picker renders; `OrgProject` satisfies it structurally. */
+export type ProjectSelectOption = {
+  id: string;
+  name: string;
+  clientName: string;
+  /** Listed but not selectable — pair with `note` to say why. */
+  disabled?: boolean;
+  note?: string;
+};
+
 export function ProjectSelect({
   serviceKey,
   value,
@@ -21,8 +31,15 @@ export function ProjectSelect({
   seedFromQuery = true,
   onCreateProject,
   refreshKey,
+  projects: providedProjects,
+  loading: providedLoading,
+  title,
+  helpText,
+  emptyTitle,
+  emptyHint,
 }: {
-  serviceKey: AdminServiceKey;
+  /** Required unless `projects` is supplied by the parent. */
+  serviceKey?: AdminServiceKey;
   value: string;
   onChange: (projectId: string) => void;
   disabled?: boolean;
@@ -35,11 +52,23 @@ export function ProjectSelect({
   onCreateProject?: () => void;
   /** Increment to force the project list to re-fetch. */
   refreshKey?: number;
+  /** Supply the list yourself (e.g. super-admin, scoped to another owner). */
+  projects?: ProjectSelectOption[];
+  /** Loading flag for the supplied list. */
+  loading?: boolean;
+  title?: string;
+  helpText?: string;
+  emptyTitle?: string;
+  emptyHint?: string;
 }) {
-  const [projects, setProjects] = useState<OrgProject[]>([]);
-  const [loading, setLoading] = useState(true);
+  const externallyControlled = providedProjects !== undefined;
+  const [fetchedProjects, setFetchedProjects] = useState<OrgProject[]>([]);
+  const [fetching, setFetching] = useState(!externallyControlled);
   const [error, setError] = useState<string | null>(null);
   const seededRef = useRef(false);
+
+  const projects: ProjectSelectOption[] = providedProjects ?? fetchedProjects;
+  const loading = externallyControlled ? Boolean(providedLoading) : fetching;
 
   // Org: navigate to projects page with ?create=1 so modal auto-opens.
   // Tenant: navigate to the standalone create project page.
@@ -49,28 +78,29 @@ export function ProjectSelect({
       : '/console/projects?create=1';
 
   useEffect(() => {
+    if (externallyControlled || !serviceKey) return;
     let cancelled = false;
     (async () => {
-      setLoading(true);
+      setFetching(true);
       setError(null);
       try {
         const list =
           portal === 'tenant'
             ? await fetchTenantProjectsForService(serviceKey)
             : await fetchProjectsForService(serviceKey);
-        if (!cancelled) setProjects(list);
+        if (!cancelled) setFetchedProjects(list);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof ApiError ? err.message : 'Failed to load projects.');
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setFetching(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [serviceKey, portal, refreshKey]);
+  }, [serviceKey, portal, refreshKey, externallyControlled]);
 
   useEffect(() => {
     if (!seedFromQuery || seededRef.current || loading) return;
@@ -99,18 +129,21 @@ export function ProjectSelect({
     <div className="space-y-3">
       <div>
         <p className="mb-1 text-sm font-medium text-gray-700">
-          Project / client{required ? ' *' : ''}
+          {title ?? 'Project / client'}
+          {required ? ' *' : ''}
         </p>
         <p className="text-xs text-gray-500">
-          Assign this resource to a project for spend tracking in Reports.
+          {helpText ?? 'Assign this resource to a project for spend tracking in Reports.'}
         </p>
       </div>
 
       {projects.length === 0 ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <p className="font-medium">No active project has this service enabled.</p>
+          <p className="font-medium">
+            {emptyTitle ?? 'No active project has this service enabled.'}
+          </p>
           <p className="mt-1 text-xs text-amber-700">
-            Create a project with this service to continue.
+            {emptyHint ?? 'Create a project with this service to continue.'}
           </p>
           {onCreateProject ? (
             <button
@@ -140,8 +173,9 @@ export function ProjectSelect({
           >
             <option value="">Select a project</option>
             {projects.map((p) => (
-              <option key={p.id} value={p.id}>
+              <option key={p.id} value={p.id} disabled={p.disabled}>
                 {p.name} — {p.clientName}
+                {p.note ? ` (${p.note})` : ''}
               </option>
             ))}
           </select>

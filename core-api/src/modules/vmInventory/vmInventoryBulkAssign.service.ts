@@ -12,8 +12,19 @@ import {
   parseAccessScheduleInput,
   type AccessScheduleInput,
 } from '../vmAccessSchedule/accessScheduleParse';
+import { decrypt } from '../../utils/crypto';
 import { NotFoundError, ValidationError } from '../../utils/errors';
-import type { BulkAssignResult, BulkAssignRowResult } from './vmInventory.types';
+import { logger } from '../../utils/logger';
+import {
+  inventoryExternalVmMirrorService,
+  isWeeklyScheduleLossy,
+} from './inventoryExternalVmMirror.service';
+import type {
+  BulkAssignResult,
+  BulkAssignRowResult,
+  ResolvedLoginRow,
+  ResolveLoginsResult,
+} from './vmInventory.types';
 
 /** Hard ceiling per request. Matches the elastic-server bulk assign cap. */
 const MAX_ROWS = 250;
@@ -53,20 +64,147 @@ function generateSecurePassword(): string {
   return combined.join('');
 }
 
+/** Same rules the shared-password field enforces, applied to one value. */
+function passwordPolicyError(value: string): string | null {
+  if (value.length < 8) return 'Password must be at least 8 characters.';
+  if (value.length > 128) return 'Password is too long.';
+  if (!/[A-Z]/.test(value)) return 'Password needs an uppercase letter.';
+  if (!/[a-z]/.test(value)) return 'Password needs a lowercase letter.';
+  if (!/[0-9]/.test(value)) return 'Password needs a number.';
+  if (!/[^A-Za-z0-9]/.test(value)) return 'Password needs a special character.';
+  return null;
+}
+
 export interface BulkAssignInput {
   credentialIds: string[];
   targetType: 'admin' | 'tenant';
   targetId: string;
   projectId: string;
-  emailPrefix: string;
-  passwordMode: 'auto' | 'shared';
+  /** Base address for the numbered series. Ignored when `emails` is set. */
+  emailPrefix?: string;
+  /** Exact addresses, one per credential, instead of a generated series. */
+  emails?: string[] | null;
+  passwordMode: 'auto' | 'shared' | 'per_row';
   sharedPassword?: string;
+  /** One password per credential, from an uploaded file. Only read for `per_row`. */
+  passwords?: string[] | null;
   accessSchedule?: AccessScheduleInput | null;
   dryRun: boolean;
   assignedBy: mongoose.Types.ObjectId;
 }
 
 class VmInventoryBulkAssignService {
+  /**
+   * Match uploaded IP + username pairs to inventory logins.
+   *
+   * Nothing is created: a row naming an unknown IP or username fails with a
+   * reason, because an assignment file is not a place to invent inventory.
+   * A VM password that disagrees with the stored one is reported as a mismatch
+   * and left alone — the inventory stays authoritative.
+   */
+  async resolveLogins(
+    input: Array<{ ipAddress: string; username: string; vmPassword?: string | null }>
+  ): Promise<ResolveLoginsResult> {
+    if (input.length === 0) throw new ValidationError('No rows to resolve.');
+    if (input.length > MAX_ROWS) {
+      throw new ValidationError(`Assignment files are capped at ${MAX_ROWS} rows.`);
+    }
+
+    const ips = [...new Set(input.map((r) => r.ipAddress.trim()))];
+    const servers = await ServerModel.find({ ipAddress: { $in: ips } })
+      .select('_id ipAddress')
+      .lean();
+    const serverByIp = new Map(servers.map((s) => [s.ipAddress, s]));
+
+    const credentials = await ServerCredentialModel.find({
+      serverId: { $in: servers.map((s) => s._id) },
+    })
+      .select('_id serverId username password status')
+      .lean();
+
+    // Usernames are matched case-insensitively so an operator's file does not
+    // have to reproduce the exact casing stored on the box.
+    const credByServerAndUser = new Map(
+      credentials.map((c) => [`${c.serverId.toString()}|${c.username.trim().toLowerCase()}`, c])
+    );
+
+    const assignedCredentialIds = new Set(
+      (
+        await CredentialAssignmentModel.find({
+          credentialId: { $in: credentials.map((c) => c._id) },
+          status: 'active',
+        })
+          .select('credentialId')
+          .lean()
+      ).map((a) => a.credentialId.toString())
+    );
+
+    const rows: ResolvedLoginRow[] = input.map((row, index) => {
+      const ipAddress = row.ipAddress.trim();
+      const username = row.username.trim();
+      const base = {
+        index,
+        ipAddress,
+        username,
+        credentialId: null,
+        serverId: null,
+        assigned: false,
+        vmPasswordMatches: null,
+      };
+
+      const server = serverByIp.get(ipAddress);
+      if (!server) {
+        return { ...base, error: `No VM with IP ${ipAddress} in the inventory.` };
+      }
+
+      const cred = credByServerAndUser.get(
+        `${server._id.toString()}|${username.toLowerCase()}`
+      );
+      if (!cred) {
+        return {
+          ...base,
+          serverId: server._id.toString(),
+          error: `${ipAddress} has no login "${username}". Add it in VM Inventory first.`,
+        };
+      }
+
+      let vmPasswordMatches: boolean | null = null;
+      if (row.vmPassword) {
+        try {
+          vmPasswordMatches = decrypt(cred.password) === row.vmPassword;
+        } catch {
+          // Undecryptable stored value: report unknown rather than a mismatch.
+          vmPasswordMatches = null;
+        }
+      }
+
+      const resolved = {
+        ...base,
+        credentialId: cred._id.toString(),
+        serverId: server._id.toString(),
+        vmPasswordMatches,
+      };
+
+      if (cred.status !== 'active') {
+        return { ...resolved, error: 'Login is disabled.' };
+      }
+      if (assignedCredentialIds.has(cred._id.toString())) {
+        return { ...resolved, assigned: true, error: 'Login is already assigned to someone.' };
+      }
+      return { ...resolved, error: null };
+    });
+
+    return {
+      rows,
+      summary: {
+        total: rows.length,
+        resolved: rows.filter((r) => !r.error).length,
+        unresolved: rows.filter((r) => r.error).length,
+        passwordMismatches: rows.filter((r) => r.vmPasswordMatches === false).length,
+      },
+    };
+  }
+
   /**
    * Generate a numbered user per selected login and grant them one-to-one.
    *
@@ -97,8 +235,23 @@ class VmInventoryBulkAssignService {
     if (passwordMode === 'shared' && !sharedPassword) {
       throw new ValidationError('sharedPassword is required when passwordMode is "shared".');
     }
+    const rowPasswords = passwordMode === 'per_row' ? input.passwords : null;
+    if (passwordMode === 'per_row' && !rowPasswords?.length) {
+      throw new ValidationError('passwords is required when passwordMode is "per_row".');
+    }
+    if (rowPasswords && rowPasswords.length !== credentialIds.length) {
+      throw new ValidationError('passwords must have exactly one entry per selected login.');
+    }
     if (new Set(credentialIds).size !== credentialIds.length) {
       throw new ValidationError('The same login was selected more than once.');
+    }
+
+    const explicitEmails = input.emails?.length ? input.emails : null;
+    if (!explicitEmails && !emailPrefix) {
+      throw new ValidationError('Provide either emailPrefix or emails.');
+    }
+    if (explicitEmails && explicitEmails.length !== credentialIds.length) {
+      throw new ValidationError('emails must have exactly one address per selected login.');
     }
 
     // ── Target owner ─────────────────────────────────────────────────────
@@ -169,7 +322,14 @@ class VmInventoryBulkAssignService {
       password: string;
     }> = [];
 
-    const emails = credentialIds.map((_, i) => buildSeriesEmail(emailPrefix, i + 1).toLowerCase());
+    const emails = explicitEmails
+      ? explicitEmails.map((e) => e.trim().toLowerCase())
+      : credentialIds.map((_, i) => buildSeriesEmail(emailPrefix!, i + 1).toLowerCase());
+
+    // A generated series is unique by construction; explicit input is not.
+    if (new Set(emails).size !== emails.length) {
+      throw new ValidationError('The same email was supplied more than once.');
+    }
 
     // Collision checks in bulk rather than per row.
     const existingEmails = new Set(
@@ -253,7 +413,21 @@ class VmInventoryBulkAssignService {
         continue;
       }
 
-      const password = passwordMode === 'shared' ? sharedPassword! : generateSecurePassword();
+      let password: string;
+      if (passwordMode === 'per_row') {
+        password = rowPasswords![i]!;
+        // An uploaded file is not validated field by field on the way in, so a
+        // weak entry fails its own row instead of the whole batch.
+        const policyError = passwordPolicyError(password);
+        if (policyError) {
+          fail(policyError, server.ipAddress, cred.username);
+          continue;
+        }
+      } else if (passwordMode === 'shared') {
+        password = sharedPassword!;
+      } else {
+        password = generateSecurePassword();
+      }
 
       rows.push({
         index: i,
@@ -317,7 +491,7 @@ class VmInventoryBulkAssignService {
       docs.forEach((d) => createdUserIds.set(d.email.toLowerCase(), d._id));
     }
 
-    await CredentialAssignmentModel.insertMany(
+    const created = await CredentialAssignmentModel.insertMany(
       planned.map((p) => ({
         credentialId: p.credentialId,
         serverId: p.serverId,
@@ -341,7 +515,26 @@ class VmInventoryBulkAssignService {
       { $set: { adminId, tenantId } }
     );
 
-    return { rows, summary: summary(), projectName: project.name, dryRun };
+    // The grant above is invisible to the assignee until it exists in the
+    // elastic-server collections their portal reads. Failing here must not lose
+    // the response — it carries the only copy of the generated passwords.
+    let note: string | undefined;
+    try {
+      await inventoryExternalVmMirrorService.syncAssignments(created.map((d) => d._id));
+      if (isWeeklyScheduleLossy(schedulePatch.weeklySchedule)) {
+        note =
+          'Access hours differ per day. The portal enforces one window per assignment, so users get the widest span across the selected days.';
+      }
+    } catch (err) {
+      logger.error('[BulkAssign] Users were assigned but the portal mirror failed', {
+        error: err instanceof Error ? err.message : String(err),
+        assignments: created.length,
+      });
+      note =
+        'Users were assigned, but their servers could not be published to the portal. Re-run the assignment or contact engineering.';
+    }
+
+    return { rows, summary: summary(), projectName: project.name, dryRun, ...(note && { note }) };
   }
 }
 

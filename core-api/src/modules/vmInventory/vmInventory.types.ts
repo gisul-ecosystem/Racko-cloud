@@ -15,6 +15,13 @@ export type InventorySource =
   | 'dedicated_server';
 
 /** One grant of a login to one person, with client dates resolved from its project. */
+export interface InventoryNotificationSettings {
+  /** Alerted before a provider contract lapses. Empty means nobody is told. */
+  providerExpiryRecipients: string[];
+  /** How many days ahead the alert goes out, from server config. */
+  warningDays: number;
+}
+
 export interface InventoryAssignmentView {
   assignmentId: string;
   assigneeType: AssigneeType;
@@ -97,6 +104,40 @@ export interface ProviderMetadataImportRow {
   providerEndDate?: Date | null;
 }
 
+/**
+ * One row of an uploaded assignment file, matched against the inventory.
+ *
+ * `credentialId` is null when the IP or username is unknown: the file is only
+ * ever a way to assign logins that already exist, never to create them.
+ */
+export interface ResolvedLoginRow {
+  index: number;
+  ipAddress: string;
+  username: string;
+  credentialId: string | null;
+  serverId: string | null;
+  /** Already held by someone else, so this row cannot be granted again. */
+  assigned: boolean;
+  /**
+   * Whether the VM password in the file equals the stored one. Null when the
+   * file omitted it or the row did not resolve. False is a warning, not an
+   * error — the stored value stays authoritative.
+   */
+  vmPasswordMatches: boolean | null;
+  error: string | null;
+}
+
+export interface ResolveLoginsResult {
+  rows: ResolvedLoginRow[];
+  summary: {
+    total: number;
+    resolved: number;
+    unresolved: number;
+    /** Rows whose file password disagrees with the inventory. */
+    passwordMismatches: number;
+  };
+}
+
 /** One login in a bulk assign run, paired with the user generated for it. */
 export interface BulkAssignRowResult {
   index: number;
@@ -120,6 +161,29 @@ export interface BulkAssignResult {
   };
   projectName: string;
   dryRun: boolean;
+  /**
+   * Set when the portal-visible copy of the grant differs from what was asked
+   * for — a widened access window, or a mirror that could not be written.
+   */
+  note?: string;
+}
+
+/** What releasing one login actually changed. */
+export interface UnassignResult {
+  /** True when the lab user created for this login was removed with it. */
+  userDeleted: boolean;
+  /** True when the VM went back to the free pool. */
+  serverFreed: boolean;
+  /** Logins still assigned on that VM, which is why it kept its owner. */
+  remainingLogins: number;
+  owner: 'admin' | 'tenant' | 'free' | null;
+}
+
+export interface BulkUnassignResult {
+  servers: number;
+  loginsUnassigned: number;
+  usersDeleted: number;
+  serversFreed: number;
 }
 
 /** One server a bulk delete refused to touch, and why. */

@@ -26,6 +26,12 @@ export interface IServer extends Document {
   /** Vendor contract window. Only ever populated for imported servers. */
   providerStartDate?: Date | null;
   providerEndDate?: Date | null;
+  /**
+   * The `providerEndDate` an expiry alert has already gone out for. Stops the
+   * scheduler re-sending every tick, and re-arms itself when the date is
+   * extended because the new value no longer matches.
+   */
+  providerExpiryAlertSentFor?: Date | null;
   /** Ownership. Mutually exclusive — neither set means the server is in the free pool. */
   adminId?: mongoose.Types.ObjectId | null;
   tenantId?: mongoose.Types.ObjectId | null;
@@ -62,6 +68,7 @@ const serverSchema = new Schema<IServer>(
     provider: { type: String, trim: true, default: null },
     providerStartDate: { type: Date, default: null },
     providerEndDate: { type: Date, default: null },
+    providerExpiryAlertSentFor: { type: Date, default: null },
     adminId: { type: Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     tenantId: { type: Schema.Types.ObjectId, ref: 'Tenant', default: null, index: true },
     projectId: { type: Schema.Types.ObjectId, ref: 'Project', default: null, index: true },

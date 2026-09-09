@@ -8,14 +8,21 @@ import {
   assignmentIdParamSchema,
   bulkAssignSchema,
   bulkDeleteServersSchema,
+  bulkResetServersSchema,
+  bulkSetOverrideSchema,
+  bulkUnassignServersSchema,
   credentialIdParamSchema,
   importRowsSchema,
+  installSoftwareSchema,
   listVmInventorySchema,
   mapOwnerSchema,
   ownerQuerySchema,
+  pushAgentSchema,
+  resolveLoginsSchema,
   serverIdParamSchema,
   setLockSchema,
   setOverrideSchema,
+  updateNotificationSettingsSchema,
   updateServerSchema,
   upsertCredentialSchema,
 } from './vmInventory.validation';
@@ -34,12 +41,27 @@ router.get('/', validateRequest(listVmInventorySchema), (req, res, next) =>
   vmInventoryController.list(req, res, next)
 );
 
+router.get('/filter-options', (req, res, next) =>
+  vmInventoryController.filterOptions(req, res, next)
+);
+
 router.get('/assignees', validateRequest(ownerQuerySchema), (req, res, next) =>
   vmInventoryController.listAssignees(req, res, next)
 );
 
 router.get('/projects', validateRequest(ownerQuerySchema), (req, res, next) =>
   vmInventoryController.listProjects(req, res, next)
+);
+
+router.get('/notification-settings', (req, res, next) =>
+  vmInventoryController.getNotificationSettings(req, res, next)
+);
+
+router.put(
+  '/notification-settings',
+  canWrite,
+  validateRequest(updateNotificationSettingsSchema),
+  (req, res, next) => vmInventoryController.updateNotificationSettings(req, res, next)
 );
 
 router.get(
@@ -61,6 +83,12 @@ router.post('/bulk-assign', canWrite, validateRequest(bulkAssignSchema), (req, r
   vmInventoryController.bulkAssign(req, res, next)
 );
 
+// Write-gated even though it reads: confirming a supplied VM password is a
+// weaker form of revealing it, so ordinary read access is not enough.
+router.post('/resolve-logins', canWrite, validateRequest(resolveLoginsSchema), (req, res, next) =>
+  vmInventoryController.resolveLogins(req, res, next)
+);
+
 router.post('/assignments', canWrite, validateRequest(assignCredentialSchema), (req, res, next) =>
   vmInventoryController.assign(req, res, next)
 );
@@ -76,7 +104,15 @@ router.delete(
   '/assignments/:assignmentId',
   canWrite,
   validateRequest(assignmentIdParamSchema),
-  (req, res, next) => vmInventoryController.revoke(req, res, next)
+  (req, res, next) => vmInventoryController.unassign(req, res, next)
+);
+
+// Registered before the /servers/:serverId routes so the literal path wins.
+router.post(
+  '/servers/bulk-unassign',
+  canWrite,
+  validateRequest(bulkUnassignServersSchema),
+  (req, res, next) => vmInventoryController.bulkUnassignServers(req, res, next)
 );
 
 // Registered before the /servers/:serverId routes so the literal path wins.
@@ -85,6 +121,31 @@ router.post(
   canWrite,
   validateRequest(bulkDeleteServersSchema),
   (req, res, next) => vmInventoryController.bulkDeleteServers(req, res, next)
+);
+
+router.post(
+  '/servers/bulk-reset',
+  canWrite,
+  validateRequest(bulkResetServersSchema),
+  (req, res, next) => vmInventoryController.bulkResetServers(req, res, next)
+);
+
+router.post('/push-agent', canWrite, validateRequest(pushAgentSchema), (req, res, next) =>
+  vmInventoryController.pushAgent(req, res, next)
+);
+
+router.post(
+  '/install-software',
+  canWrite,
+  validateRequest(installSoftwareSchema),
+  (req, res, next) => vmInventoryController.installSoftware(req, res, next)
+);
+
+router.post(
+  '/servers/bulk-override',
+  canWrite,
+  validateRequest(bulkSetOverrideSchema),
+  (req, res, next) => vmInventoryController.bulkSetOverride(req, res, next)
 );
 
 router.patch(

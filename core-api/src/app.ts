@@ -54,6 +54,7 @@ import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpirySchedul
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 import { startCatalogVmExpiryScheduler } from './modules/vmCatalog/catalogVmExpiryScheduler';
 import { startProjectExpiryScheduler } from './modules/projects/projectExpiryScheduler';
+import { startProviderExpiryScheduler } from './modules/vmInventory/providerExpiryScheduler';
 import { rescheduleFromDb } from './modules/vmAccessSchedule/scheduleManager';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
@@ -244,6 +245,7 @@ startPlanExpiryScheduler();
 startPlanExpiryWarningScheduler();
 startCatalogVmExpiryScheduler();
 startProjectExpiryScheduler();
+startProviderExpiryScheduler();
 void rescheduleFromDb().catch((err) => {
   logger.error('[accessSchedule] rescheduleFromDb failed', {
     error: err instanceof Error ? err.message : String(err),

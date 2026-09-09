@@ -1,6 +1,12 @@
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
-import { MachineModel, JobModel, type IMachine, type IJob } from './machine-manager.model';
+import {
+  MachineModel,
+  JobModel,
+  type IMachine,
+  type IJob,
+  type MachineOS,
+} from './machine-manager.model';
 import { SoftwareCatalogModel } from '../software-catalog/software-catalog.model';
 import { softwareCatalogService } from '../software-catalog/software-catalog.service';
 import type { SoftwareCatalogResponse } from '../software-catalog/software-catalog.types';
@@ -26,6 +32,15 @@ interface PushSessionEntry {
   installRackoApp: boolean;
 }
 const pushSessionRegistry = new Map<string, PushSessionEntry>();
+
+/** One VM to push to, with the credentials used for that push and never stored. */
+export interface PushVmInput {
+  name: string;
+  ipAddress: string;
+  os: MachineOS;
+  username: string;
+  password: string;
+}
 
 // Clean up sessions older than 10 minutes
 setInterval(() => {
@@ -206,24 +221,74 @@ class MachineManagerService {
     adminId: mongoose.Types.ObjectId
   ): Promise<JobResponse[]> {
     // Verify all machines are owned by this admin
+    const machines: IMachine[] = [];
     for (const machineId of dto.machineIds) {
       const id = new mongoose.Types.ObjectId(machineId);
-      await this.findOwnedMachine(id, adminId);
+      machines.push(await this.findOwnedMachine(id, adminId));
     }
 
+    return this.createJobsForMachines(machines, dto.softwareIds, adminId);
+  }
+
+  /**
+   * Install by IP address, without the per-admin ownership check.
+   *
+   * The super-admin inventory and assign flows key on IP and span every admin's
+   * machines, so they cannot go through createJobs(). Jobs are recorded against
+   * the initiating super admin, which is what keeps the job streams readable to
+   * them. IPs with no agent installed come back as `notManaged`.
+   */
+  async createJobsByIp(
+    ipAddresses: string[],
+    softwareIds: string[],
+    adminId: mongoose.Types.ObjectId
+  ): Promise<{
+    jobs: JobResponse[];
+    matched: Array<{ ipAddress: string; machineId: string; machineName: string; online: boolean }>;
+    notManaged: string[];
+  }> {
+    const ips = [...new Set(ipAddresses)];
+    const machines = await MachineModel.find({ ipAddress: { $in: ips }, deleted: false });
+
+    const jobs =
+      machines.length > 0
+        ? await this.createJobsForMachines(machines, softwareIds, adminId)
+        : [];
+
+    const { wsManager } = await import('./websocket/wsManager');
+    const matched = machines.map((m) => ({
+      ipAddress: m.ipAddress,
+      machineId: m._id.toString(),
+      machineName: m.name,
+      online: Boolean(m.agentId && wsManager.isConnected(m.agentId)),
+    }));
+
+    const managed = new Set(machines.map((m) => m.ipAddress));
+    return { jobs, matched, notManaged: ips.filter((ip) => !managed.has(ip)) };
+  }
+
+  /**
+   * Creates the jobs and pushes them to each connected agent. Ownership is the
+   * caller's concern — both entry points resolve their machines first.
+   */
+  private async createJobsForMachines(
+    machines: IMachine[],
+    softwareIds: string[],
+    adminId: mongoose.Types.ObjectId
+  ): Promise<JobResponse[]> {
     // Verify all software items exist
-    const softwareObjectIds = dto.softwareIds.map((id) => new mongoose.Types.ObjectId(id));
+    const softwareObjectIds = softwareIds.map((id) => new mongoose.Types.ObjectId(id));
     const softwareCount = await SoftwareCatalogModel.countDocuments({
       _id: { $in: softwareObjectIds },
     });
-    if (softwareCount !== dto.softwareIds.length) {
+    if (softwareCount !== softwareIds.length) {
       throw new ValidationError('One or more software items were not found.');
     }
 
     const jobs: JobResponse[] = [];
 
-    for (const machineId of dto.machineIds) {
-      const machine = await MachineModel.findById(machineId);
+    for (const machine of machines) {
+      const machineId = machine._id.toString();
 
       // One job per software item — enables per-software status tracking
       for (const softwareId of softwareObjectIds) {
@@ -260,7 +325,7 @@ class MachineManagerService {
         jobs.push(this.toJobResponse(doc));
 
         // Push job to agent if connected via WebSocket
-        if (machine?.agentId) {
+        if (machine.agentId) {
           const { wsManager } = await import('./websocket/wsManager');
           const pushed = wsManager.pushJob(machine.agentId, {
             _id: doc._id.toString(),
@@ -667,15 +732,12 @@ class MachineManagerService {
    * sessionId is used to emit SSE events per-VM as each push completes.
    */
   async pushAgentToVMs(
-    vms: Array<{ name: string; ipAddress: string; os: import('./machine-manager.model').MachineOS; username: string; password: string }>,
+    vms: PushVmInput[],
     adminId: mongoose.Types.ObjectId,
     sessionId: string,
     groupId?: string,
     installRackoApp = true,
   ): Promise<{ machines: MachineResponse[]; pushResults: import('./vm-push.service').VMPushResult[] }> {
-    const { vmPushService } = await import('./vm-push.service');
-    const { emitPushEvent } = await import('./push.events');
-
     // Step 1: Create or reuse machine records synchronously (fast, DB only)
     const machines: MachineResponse[] = [];
     for (const vm of vms) {
@@ -736,9 +798,106 @@ class MachineManagerService {
       }
     }
 
-    // Register this session so agent heartbeat/WS can emit agent_connected events
+    this.startPushSession(
+      machines.map((machine, i) => ({ machine, vm: vms[i]! })),
+      adminId,
+      sessionId,
+      installRackoApp
+    );
+
+    return { machines, pushResults: [] };
+  }
+
+  /**
+   * Push by IP address, without the per-admin ownership check.
+   *
+   * The super-admin inventory and assign flows key on IP and span every admin's
+   * machines, so they cannot go through pushAgentToVMs(): that one looks up
+   * `{ adminId, ipAddress }` and would fork a duplicate machine record for a box
+   * another admin already manages. An IP already running an agent is skipped
+   * rather than re-pushed, for the same reason.
+   *
+   * A machine found under another admin keeps its owner and its account token,
+   * so re-pushing an existing box re-enrols it where it already belonged.
+   */
+  async pushAgentToVMsByIp(
+    vms: PushVmInput[],
+    adminId: mongoose.Types.ObjectId,
+    sessionId: string,
+    installRackoApp = true
+  ): Promise<{
+    machines: MachineResponse[];
+    alreadyOnline: Array<{ ipAddress: string; machineId: string; machineName: string }>;
+  }> {
+    const { wsManager } = await import('./websocket/wsManager');
+
+    const pairs: Array<{ machine: MachineResponse; vm: PushVmInput }> = [];
+    const alreadyOnline: Array<{ ipAddress: string; machineId: string; machineName: string }> = [];
+
+    for (const vm of vms) {
+      const existing = await MachineModel.findOne({
+        ipAddress: vm.ipAddress,
+        deleted: { $ne: true },
+      }).sort({ createdAt: -1 });
+
+      if (existing?.agentId && wsManager.isConnected(existing.agentId)) {
+        alreadyOnline.push({
+          ipAddress: vm.ipAddress,
+          machineId: existing._id.toString(),
+          machineName: existing.name,
+        });
+        continue;
+      }
+
+      if (existing) {
+        // Only the owner's own naming is refreshed; another admin's machine keeps
+        // the name they gave it.
+        if (existing.adminId.equals(adminId)) {
+          existing.name = vm.name;
+          existing.os = vm.os;
+        }
+        existing.status = 'pending';
+        await existing.save();
+        pairs.push({ machine: this.toMachineResponse(existing), vm });
+
+        logger.info('[MachineManager] Reused existing machine for push by IP', {
+          machineId: existing._id.toString(),
+          owner: existing.adminId.toString(),
+          ipAddress: vm.ipAddress,
+        });
+        continue;
+      }
+
+      const machine = await this.addMachine(
+        { name: vm.name, ipAddress: vm.ipAddress, os: vm.os },
+        adminId
+      );
+      pairs.push({ machine, vm });
+    }
+
+    if (pairs.length > 0) {
+      this.startPushSession(pairs, adminId, sessionId, installRackoApp);
+    }
+
+    return { machines: pairs.map((p) => p.machine), alreadyOnline };
+  }
+
+  /**
+   * Registers the push session and fires the WinRM/SSH pushes in the background.
+   *
+   * Deliberately not awaited: a 30s WinRM timeout times N machines would blow the
+   * gateway's request budget, so the caller responds as soon as the machine rows
+   * exist and every result arrives on the session's SSE stream instead.
+   */
+  private startPushSession(
+    pairs: Array<{ machine: MachineResponse; vm: PushVmInput }>,
+    adminId: mongoose.Types.ObjectId,
+    sessionId: string,
+    installRackoApp: boolean
+  ): void {
+    // Lets the agent's WS connection emit agent_connected for this session.
     pushSessionRegistry.set(sessionId, {
-      machineIds: new Set(machines.map((m) => m._id)),
+      machineIds: new Set(pairs.map((p) => p.machine._id)),
       adminId: adminId.toString(),
       installRackoApp,
     });
@@ -749,55 +908,64 @@ class MachineManagerService {
       sessionId,
       adminId: adminId.toString(),
       installRackoApp,
-      machines: machines.map((m, i) => ({
-        machineId:   m._id,
-        machineName: m.name,
-        ipAddress:   vms[i].ipAddress,
+      machines: pairs.map(({ machine, vm }) => ({
+        machineId: machine._id,
+        machineName: machine.name,
+        ipAddress: vm.ipAddress,
         agentConnected: false,
       })),
     }).catch((err) => {
       logger.warn('[MachineManager] Failed to persist push session to DB (non-fatal)', { sessionId, err });
     });
 
-    // Fire WinRM/SSH pushes in the background — do NOT await.
-    // The HTTP response is returned immediately after machine records are created.
-    // Push results are delivered to the frontend via the SSE stream as each push completes.
-    // This prevents gateway timeouts on large batches (30s WinRM timeout × N machines).
     void (async () => {
+      const { vmPushService } = await import('./vm-push.service');
+      const { emitPushEvent } = await import('./push.events');
       let completedCount = 0;
-      const totalCount = machines.length;
+      const totalCount = pairs.length;
+
       await Promise.all(
-        machines.map((machine, i) =>
-          vmPushService.pushAgent({
-            machineId: machine._id,
-            ipAddress: vms[i].ipAddress,
-            os: vms[i].os,
-            username: vms[i].username,
-            password: vms[i].password,
-            accountToken: machine.accountToken,
-          }).then((result) => {
-            emitPushEvent(sessionId, {
-              type: 'push_result',
+        pairs.map(({ machine, vm }) =>
+          vmPushService
+            .pushAgent({
               machineId: machine._id,
-              success: result.success,
-              error: result.error,
-            });
-            // Persist push_result for page-refresh recovery
-            void PushSessionModel.updateOne(
-              { sessionId, 'machines.machineId': machine._id },
-              { $set: { 'machines.$.pushSuccess': result.success, 'machines.$.pushError': result.error ?? null } }
-            ).catch(() => { /* non-fatal */ });
-            completedCount++;
-            if (completedCount === totalCount) {
-              logger.info('[MachineManager] All push attempts completed', { sessionId, total: totalCount });
-            }
-            return result;
-          })
+              ipAddress: vm.ipAddress,
+              os: vm.os,
+              username: vm.username,
+              password: vm.password,
+              accountToken: machine.accountToken,
+            })
+            .then((result) => {
+              emitPushEvent(sessionId, {
+                type: 'push_result',
+                machineId: machine._id,
+                success: result.success,
+                error: result.error,
+              });
+              // Persist push_result for page-refresh recovery
+              void PushSessionModel.updateOne(
+                { sessionId, 'machines.machineId': machine._id },
+                {
+                  $set: {
+                    'machines.$.pushSuccess': result.success,
+                    'machines.$.pushError': result.error ?? null,
+                  },
+                }
+              ).catch(() => {
+                /* non-fatal */
+              });
+              completedCount++;
+              if (completedCount === totalCount) {
+                logger.info('[MachineManager] All push attempts completed', {
+                  sessionId,
+                  total: totalCount,
+                });
+              }
+              return result;
+            })
         )
       );
     })();
-
-    return { machines, pushResults: [] };
   }
 
   removePushSession(sessionId: string): void {
@@ -928,7 +1096,6 @@ class MachineManagerService {
     adminId: mongoose.Types.ObjectId,
     sessionId: string
   ): Promise<{ accepted: string[]; offline: string[] }> {
-    const { wsManager } = await import('./websocket/wsManager');
     const accepted: string[] = [];
     const offline: string[] = [];
 
@@ -936,29 +1103,78 @@ class MachineManagerService {
       machineIds.map(async (machineId) => {
         const id = new mongoose.Types.ObjectId(machineId);
         const doc = await this.findOwnedMachine(id, adminId);
-
-        if (!doc.agentId || !wsManager.isConnected(doc.agentId)) {
-          offline.push(machineId);
-          logger.warn('[MachineManager] Reset skipped — agent offline', { machineId, agentId: doc.agentId });
-          return;
-        }
-
-        // Send reset command — agent runs script in background goroutine
-        wsManager.sendReset(doc.agentId, sessionId);
-        accepted.push(machineId);
-
-        // Clear job history so machine appears fresh after reset
-        await JobModel.deleteMany({ machineId: new mongoose.Types.ObjectId(machineId) });
-
-        logger.info('[MachineManager] Reset initiated', {
-          machineId,
-          agentId: doc.agentId,
-          sessionId,
-        });
+        if (await this.dispatchReset(doc, sessionId)) accepted.push(machineId);
+        else offline.push(machineId);
       })
     );
 
     return { accepted, offline };
+  }
+
+  /**
+   * Reset by IP address, without the per-admin ownership check.
+   *
+   * The super-admin VM inventory keys everything on IP and spans every admin's
+   * machines, so it cannot go through resetMachines(). IPs with no agent
+   * installed come back as `notManaged` rather than failing the batch.
+   */
+  async resetMachinesByIp(
+    ipAddresses: string[],
+    sessionId: string
+  ): Promise<{
+    accepted: Array<{ ipAddress: string; machineId: string; machineName: string }>;
+    offline: Array<{ ipAddress: string; machineId: string; machineName: string }>;
+    notManaged: string[];
+  }> {
+    const ips = [...new Set(ipAddresses)];
+    const machines = await MachineModel.find({ ipAddress: { $in: ips }, deleted: false });
+
+    const accepted: Array<{ ipAddress: string; machineId: string; machineName: string }> = [];
+    const offline: Array<{ ipAddress: string; machineId: string; machineName: string }> = [];
+
+    await Promise.all(
+      machines.map(async (doc) => {
+        const entry = {
+          ipAddress: doc.ipAddress,
+          machineId: doc._id.toString(),
+          machineName: doc.name,
+        };
+        if (await this.dispatchReset(doc, sessionId)) accepted.push(entry);
+        else offline.push(entry);
+      })
+    );
+
+    const managed = new Set(machines.map((m) => m.ipAddress));
+    return { accepted, offline, notManaged: ips.filter((ip) => !managed.has(ip)) };
+  }
+
+  /**
+   * Sends the reset command to one machine's agent and clears its job history so
+   * the machine reads as fresh afterwards. Returns false when the agent is not
+   * connected, in which case nothing was sent.
+   */
+  private async dispatchReset(doc: IMachine, sessionId: string): Promise<boolean> {
+    const { wsManager } = await import('./websocket/wsManager');
+    const machineId = doc._id.toString();
+
+    if (!doc.agentId || !wsManager.isConnected(doc.agentId)) {
+      logger.warn('[MachineManager] Reset skipped — agent offline', {
+        machineId,
+        agentId: doc.agentId,
+      });
+      return false;
+    }
+
+    // Agent runs the script in a background goroutine and reports back over SSE.
+    wsManager.sendReset(doc.agentId, sessionId);
+    await JobModel.deleteMany({ machineId: doc._id });
+
+    logger.info('[MachineManager] Reset initiated', {
+      machineId,
+      agentId: doc.agentId,
+      sessionId,
+    });
+    return true;
   }
 
   removeResetSession(sessionId: string): void {

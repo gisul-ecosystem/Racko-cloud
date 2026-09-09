@@ -4,7 +4,10 @@ import { ServerCredentialModel } from '../../models/serverCredential.model';
 import {
   CredentialAssignmentModel,
   type AssigneeType,
+  type ICredentialAssignment,
 } from '../../models/credentialAssignment.model';
+import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
+import { ExternalVmUserAssignmentModel } from '../../models/externalVmUserAssignment.model';
 import { ProjectModel, type IProject } from '../../models/project.model';
 import { Tenant } from '../../models/tenant.model';
 import { TenantUser } from '../../models/tenantUser.model';
@@ -14,7 +17,24 @@ import { CatalogVmInstanceModel } from '../../models/catalogVmInstance.model';
 import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
 import { VM } from '../vm/vm.model';
 import { NotFoundError, ValidationError } from '../../utils/errors';
-import type { InventorySource } from './vmInventory.types';
+import { inventoryExternalVmMirrorService } from './inventoryExternalVmMirror.service';
+import type {
+  BulkUnassignResult,
+  InventorySource,
+  UnassignResult,
+} from './vmInventory.types';
+
+/** Just what the release path reads, so lean and hydrated docs both fit. */
+type ReleasableAssignment = Pick<
+  ICredentialAssignment,
+  | '_id'
+  | 'credentialId'
+  | 'serverId'
+  | 'assigneeType'
+  | 'assigneeId'
+  | 'adminId'
+  | 'tenantId'
+>;
 
 interface ResolvedAssignee {
   assigneeType: AssigneeType;
@@ -148,6 +168,7 @@ class VmInventoryAssignmentService {
       existing.projectId = new mongoose.Types.ObjectId(input.projectId);
       existing.assignedBy = input.assignedBy;
       await existing.save();
+      await inventoryExternalVmMirrorService.syncAssignments([existing._id]);
       return { assignmentId: existing._id.toString() };
     }
 
@@ -162,15 +183,179 @@ class VmInventoryAssignmentService {
       assignedBy: input.assignedBy,
     });
 
+    // Publish it to the collections the assignee's portal reads, otherwise the
+    // grant exists but no VM shows up for them.
+    await inventoryExternalVmMirrorService.syncAssignments([created._id]);
+
     return { assignmentId: created._id.toString() };
   }
 
-  async revoke(assignmentId: string): Promise<void> {
+  /**
+   * Release one login: the grant goes, portal access goes with it, the lab user
+   * created for it is removed, and the VM returns to the free pool once it holds
+   * no other login.
+   */
+  async unassign(assignmentId: string): Promise<UnassignResult> {
     if (!mongoose.Types.ObjectId.isValid(assignmentId)) {
       throw new ValidationError('Invalid assignmentId.');
     }
-    const res = await CredentialAssignmentModel.deleteOne({ _id: assignmentId });
-    if (res.deletedCount === 0) throw new NotFoundError('Assignment not found.');
+    const assignment = await CredentialAssignmentModel.findById(assignmentId).lean();
+    if (!assignment) throw new NotFoundError('Assignment not found.');
+
+    const outcome = await this.releaseAssignment(assignment);
+    const freed = await this.freeServerIfIdle(assignment.serverId);
+
+    return {
+      userDeleted: outcome.userDeleted,
+      serverFreed: freed.freed,
+      remainingLogins: freed.remaining,
+      owner: freed.owner,
+    };
+  }
+
+  /**
+   * Release every login on the selected VMs and return them to the free pool.
+   *
+   * Also frees VMs that are owned but hold no grants, which is the state left
+   * behind by revokes made before unassign cleared ownership.
+   */
+  async bulkUnassignServers(serverIds: string[]): Promise<BulkUnassignResult> {
+    if (serverIds.length === 0) throw new ValidationError('No servers selected.');
+    if (serverIds.length > 500) {
+      throw new ValidationError('Bulk unassign is capped at 500 servers per request.');
+    }
+
+    const ids: mongoose.Types.ObjectId[] = [];
+    for (const id of serverIds) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new ValidationError(`Invalid serverId "${id}".`);
+      }
+      ids.push(new mongoose.Types.ObjectId(id));
+    }
+
+    const assignments = await CredentialAssignmentModel.find({
+      serverId: { $in: ids },
+      status: 'active',
+    }).lean();
+
+    let loginsUnassigned = 0;
+    let usersDeleted = 0;
+    for (const assignment of assignments) {
+      const outcome = await this.releaseAssignment(assignment);
+      loginsUnassigned += 1;
+      if (outcome.userDeleted) usersDeleted += 1;
+    }
+
+    let serversFreed = 0;
+    for (const serverId of ids) {
+      const freed = await this.freeServerIfIdle(serverId);
+      if (freed.freed) serversFreed += 1;
+    }
+
+    return {
+      servers: ids.length,
+      loginsUnassigned,
+      usersDeleted,
+      serversFreed,
+    };
+  }
+
+  /**
+   * Delete one grant, withdraw its portal access, and remove the assignee once
+   * they hold nothing else.
+   */
+  private async releaseAssignment(
+    assignment: ReleasableAssignment
+  ): Promise<{ userDeleted: boolean }> {
+    await CredentialAssignmentModel.deleteOne({ _id: assignment._id });
+    // Portal access must not outlive the grant.
+    await inventoryExternalVmMirrorService.dropAssignment(assignment);
+
+    return { userDeleted: await this.deleteAssigneeIfIdle(assignment) };
+  }
+
+  /**
+   * Remove a lab user once nothing is left pointing at them.
+   *
+   * The login is what gets released here, never the VM — that only returns to
+   * the free pool. A user is removed only when they hold no other inventory
+   * grant and no VM or elastic server from any other flow, so an account still
+   * in use anywhere survives. Console operators and admins are never touched.
+   */
+  private async deleteAssigneeIfIdle(assignment: ReleasableAssignment): Promise<boolean> {
+    const otherGrants = await CredentialAssignmentModel.countDocuments({
+      assigneeId: assignment.assigneeId,
+      status: 'active',
+    });
+    if (otherGrants > 0) return false;
+
+    if (assignment.assigneeType === 'tenant_user') {
+      const user = await TenantUser.findById(assignment.assigneeId)
+        .select('_id role isConsoleOperator')
+        .lean();
+      if (!user || user.role !== 'tenant_user' || user.isConsoleOperator) return false;
+
+      const [vms, elastic] = await Promise.all([
+        VM.countDocuments({ assignedTenantUserId: user._id }),
+        ExternalVmTenantAssignmentModel.countDocuments({ tenantUserId: user._id }),
+      ]);
+      if (vms > 0 || elastic > 0) return false;
+
+      await TenantUser.deleteOne({ _id: user._id });
+      return true;
+    }
+
+    const user = await User.findById(assignment.assigneeId).select('_id role').lean();
+    if (!user || user.role !== 'user') return false;
+
+    const [vms, elastic] = await Promise.all([
+      VM.countDocuments({ assignedTo: user._id }),
+      ExternalVmUserAssignmentModel.countDocuments({ userId: user._id }),
+    ]);
+    if (vms > 0 || elastic > 0) return false;
+
+    await User.deleteOne({ _id: user._id });
+    return true;
+  }
+
+  /**
+   * Hand a server back to the free pool once its last login is released.
+   *
+   * A server still holding grants keeps its owner — releasing it would strand
+   * the people using it — so the caller is told what remains instead.
+   */
+  private async freeServerIfIdle(serverId: mongoose.Types.ObjectId): Promise<{
+    freed: boolean;
+    remaining: number;
+    owner: 'admin' | 'tenant' | 'free' | null;
+  }> {
+    const server = await ServerModel.findById(serverId)
+      .select('adminId tenantId projectId')
+      .lean();
+    if (!server) return { freed: false, remaining: 0, owner: null };
+
+    const remaining = await CredentialAssignmentModel.countDocuments({
+      serverId,
+      status: 'active',
+    });
+    if (remaining > 0) {
+      return {
+        freed: false,
+        remaining,
+        owner: server.adminId ? 'admin' : server.tenantId ? 'tenant' : 'free',
+      };
+    }
+
+    if (!server.adminId && !server.tenantId && !server.projectId) {
+      return { freed: false, remaining: 0, owner: 'free' };
+    }
+
+    // The project link goes too: it only ever described the owner's engagement.
+    await ServerModel.updateOne(
+      { _id: serverId },
+      { $set: { adminId: null, tenantId: null, projectId: null } }
+    );
+    return { freed: true, remaining: 0, owner: 'free' };
   }
 
   /** Temporarily bypass the client date window for one assignment. */
@@ -196,6 +381,66 @@ class VmInventoryAssignmentService {
       }
     );
     if (res.matchedCount === 0) throw new NotFoundError('Assignment not found.');
+
+    // The portal gates on its own copy of the override, so it has to move too.
+    await inventoryExternalVmMirrorService.syncAssignments([
+      new mongoose.Types.ObjectId(assignmentId),
+    ]);
+  }
+
+  /**
+   * Grant or clear the override on every active assignment of the selected
+   * servers, for when a client engagement is extended before the project dates
+   * catch up.
+   *
+   * Servers holding no assignments are counted and reported rather than failing
+   * the batch, since a mixed selection is the normal case.
+   */
+  async bulkSetOverride(input: {
+    serverIds: string[];
+    accessOverride: boolean;
+    accessOverrideUntil?: Date | null;
+  }): Promise<{ updated: number; servers: number; serversWithoutAssignments: number }> {
+    if (input.serverIds.length === 0) throw new ValidationError('No servers selected.');
+    if (input.serverIds.length > 500) {
+      throw new ValidationError('Bulk override is capped at 500 servers per request.');
+    }
+    if (
+      input.accessOverride &&
+      input.accessOverrideUntil &&
+      input.accessOverrideUntil.getTime() <= Date.now()
+    ) {
+      throw new ValidationError('accessOverrideUntil must be in the future.');
+    }
+
+    const ids: mongoose.Types.ObjectId[] = [];
+    for (const id of input.serverIds) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new ValidationError(`Invalid serverId "${id}".`);
+      }
+      ids.push(new mongoose.Types.ObjectId(id));
+    }
+
+    const filter = { serverId: { $in: ids }, status: 'active' as const };
+    const assignments = await CredentialAssignmentModel.find(filter).select('serverId').lean();
+
+    if (assignments.length > 0) {
+      await CredentialAssignmentModel.updateMany(filter, {
+        $set: {
+          accessOverride: input.accessOverride,
+          // Clearing the override drops any expiry with it.
+          accessOverrideUntil: input.accessOverride ? input.accessOverrideUntil ?? null : null,
+        },
+      });
+      await inventoryExternalVmMirrorService.syncAssignments(assignments.map((a) => a._id));
+    }
+
+    const covered = new Set(assignments.map((a) => a.serverId.toString()));
+    return {
+      updated: assignments.length,
+      servers: covered.size,
+      serversWithoutAssignments: ids.length - covered.size,
+    };
   }
 
   /**
@@ -331,21 +576,21 @@ class VmInventoryAssignmentService {
     throw new ValidationError('Provide adminId or tenantId.');
   }
 
-  /** Projects that can accept an assignment — active, and with both dates set. */
+  /**
+   * All active projects for the owner. Assignment needs both client dates, but
+   * undated projects are still returned (with null dates) so the caller can show
+   * them as unavailable rather than rendering an unexplained empty list.
+   */
   async listAssignableProjects(params: { adminId?: string; tenantId?: string }): Promise<{
     projects: Array<{
       id: string;
       name: string;
       clientName: string;
-      startDate: string;
-      endDate: string;
+      startDate: string | null;
+      endDate: string | null;
     }>;
   }> {
-    const filter: Record<string, unknown> = {
-      status: 'active',
-      startDate: { $ne: null },
-      endDate: { $ne: null },
-    };
+    const filter: Record<string, unknown> = { status: 'active' };
 
     if (params.tenantId) filter['tenantId'] = params.tenantId;
     else if (params.adminId) filter['orgId'] = params.adminId;
@@ -357,15 +602,13 @@ class VmInventoryAssignmentService {
       .lean();
 
     return {
-      projects: projects
-        .filter((p) => p.startDate && p.endDate)
-        .map((p) => ({
-          id: p._id.toString(),
-          name: p.name,
-          clientName: p.clientName,
-          startDate: p.startDate!.toISOString(),
-          endDate: p.endDate!.toISOString(),
-        })),
+      projects: projects.map((p) => ({
+        id: p._id.toString(),
+        name: p.name,
+        clientName: p.clientName,
+        startDate: p.startDate ? p.startDate.toISOString() : null,
+        endDate: p.endDate ? p.endDate.toISOString() : null,
+      })),
     };
   }
 }

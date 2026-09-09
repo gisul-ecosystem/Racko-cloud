@@ -1,5 +1,6 @@
 import { apiRequest } from './apiClient';
 import type { AccessScheduleInput } from './accessSchedule';
+import type { IJob } from './machineManagerApi';
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -94,8 +95,30 @@ export interface ListInventoryQuery {
   projectId?: string;
   adminId?: string;
   tenantId?: string;
+  clientName?: string;
+  /** A user holding an assignment on one of the row's logins. */
+  assigneeId?: string;
+  vmSpec?: string;
   assigned?: 'assigned' | 'unassigned';
   locked?: boolean;
+}
+
+export interface InventoryFilterOptions {
+  owners: Array<{ type: 'admin' | 'tenant'; id: string; label: string }>;
+  projects: Array<{ id: string; name: string; clientName: string }>;
+  clients: string[];
+  assignees: Array<{ id: string; label: string }>;
+  vmSpecs: string[];
+}
+
+/** Only lists values present in the inventory, so no filter yields nothing. */
+export async function fetchInventoryFilterOptions(
+  signal?: AbortSignal
+): Promise<InventoryFilterOptions> {
+  const res = await apiRequest<ApiEnvelope<InventoryFilterOptions>>(`${BASE}/filter-options`, {
+    ...(signal ? { signal } : {}),
+  });
+  return res.data;
 }
 
 export async function fetchVmInventory(
@@ -189,6 +212,143 @@ export async function bulkDeleteInventoryServers(
   return res.data;
 }
 
+/** One VM the reset reached, keyed by IP and by its Machine Manager record. */
+export interface ResetTarget {
+  ipAddress: string;
+  machineId: string;
+  machineName: string;
+}
+
+export interface BulkResetResult {
+  /** Session to follow on the machine-manager reset stream. */
+  sessionId: string;
+  accepted: ResetTarget[];
+  offline: ResetTarget[];
+  /** IPs with no Racko agent installed, so nothing to reset. */
+  notManaged: string[];
+}
+
+export async function bulkResetInventoryServers(serverIds: string[]): Promise<BulkResetResult> {
+  const res = await apiRequest<ApiEnvelope<BulkResetResult>>(`${BASE}/servers/bulk-reset`, {
+    method: 'POST',
+    body: JSON.stringify({ serverIds }),
+  });
+  return res.data;
+}
+
+/** One VM an agent push was started on. */
+export interface PushAgentTarget {
+  ipAddress: string;
+  machineId: string;
+  machineName: string;
+  os: string;
+  /** The inventory login the push authenticated with. */
+  username: string;
+}
+
+export interface PushAgentResult {
+  /** Session to follow on the machine-manager push stream. */
+  sessionId: string;
+  targets: PushAgentTarget[];
+  /** VMs whose agent is already installed and connected, so nothing was pushed. */
+  alreadyOnline: Array<{ ipAddress: string; machineId: string; machineName: string }>;
+  /** VMs that could not be attempted, with the reason. */
+  skipped: Array<{ ipAddress: string; reason: string }>;
+}
+
+/**
+ * Installs the Racko agent on the selected VMs over WinRM or SSH, using the
+ * login stored in the inventory. Returns as soon as the pushes are dispatched;
+ * results arrive on the push stream.
+ */
+export async function pushInventoryAgent(
+  serverIds: string[],
+  installRackoApp: boolean
+): Promise<PushAgentResult> {
+  const res = await apiRequest<ApiEnvelope<PushAgentResult>>(`${BASE}/push-agent`, {
+    method: 'POST',
+    body: JSON.stringify({ serverIds, installRackoApp }),
+  });
+  return res.data;
+}
+
+export interface InventoryNotificationSettings {
+  /** Alerted before a provider contract lapses. Empty means nobody is told. */
+  providerExpiryRecipients: string[];
+  /** How many days ahead the alert goes out, from server config. */
+  warningDays: number;
+}
+
+export async function fetchInventoryNotificationSettings(): Promise<InventoryNotificationSettings> {
+  const res = await apiRequest<ApiEnvelope<InventoryNotificationSettings>>(
+    `${BASE}/notification-settings`
+  );
+  return res.data;
+}
+
+export async function updateInventoryNotificationSettings(
+  providerExpiryRecipients: string[]
+): Promise<InventoryNotificationSettings> {
+  const res = await apiRequest<ApiEnvelope<InventoryNotificationSettings>>(
+    `${BASE}/notification-settings`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ providerExpiryRecipients }),
+    }
+  );
+  return res.data;
+}
+
+/** One VM the install reached, with its live agent connection state. */
+export interface InstallTarget {
+  machineId: string;
+  ipAddress: string;
+  machineName: string;
+  online: boolean;
+}
+
+export interface InstallSoftwareResult {
+  /** One Machine Manager job per VM per software item, streamable by job id. */
+  jobs: IJob[];
+  targets: InstallTarget[];
+  /** IPs with no Racko agent installed, so nothing to install on. */
+  notManaged: string[];
+}
+
+/**
+ * Queues Machine Manager install jobs on the VMs behind the selected logins.
+ * Logins that share an IP collapse to a single machine server-side.
+ */
+export async function installInventorySoftware(
+  credentialIds: string[],
+  softwareIds: string[]
+): Promise<InstallSoftwareResult> {
+  const res = await apiRequest<ApiEnvelope<InstallSoftwareResult>>(`${BASE}/install-software`, {
+    method: 'POST',
+    body: JSON.stringify({ credentialIds, softwareIds }),
+  });
+  return res.data;
+}
+
+export interface BulkOverrideResult {
+  /** Active assignments touched across the selected servers. */
+  updated: number;
+  servers: number;
+  serversWithoutAssignments: number;
+}
+
+export async function bulkSetInventoryOverride(body: {
+  serverIds: string[];
+  accessOverride: boolean;
+  accessOverrideUntil?: string | null;
+}): Promise<BulkOverrideResult> {
+  const res = await apiRequest<ApiEnvelope<BulkOverrideResult>>(`${BASE}/servers/bulk-override`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return res.data;
+}
+
 export async function assignCredential(body: {
   credentialId: string;
   assigneeType: AssigneeType;
@@ -202,10 +362,45 @@ export async function assignCredential(body: {
   return res.data;
 }
 
-export async function revokeAssignment(assignmentId: string): Promise<void> {
-  await apiRequest<ApiEnvelope<void>>(`${BASE}/assignments/${encodeURIComponent(assignmentId)}`, {
-    method: 'DELETE',
+/** What releasing one login actually changed. */
+export interface UnassignResult {
+  /** True when the lab user created for this login was removed with it. */
+  userDeleted: boolean;
+  /** True when the VM went back to the free pool. */
+  serverFreed: boolean;
+  /** Logins still assigned on that VM, which is why it kept its owner. */
+  remainingLogins: number;
+  owner: 'admin' | 'tenant' | 'free' | null;
+}
+
+/**
+ * Releases one login: drops the grant and its portal access, removes the lab
+ * user created for it, and frees the VM once no other login is assigned.
+ */
+export async function unassignCredential(assignmentId: string): Promise<UnassignResult> {
+  const res = await apiRequest<ApiEnvelope<UnassignResult>>(
+    `${BASE}/assignments/${encodeURIComponent(assignmentId)}`,
+    { method: 'DELETE' }
+  );
+  return res.data;
+}
+
+export interface BulkUnassignResult {
+  servers: number;
+  loginsUnassigned: number;
+  usersDeleted: number;
+  serversFreed: number;
+}
+
+/** Releases every login on the selected VMs and returns them to the free pool. */
+export async function bulkUnassignInventoryServers(
+  serverIds: string[]
+): Promise<BulkUnassignResult> {
+  const res = await apiRequest<ApiEnvelope<BulkUnassignResult>>(`${BASE}/servers/bulk-unassign`, {
+    method: 'POST',
+    body: JSON.stringify({ serverIds }),
   });
+  return res.data;
 }
 
 export async function setAssignmentOverride(
@@ -248,6 +443,8 @@ export interface BulkAssignResult {
   summary: { total: number; assigned: number; ready: number; failed: number };
   projectName: string;
   dryRun: boolean;
+  /** Set when the users' portal copy differs from what was requested. */
+  note?: string;
 }
 
 export interface BulkAssignBody {
@@ -255,11 +452,54 @@ export interface BulkAssignBody {
   targetType: 'admin' | 'tenant';
   targetId: string;
   projectId: string;
-  emailPrefix: string;
-  passwordMode: 'auto' | 'shared';
+  /** Base address for the numbered series. Omit when `emails` is supplied. */
+  emailPrefix?: string;
+  /** Exact addresses, one per credential, instead of a generated series. */
+  emails?: string[];
+  passwordMode: 'auto' | 'shared' | 'per_row';
   sharedPassword?: string;
+  /** One password per credential, from an uploaded file. Only for `per_row`. */
+  passwords?: string[];
   accessSchedule?: AccessScheduleInput | null;
   dryRun: boolean;
+}
+
+/** One row of an uploaded assignment file, matched against the inventory. */
+export interface ResolvedLoginRow {
+  index: number;
+  ipAddress: string;
+  username: string;
+  /** Null when the IP or username is not in the inventory. */
+  credentialId: string | null;
+  serverId: string | null;
+  assigned: boolean;
+  /** False means the file's VM password differs from the stored one. */
+  vmPasswordMatches: boolean | null;
+  error: string | null;
+}
+
+export interface ResolveLoginsResult {
+  rows: ResolvedLoginRow[];
+  summary: {
+    total: number;
+    resolved: number;
+    unresolved: number;
+    passwordMismatches: number;
+  };
+}
+
+/**
+ * Matches uploaded IP + username pairs to inventory logins. Resolving on the
+ * server keeps the upload independent of the page's first-200 login list.
+ */
+export async function resolveInventoryLogins(
+  rows: Array<{ ipAddress: string; username: string; vmPassword?: string | null }>
+): Promise<ResolveLoginsResult> {
+  const res = await apiRequest<ApiEnvelope<ResolveLoginsResult>>(`${BASE}/resolve-logins`, {
+    method: 'POST',
+    body: JSON.stringify({ rows }),
+  });
+  return res.data;
 }
 
 export async function bulkAssignInventory(body: BulkAssignBody): Promise<BulkAssignResult> {
@@ -304,8 +544,9 @@ export interface InventoryProjectOption {
   id: string;
   name: string;
   clientName: string;
-  startDate: string;
-  endDate: string;
+  /** Null when the project has no client dates set; it cannot be assigned yet. */
+  startDate: string | null;
+  endDate: string | null;
 }
 
 export async function fetchInventoryProjects(params: {

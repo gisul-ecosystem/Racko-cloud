@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { config } from '../../config';
 import { ServerModel } from '../../models/server.model';
 import { ServerCredentialModel } from '../../models/serverCredential.model';
 import { CredentialAssignmentModel } from '../../models/credentialAssignment.model';
@@ -6,13 +7,22 @@ import { ProjectModel } from '../../models/project.model';
 import { Tenant } from '../../models/tenant.model';
 import { TenantUser } from '../../models/tenantUser.model';
 import { User } from '../../models/user.model';
+import { CatalogVmModel } from '../../models/catalogVm.model';
+import { CatalogVmInstanceModel } from '../../models/catalogVmInstance.model';
+import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
+import { getVmInventorySettings } from '../../models/vmInventorySettings.model';
+import { VM } from '../vm/vm.model';
 import { decrypt, encrypt } from '../../utils/crypto';
 import { NotFoundError, ValidationError } from '../../utils/errors';
+import { inventoryExternalVmMirrorService } from './inventoryExternalVmMirror.service';
+import type { PushVmInput } from '../machine-manager/machine-manager.service';
+import type { JobResponse } from '../machine-manager/machine-manager.types';
 import type {
   BulkDeleteResult,
   BulkDeleteSkip,
   InventoryAssignmentView,
   InventoryCredentialView,
+  InventoryNotificationSettings,
   InventorySource,
   VmInventoryListResult,
   VmInventoryRow,
@@ -48,6 +58,13 @@ interface NormalizedEntry {
   srcUsername: string | null;
   srcHasPassword: boolean;
   hasAssignment: boolean;
+  /**
+   * Projects and assignees taken from the credential assignments, which is
+   * where they live for inventory VMs — the server document keeps no projectId.
+   * Empty for the read-only sources, which carry no assignments.
+   */
+  asgProjectIds: mongoose.Types.ObjectId[];
+  asgAssigneeIds: mongoose.Types.ObjectId[];
 }
 
 interface GroupedRow {
@@ -64,8 +81,21 @@ export interface ListInventoryParams {
   projectId?: string;
   adminId?: string;
   tenantId?: string;
+  clientName?: string;
+  assigneeId?: string;
+  vmSpec?: string;
   assigned?: 'assigned' | 'unassigned';
   locked?: boolean;
+}
+
+/** Dropdown choices for the inventory filter bar. */
+export interface InventoryFilterOptions {
+  owners: Array<{ type: 'admin' | 'tenant'; id: string; label: string }>;
+  projects: Array<{ id: string; name: string; clientName: string }>;
+  clients: string[];
+  assignees: Array<{ id: string; label: string }>;
+  /** Only inventory-owned servers record a spec, so this comes from them alone. */
+  vmSpecs: string[];
 }
 
 /**
@@ -82,7 +112,53 @@ const NULL_FIELDS = {
   providerEndDate: { $literal: null },
   inventoryLocked: { $literal: false },
   hasAssignment: { $literal: false },
+  asgProjectIds: { $literal: [] },
+  asgAssigneeIds: { $literal: [] },
 };
+
+/**
+ * Machines the read-only sources still consider real.
+ *
+ * A terminated or cancelled catalog VM keeps its document — and its IP — long
+ * after the box is gone, and those rows cannot be removed from the inventory
+ * because they belong to another subsystem. Excluding them here is the only way
+ * they stop occupying the list.
+ */
+const LIVE_CATALOG_STATUSES = ['ready_to_attach', 'active', 'suspended'];
+
+/** Platform VPS states that mean the machine is being torn down or already is. */
+const DEAD_VPS_STATUSES = ['deleted', 'deleting', 'delete_failed'];
+
+/** Distinct owners and projects of one source collection, for filter options. */
+const OWNER_GROUP: mongoose.PipelineStage.Group = {
+  $group: {
+    _id: null,
+    adminIds: { $addToSet: '$adminId' },
+    tenantIds: { $addToSet: '$tenantId' },
+    projectIds: { $addToSet: '$projectId' },
+  },
+};
+
+interface OwnerFacet {
+  adminIds?: Array<mongoose.Types.ObjectId | null>;
+  tenantIds?: Array<mongoose.Types.ObjectId | null>;
+  projectIds?: Array<mongoose.Types.ObjectId | null>;
+  platformUserIds?: Array<mongoose.Types.ObjectId | null>;
+  tenantUserIds?: Array<mongoose.Types.ObjectId | null>;
+}
+
+/** Unique, non-null ids across several $addToSet results. */
+function collectIds(
+  ...sets: Array<Array<mongoose.Types.ObjectId | null> | undefined>
+): mongoose.Types.ObjectId[] {
+  const out = new Map<string, mongoose.Types.ObjectId>();
+  for (const set of sets) {
+    for (const id of set ?? []) {
+      if (id) out.set(id.toString(), id);
+    }
+  }
+  return [...out.values()];
+}
 
 class VmInventoryService {
   /**
@@ -112,7 +188,7 @@ class VmInventoryService {
           let: { sid: '$_id' },
           pipeline: [
             { $match: { $expr: { $eq: ['$serverId', '$$sid'] }, status: 'active' } },
-            { $project: { _id: 1 } },
+            { $project: { _id: 1, projectId: 1, assigneeId: 1 } },
           ],
           as: 'asgs',
         },
@@ -136,6 +212,8 @@ class VmInventoryService {
           srcUsername: { $literal: null },
           srcHasPassword: { $literal: false },
           hasAssignment: { $gt: [{ $size: '$asgs' }, 0] },
+          asgProjectIds: '$asgs.projectId',
+          asgAssigneeIds: '$asgs.assigneeId',
           searchText: {
             $concatArrays: [
               [{ $toLower: { $ifNull: ['$ipAddress', ''] } }],
@@ -153,7 +231,7 @@ class VmInventoryService {
           pipeline: [
             {
               $match: {
-                status: { $ne: 'deleted' },
+                status: { $nin: DEAD_VPS_STATUSES },
                 deletedAt: null,
                 ipAddress: { $nin: [null, ''] },
               },
@@ -199,6 +277,10 @@ class VmInventoryService {
                 as: 'parent',
               },
             },
+            // The instance has no status of its own worth trusting, so whether
+            // the machine still exists is read off its catalog VM. An instance
+            // whose parent is gone is a leftover and drops out here too.
+            { $match: { 'parent.status': { $in: LIVE_CATALOG_STATUSES } } },
             {
               $project: {
                 _id: 0,
@@ -286,6 +368,16 @@ class VmInventoryService {
 
     // ── Filters applied to the merged row ────────────────────────────────
     const postMatch: Record<string, unknown> = {};
+    /** Conditions needing their own $or, which cannot share the match object. */
+    const and: Array<Record<string, unknown>> = [];
+
+    /** A project matches whether it sits on the source doc or an assignment. */
+    const matchProjects = (ids: mongoose.Types.ObjectId[]): Record<string, unknown> => ({
+      $or: [
+        { 'entries.projectId': { $in: ids } },
+        { 'entries.asgProjectIds': { $in: ids } },
+      ],
+    });
 
     if (params.search?.trim()) {
       postMatch['searchText'] = {
@@ -299,7 +391,24 @@ class VmInventoryService {
       if (!mongoose.Types.ObjectId.isValid(params.projectId)) {
         throw new ValidationError('Invalid projectId.');
       }
-      postMatch['entries.projectId'] = new mongoose.Types.ObjectId(params.projectId);
+      and.push(matchProjects([new mongoose.Types.ObjectId(params.projectId)]));
+    }
+    if (params.clientName) {
+      // Client name is a project field, so it resolves to that client's projects.
+      const clientProjects = await ProjectModel.find({ clientName: params.clientName })
+        .select('_id')
+        .lean();
+      if (clientProjects.length === 0) return { rows: [], total: 0, page, pageSize };
+      and.push(matchProjects(clientProjects.map((p) => p._id)));
+    }
+    if (params.vmSpec) {
+      postMatch['entries.vmSpec'] = params.vmSpec;
+    }
+    if (params.assigneeId) {
+      if (!mongoose.Types.ObjectId.isValid(params.assigneeId)) {
+        throw new ValidationError('Invalid assigneeId.');
+      }
+      postMatch['entries.asgAssigneeIds'] = new mongoose.Types.ObjectId(params.assigneeId);
     }
     if (params.adminId) {
       if (!mongoose.Types.ObjectId.isValid(params.adminId)) {
@@ -316,6 +425,7 @@ class VmInventoryService {
     if (params.assigned === 'assigned') postMatch['hasAssignment'] = true;
     if (params.assigned === 'unassigned') postMatch['hasAssignment'] = { $ne: true };
     if (params.locked !== undefined) postMatch['entries.inventoryLocked'] = params.locked;
+    if (and.length > 0) postMatch['$and'] = and;
 
     if (Object.keys(postMatch).length > 0) {
       pipeline.push({ $match: postMatch });
@@ -522,6 +632,145 @@ class VmInventoryService {
     });
   }
 
+  /**
+   * Choices for the filter dropdowns, gathered from the values actually present
+   * in the inventory so a filter can never select an empty result.
+   *
+   * Owners and projects are read from all four sources plus the assignments,
+   * because an inventory VM keeps its project on the assignment rather than on
+   * the server document.
+   */
+  async listFilterOptions(): Promise<InventoryFilterOptions> {
+    const [servers, vps, instances, dedicated, catalogParents, assignments, specs] =
+      await Promise.all([
+        ServerModel.aggregate<OwnerFacet>([OWNER_GROUP]),
+        VM.aggregate<OwnerFacet>([
+          { $match: { status: { $nin: DEAD_VPS_STATUSES }, deletedAt: null } },
+          OWNER_GROUP,
+        ]),
+        // Mirrors the list's catalog branch, or a terminated VM's owner would
+        // still be offered as a filter that then matches nothing.
+        CatalogVmInstanceModel.aggregate<OwnerFacet>([
+          {
+            $lookup: {
+              from: 'catalog_vms',
+              localField: 'catalogVmId',
+              foreignField: '_id',
+              as: 'parent',
+            },
+          },
+          { $match: { 'parent.status': { $in: LIVE_CATALOG_STATUSES } } },
+          OWNER_GROUP,
+        ]),
+        DedicatedServerRequestModel.aggregate<OwnerFacet>([
+          { $match: { status: { $in: ['active', 'suspended'] } } },
+          OWNER_GROUP,
+        ]),
+        // Instances carry no projectId; it lives on the parent catalog VM.
+        CatalogVmModel.aggregate<OwnerFacet>([
+          { $match: { status: { $in: LIVE_CATALOG_STATUSES } } },
+          { $group: { _id: null, projectIds: { $addToSet: '$projectId' } } },
+        ]),
+        CredentialAssignmentModel.aggregate<OwnerFacet>([
+          { $match: { status: 'active' } },
+          {
+            $group: {
+              _id: null,
+              adminIds: { $addToSet: '$adminId' },
+              tenantIds: { $addToSet: '$tenantId' },
+              projectIds: { $addToSet: '$projectId' },
+              platformUserIds: {
+                $addToSet: {
+                  $cond: [{ $eq: ['$assigneeType', 'platform_user'] }, '$assigneeId', null],
+                },
+              },
+              tenantUserIds: {
+                $addToSet: {
+                  $cond: [{ $eq: ['$assigneeType', 'tenant_user'] }, '$assigneeId', null],
+                },
+              },
+            },
+          },
+        ]),
+        ServerModel.distinct('vmSpec'),
+      ]);
+
+    const adminIds = collectIds(
+      servers[0]?.adminIds,
+      vps[0]?.adminIds,
+      instances[0]?.adminIds,
+      dedicated[0]?.adminIds,
+      assignments[0]?.adminIds
+    );
+    const tenantIds = collectIds(
+      servers[0]?.tenantIds,
+      vps[0]?.tenantIds,
+      instances[0]?.tenantIds,
+      dedicated[0]?.tenantIds,
+      assignments[0]?.tenantIds
+    );
+    const projectIds = collectIds(
+      servers[0]?.projectIds,
+      vps[0]?.projectIds,
+      dedicated[0]?.projectIds,
+      catalogParents[0]?.projectIds,
+      assignments[0]?.projectIds
+    );
+    const platformUserIds = collectIds(assignments[0]?.platformUserIds);
+    const tenantUserIds = collectIds(assignments[0]?.tenantUserIds);
+
+    const [admins, tenants, projects, platformUsers, tenantUsers] = await Promise.all([
+      adminIds.length ? User.find({ _id: { $in: adminIds } }).select('_id email').lean() : [],
+      tenantIds.length ? Tenant.find({ _id: { $in: tenantIds } }).select('_id name').lean() : [],
+      projectIds.length
+        ? ProjectModel.find({ _id: { $in: projectIds } })
+            .select('_id name clientName')
+            .lean()
+        : [],
+      platformUserIds.length
+        ? User.find({ _id: { $in: platformUserIds } })
+            .select('_id email username')
+            .lean()
+        : [],
+      tenantUserIds.length
+        ? TenantUser.find({ _id: { $in: tenantUserIds } })
+            .select('_id email username')
+            .lean()
+        : [],
+    ]);
+
+    const byLabel = (a: { label: string }, b: { label: string }): number =>
+      a.label.localeCompare(b.label);
+
+    return {
+      owners: [
+        ...admins.map((a) => ({
+          type: 'admin' as const,
+          id: a._id.toString(),
+          label: a.email ?? a._id.toString(),
+        })),
+        ...tenants.map((t) => ({
+          type: 'tenant' as const,
+          id: t._id.toString(),
+          label: t.name,
+        })),
+      ].sort(byLabel),
+      projects: projects
+        .map((p) => ({ id: p._id.toString(), name: p.name, clientName: p.clientName }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      clients: [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b)
+      ),
+      assignees: [...platformUsers, ...tenantUsers]
+        .map((u) => ({ id: u._id.toString(), label: u.email ?? u.username ?? u._id.toString() }))
+        .sort(byLabel),
+      // Numeric collation so "Memory (8GB)" sorts before "Memory (32GB)".
+      vmSpecs: (specs as Array<string | null>)
+        .filter((s): s is string => Boolean(s && s.trim()))
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    };
+  }
+
   /** Decrypt a single stored credential. Gated by vm_inventory.reveal_credentials. */
   async revealPassword(credentialId: string): Promise<{ username: string; password: string }> {
     if (!mongoose.Types.ObjectId.isValid(credentialId)) {
@@ -600,9 +849,13 @@ class VmInventoryService {
         throw new ValidationError(`Username "${body.username}" already exists on this IP.`);
       }
 
+      const previousUsername = cred.username;
       cred.username = body.username;
       if (body.password) cred.password = encrypt(body.password);
       await cred.save();
+      // Mirrors carry their own copy of the login, so an edit has to reach them
+      // or the assignee keeps connecting with the old credential.
+      await inventoryExternalVmMirrorService.syncCredential(cred._id, previousUsername);
       return { credentialId: cred._id.toString() };
     }
 
@@ -636,6 +889,217 @@ class VmInventoryService {
     if (res.matchedCount === 0) throw new NotFoundError('Server not found.');
   }
 
+  /**
+   * Reset the selected VMs through the Machine Manager agent.
+   *
+   * The inventory tracks machines by IP while the agent is registered per
+   * machine record, so the selection is resolved IP-first. A VM with no agent
+   * installed comes back as `notManaged` — there is nothing to reset on it.
+   */
+  async resetServers(serverIds: string[]): Promise<{
+    sessionId: string;
+    accepted: Array<{ ipAddress: string; machineId: string; machineName: string }>;
+    offline: Array<{ ipAddress: string; machineId: string; machineName: string }>;
+    notManaged: string[];
+  }> {
+    if (serverIds.length === 0) throw new ValidationError('No servers selected.');
+    if (serverIds.length > 100) {
+      throw new ValidationError('Reset is capped at 100 VMs per request.');
+    }
+
+    for (const id of serverIds) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new ValidationError(`Invalid serverId "${id}".`);
+      }
+    }
+
+    const servers = await ServerModel.find({ _id: { $in: serverIds } })
+      .select('ipAddress')
+      .lean();
+    if (servers.length === 0) throw new NotFoundError('None of those servers exist.');
+
+    const sessionId = `reset-${Date.now()}`;
+    const { machineManagerService } = await import('../machine-manager/machine-manager.service');
+    const result = await machineManagerService.resetMachinesByIp(
+      servers.map((s) => s.ipAddress),
+      sessionId
+    );
+
+    return { sessionId, ...result };
+  }
+
+  /**
+   * Install the Racko agent on the selected VMs over WinRM (Windows) or SSH.
+   *
+   * Unlike the Machine Manager's own push screen, nobody types credentials here:
+   * they come from the inventory's stored login and are decrypted for the single
+   * push, never returned to the browser. The login used is the VM's primary one,
+   * since a lab user's account may not be able to install a service.
+   *
+   * Push is what makes reset and software install possible, so a VM already
+   * running an agent is reported as such instead of being pushed again.
+   */
+  async pushAgent(
+    serverIds: string[],
+    adminId: mongoose.Types.ObjectId,
+    installRackoApp: boolean
+  ): Promise<{
+    sessionId: string;
+    targets: Array<{
+      ipAddress: string;
+      machineId: string;
+      machineName: string;
+      os: string;
+      /** The inventory login the push authenticated with. */
+      username: string;
+    }>;
+    alreadyOnline: Array<{ ipAddress: string; machineId: string; machineName: string }>;
+    /** VMs that could not be attempted, with the reason. */
+    skipped: Array<{ ipAddress: string; reason: string }>;
+  }> {
+    if (serverIds.length === 0) throw new ValidationError('No servers selected.');
+    if (serverIds.length > 50) {
+      throw new ValidationError('Agent push is capped at 50 VMs per request.');
+    }
+
+    for (const id of serverIds) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new ValidationError(`Invalid serverId "${id}".`);
+      }
+    }
+
+    const servers = await ServerModel.find({ _id: { $in: serverIds } })
+      .select('ipAddress vmType')
+      .lean();
+    if (servers.length === 0) throw new NotFoundError('None of those servers exist.');
+
+    const credentials = await ServerCredentialModel.find({
+      serverId: { $in: servers.map((s) => s._id) },
+      status: 'active',
+    })
+      .select('serverId username password isPrimary')
+      .lean();
+
+    const credByServer = new Map<string, (typeof credentials)[number]>();
+    for (const cred of credentials) {
+      const key = cred.serverId.toString();
+      const held = credByServer.get(key);
+      if (!held || (cred.isPrimary && !held.isPrimary)) credByServer.set(key, cred);
+    }
+
+    const skipped: Array<{ ipAddress: string; reason: string }> = [];
+    const vms: PushVmInput[] = [];
+    const usernameByIp = new Map<string, string>();
+
+    for (const server of servers) {
+      const cred = credByServer.get(server._id.toString());
+      if (!cred) {
+        skipped.push({
+          ipAddress: server.ipAddress,
+          reason: 'No active login stored. Add one in VM Inventory first.',
+        });
+        continue;
+      }
+
+      let password: string;
+      try {
+        password = decrypt(cred.password);
+      } catch {
+        skipped.push({
+          ipAddress: server.ipAddress,
+          reason: 'Stored password could not be decrypted. Re-enter it in VM Inventory.',
+        });
+        continue;
+      }
+
+      // The inventory records how a VM is reached, which is the only OS signal it
+      // has: RDP means Windows, SSH and VNC mean a Unix box.
+      vms.push({
+        name: server.ipAddress,
+        ipAddress: server.ipAddress,
+        os: server.vmType === 'rdp' ? 'windows' : 'linux',
+        username: cred.username,
+        password,
+      });
+      usernameByIp.set(server.ipAddress, cred.username);
+    }
+
+    if (vms.length === 0) {
+      throw new ValidationError(
+        'None of the selected VMs have a usable login, so there is nothing to push to.'
+      );
+    }
+
+    const sessionId = `push-${Date.now()}`;
+    const { machineManagerService } = await import('../machine-manager/machine-manager.service');
+    const result = await machineManagerService.pushAgentToVMsByIp(
+      vms,
+      adminId,
+      sessionId,
+      installRackoApp
+    );
+
+    return {
+      sessionId,
+      targets: result.machines.map((m) => ({
+        ipAddress: m.ipAddress,
+        machineId: m._id,
+        machineName: m.name,
+        os: m.os,
+        username: usernameByIp.get(m.ipAddress) ?? '',
+      })),
+      alreadyOnline: result.alreadyOnline,
+      skipped,
+    };
+  }
+
+  /**
+   * Queue Machine Manager install jobs on the VMs behind the selected logins.
+   *
+   * Selection in the assign flow is per login, and several logins can live on
+   * one VM, so the logins are collapsed to unique IPs before dispatch — the
+   * software is installed once per machine, not once per user. Jobs are owned
+   * by the initiating super admin so they show up in their Jobs & Status view.
+   */
+  async installSoftware(
+    credentialIds: string[],
+    softwareIds: string[],
+    adminId: mongoose.Types.ObjectId
+  ): Promise<{
+    jobs: JobResponse[];
+    targets: Array<{ machineId: string; ipAddress: string; machineName: string; online: boolean }>;
+    notManaged: string[];
+  }> {
+    if (credentialIds.length === 0) throw new ValidationError('No logins selected.');
+    if (softwareIds.length === 0) throw new ValidationError('No software selected.');
+
+    for (const id of [...credentialIds, ...softwareIds]) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new ValidationError(`Invalid id "${id}".`);
+      }
+    }
+
+    const credentials = await ServerCredentialModel.find({ _id: { $in: credentialIds } })
+      .select('serverId')
+      .lean();
+    if (credentials.length === 0) throw new NotFoundError('None of those logins exist.');
+
+    const serverIds = [...new Set(credentials.map((c) => c.serverId.toString()))];
+    const servers = await ServerModel.find({ _id: { $in: serverIds } })
+      .select('ipAddress')
+      .lean();
+    if (servers.length === 0) throw new NotFoundError('None of those servers exist.');
+
+    const { machineManagerService } = await import('../machine-manager/machine-manager.service');
+    const result = await machineManagerService.createJobsByIp(
+      servers.map((s) => s.ipAddress),
+      softwareIds,
+      adminId
+    );
+
+    return { jobs: result.jobs, targets: result.matched, notManaged: result.notManaged };
+  }
+
   /** Delete an inventory-owned server plus its credentials and assignments. */
   async deleteServer(serverId: string): Promise<void> {
     if (!mongoose.Types.ObjectId.isValid(serverId)) {
@@ -647,6 +1111,7 @@ class VmInventoryService {
       throw new ValidationError('Server is inventory-locked. Unlock it before deleting.');
     }
 
+    await inventoryExternalVmMirrorService.dropServersByIp([server.ipAddress]);
     await CredentialAssignmentModel.deleteMany({ serverId: server._id });
     await ServerCredentialModel.deleteMany({ serverId: server._id });
     await ServerModel.deleteOne({ _id: server._id });
@@ -703,12 +1168,45 @@ class VmInventoryService {
     }
 
     if (deletable.length > 0) {
+      const deletableIps = deletable
+        .map((id) => byId.get(id.toString())?.ipAddress)
+        .filter((ip): ip is string => Boolean(ip));
+      await inventoryExternalVmMirrorService.dropServersByIp(deletableIps);
       await CredentialAssignmentModel.deleteMany({ serverId: { $in: deletable } });
       await ServerCredentialModel.deleteMany({ serverId: { $in: deletable } });
       await ServerModel.deleteMany({ _id: { $in: deletable } });
     }
 
     return { deleted: deletable.length, skipped };
+  }
+
+  /** Who is alerted before a provider contract lapses, and how far ahead. */
+  async getNotificationSettings(): Promise<InventoryNotificationSettings> {
+    const settings = await getVmInventorySettings();
+    return {
+      providerExpiryRecipients: settings.providerExpiryRecipients,
+      warningDays: config.INVENTORY_PROVIDER_EXPIRY_WARNING_DAYS,
+    };
+  }
+
+  async updateNotificationSettings(
+    recipients: string[],
+    updatedBy: mongoose.Types.ObjectId
+  ): Promise<InventoryNotificationSettings> {
+    // Case and order are noise here; a duplicate address would just mail twice.
+    const cleaned = [
+      ...new Set(recipients.map((e) => e.trim().toLowerCase()).filter(Boolean)),
+    ].sort();
+
+    const settings = await getVmInventorySettings();
+    settings.providerExpiryRecipients = cleaned;
+    settings.updatedBy = updatedBy;
+    await settings.save();
+
+    return {
+      providerExpiryRecipients: cleaned,
+      warningDays: config.INVENTORY_PROVIDER_EXPIRY_WARNING_DAYS,
+    };
   }
 }
 
