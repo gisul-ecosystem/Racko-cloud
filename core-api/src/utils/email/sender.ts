@@ -11,6 +11,7 @@ import { buildStaffInviteTemplate } from './templates/staffInvite';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
 import { buildOrgAdminInviteTemplate } from './templates/orgAdminInvite';
 import { buildProjectExpiryWarningTemplate } from './templates/projectExpiryWarning';
+import { buildProviderExpiryWarningTemplate } from './templates/providerExpiryWarning';
 import type { EmailBrand } from './templates/brandedLayout';
 import {
   resolveTenantEmailBrand,
@@ -54,6 +55,14 @@ function getInlineImagesForHtml(html: string) {
   return getInlineEmailImages().filter((image) => used.has(image.cid));
 }
 
+/** A real file on the message, as opposed to the inline images the layout uses. */
+export interface EmailAttachment {
+  filename: string;
+  /** Base64, because both providers take the payload that way. */
+  content: string;
+  mimeType: string;
+}
+
 interface EmailOptions {
   to: string;
   subject: string;
@@ -61,6 +70,7 @@ interface EmailOptions {
   text: string;
   /** Overrides EMAIL_FROM_NAME (e.g. tenant portal name). */
   fromName?: string;
+  attachments?: EmailAttachment[];
 }
 
 function formatResendError(error: unknown): string {
@@ -90,12 +100,20 @@ async function sendViaResend(options: EmailOptions): Promise<string | null> {
     subject: options.subject,
     html: options.html,
     text: options.text,
-    attachments: getInlineImagesForHtml(options.html).map((image) => ({
-      filename: image.filename,
-      content: image.content,
-      contentId: image.cid,
-      contentType: image.mimeType,
-    })),
+    attachments: [
+      ...getInlineImagesForHtml(options.html).map((image) => ({
+        filename: image.filename,
+        content: image.content,
+        contentId: image.cid,
+        contentType: image.mimeType,
+      })),
+      // No contentId: that is what makes it a download rather than an inline image.
+      ...(options.attachments ?? []).map((file) => ({
+        filename: file.filename,
+        content: file.content,
+        contentType: file.mimeType,
+      })),
+    ],
   });
 
   // Resend returns { data, error } and does not throw for API failures.
@@ -141,6 +159,15 @@ async function sendViaZoho(options: EmailOptions): Promise<string | null> {
         name: image.filename,
         cid: image.cid,
       })),
+      ...(options.attachments?.length
+        ? {
+            attachments: options.attachments.map((file) => ({
+              content: file.content,
+              mime_type: file.mimeType,
+              name: file.filename,
+            })),
+          }
+        : {}),
     }),
   });
 
@@ -351,4 +378,35 @@ export async function sendProjectExpiryWarningEmail(input: {
     brand: input.brand,
   });
   await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });
+}
+
+/**
+ * One alert covering every inventory VM whose provider contract is about to
+ * lapse. The machine list travels as a spreadsheet rather than in the body.
+ */
+export async function sendProviderExpiryWarningEmail(input: {
+  to: string;
+  vmCount: number;
+  loginCount: number;
+  soonestDays: number;
+  soonestDateLabel: string;
+  inventoryUrl: string;
+  attachment: EmailAttachment;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const template = buildProviderExpiryWarningTemplate({
+    vmCount: input.vmCount,
+    loginCount: input.loginCount,
+    soonestDays: input.soonestDays,
+    soonestDateLabel: input.soonestDateLabel,
+    attachmentName: input.attachment.filename,
+    inventoryUrl: input.inventoryUrl,
+    brand: input.brand,
+  });
+  await sendEmail({
+    to: input.to,
+    ...template,
+    fromName: input.brand?.name,
+    attachments: [input.attachment],
+  });
 }

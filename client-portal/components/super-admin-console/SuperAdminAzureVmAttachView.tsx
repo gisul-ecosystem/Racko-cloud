@@ -35,7 +35,7 @@ import {
 import {
   fetchSuperAdminExternalVmTargets,
   type SuperAdminTargetOption,
-} from '@/lib/superAdminExternalVmApi';
+} from '@/lib/superAdminTargetsApi';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 
 const inputClass =

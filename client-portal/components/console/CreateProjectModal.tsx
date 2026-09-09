@@ -8,8 +8,15 @@ import { fetchMyAdminServices } from '@/lib/adminServicesApi';
 import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   createProject,
+  createProjectForAdmin,
+  createProjectForTenant,
+  fetchEligibleProjectServicesForAdmin,
+  fetchEligibleProjectServicesForTenant,
   fetchProjectClientNames,
+  fetchProjectClientNamesForTenant,
   previewProjectName,
+  previewProjectNameForAdmin,
+  previewProjectNameForTenant,
   PROJECT_SERVICE_LABELS,
   type OrgProject,
 } from '@/lib/projectsApi';
@@ -44,6 +51,7 @@ export function CreateProjectModal({
   lockServices = false,
   onCreated,
   accentColor,
+  owner = null,
 }: {
   open: boolean;
   onClose: () => void;
@@ -53,8 +61,15 @@ export function CreateProjectModal({
   lockServices?: boolean;
   onCreated: (project: OrgProject) => void;
   accentColor?: string;
+  /**
+   * Super-admin only: create the project on behalf of another owner instead of
+   * the signed-in user. Takes precedence over `portal` for every API call.
+   */
+  owner?: { type: 'admin' | 'tenant'; id: string } | null;
 }) {
   const accent = accentColor?.trim() || ORG_ACCENT;
+  const ownerType = owner?.type ?? null;
+  const ownerId = owner?.id ?? null;
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -73,10 +88,20 @@ export function CreateProjectModal({
     { key: AdminServiceKey; label: string }[]
   >([]);
   const [selectedServices, setSelectedServices] = useState<AdminServiceKey[]>([]);
+  /**
+   * Whether the service step can actually be skipped. `lockServices` is only
+   * honoured when the owner may really use those services, otherwise create
+   * would fail server-side and we fall back to the picker.
+   */
+  const [lockable, setLockable] = useState(false);
 
+  // Keyed on contents, not array identity: callers pass inline arrays (or omit
+  // the prop, hitting a fresh `[]` default each render), which would otherwise
+  // make the load effect below re-run on every render.
+  const lockedKey = preselectedServices.filter(Boolean).join(',');
   const lockedServices = useMemo(
-    () => preselectedServices.filter(Boolean),
-    [preselectedServices]
+    () => (lockedKey ? (lockedKey.split(',') as AdminServiceKey[]) : []),
+    [lockedKey]
   );
 
   useEffect(() => {
@@ -91,17 +116,36 @@ export function CreateProjectModal({
     setEndDate('');
     setReminderEmailsRaw('');
     setSelectedServices(lockServices ? lockedServices : []);
+    setLockable(false);
 
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
-        const loadClientNames =
-          portal === 'tenant'
-            ? () => fetchTenantProjectClientNames().catch(() => [] as string[])
-            : () => fetchProjectClientNames().catch(() => [] as string[]);
+        const loadClientNames = () => {
+          // No client-name suggestion endpoint exists for the admin-owner path.
+          if (ownerId) {
+            return ownerType === 'tenant'
+              ? fetchProjectClientNamesForTenant(ownerId).catch(() => [] as string[])
+              : Promise.resolve([] as string[]);
+          }
+          return portal === 'tenant'
+            ? fetchTenantProjectClientNames().catch(() => [] as string[])
+            : fetchProjectClientNames().catch(() => [] as string[]);
+        };
 
         const loadServices = async (): Promise<{ key: AdminServiceKey; label: string }[]> => {
+          if (ownerId) {
+            const keys =
+              ownerType === 'tenant'
+                ? await fetchEligibleProjectServicesForTenant(ownerId)
+                : await fetchEligibleProjectServicesForAdmin(ownerId);
+            return keys
+              .filter(
+                (key) => key !== 'docs' && key !== 'machine-manager' && !isServiceHiddenFromUi(key)
+              )
+              .map((key) => ({ key, label: PROJECT_SERVICE_LABELS[key] || key }));
+          }
           if (portal === 'tenant') {
             const [services, catalog] = await Promise.all([
               fetchTenantEligibleProjectServices(),
@@ -135,10 +179,19 @@ export function CreateProjectModal({
             }));
         };
 
+        const loadPreviewName = () => {
+          if (ownerId) {
+            return ownerType === 'tenant'
+              ? previewProjectNameForTenant(ownerId)
+              : previewProjectNameForAdmin(ownerId);
+          }
+          return portal === 'tenant' ? previewTenantProjectName() : previewProjectName();
+        };
+
         const [preview, names, services] = await Promise.all([
-          portal === 'tenant' ? previewTenantProjectName() : previewProjectName(),
+          loadPreviewName(),
           loadClientNames(),
-          lockServices ? Promise.resolve([]) : loadServices(),
+          loadServices(),
         ]);
 
         if (cancelled) return;
@@ -146,9 +199,18 @@ export function CreateProjectModal({
         setProjectName(preview.name);
         setClientNames(names);
         setAvailableServices(services);
-        if (!lockServices && lockedServices.length > 0) {
-          setSelectedServices(lockedServices);
-        }
+
+        // Creating for an org owner as super-admin bypasses that owner's active
+        // service list server-side, so the lock always holds there.
+        const eligible = new Set(services.map((s) => s.key));
+        const canLock =
+          lockServices &&
+          lockedServices.length > 0 &&
+          (ownerType === 'admin' || lockedServices.every((key) => eligible.has(key)));
+        setLockable(canLock);
+        setSelectedServices(
+          canLock ? lockedServices : lockedServices.filter((key) => eligible.has(key))
+        );
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof ApiError ? err.message : 'Failed to load project form.');
@@ -161,7 +223,7 @@ export function CreateProjectModal({
     return () => {
       cancelled = true;
     };
-  }, [open, portal, lockServices, lockedServices]);
+  }, [open, portal, lockServices, lockedServices, ownerType, ownerId]);
 
   function handleClose() {
     if (saving) return;
@@ -171,7 +233,7 @@ export function CreateProjectModal({
   function continueToServices(event: React.FormEvent) {
     event.preventDefault();
     if (!projectName.trim() || !clientName.trim() || !startDate || !endDate) return;
-    if (lockServices) {
+    if (lockable) {
       void submitCreate();
       return;
     }
@@ -186,7 +248,7 @@ export function CreateProjectModal({
   }
 
   async function submitCreate() {
-    const services = lockServices ? lockedServices : selectedServices;
+    const services = lockable ? lockedServices : selectedServices;
     if (services.length === 0) {
       setError('Select at least one service for this project.');
       return;
@@ -209,8 +271,16 @@ export function CreateProjectModal({
         reminderEmails: parseReminderEmails(reminderEmailsRaw),
         autoArchiveEnabled: true,
       };
-      const created =
-        portal === 'tenant' ? await createTenantProject(payload) : await createProject(payload);
+      let created: OrgProject;
+      if (ownerId) {
+        created =
+          ownerType === 'tenant'
+            ? await createProjectForTenant(ownerId, payload)
+            : await createProjectForAdmin(ownerId, payload);
+      } else {
+        created =
+          portal === 'tenant' ? await createTenantProject(payload) : await createProject(payload);
+      }
       onCreated(created);
       onClose();
     } catch (err) {
@@ -241,7 +311,7 @@ export function CreateProjectModal({
               {step === 'services' ? 'Enable services' : 'New project'}
             </h2>
             <p className="mt-1 text-sm text-gray-500">
-              {lockServices
+              {lockable
                 ? 'Set client, dates, and reminder emails. This project will include the current service.'
                 : step === 'services'
                   ? 'Choose which services belong to this project.'
@@ -359,7 +429,7 @@ export function CreateProjectModal({
                 </p>
               </div>
 
-              {lockServices && lockedServices.length > 0 ? (
+              {lockable && lockedServices.length > 0 ? (
                 <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
                   Service:{' '}
                   {lockedServices
@@ -384,7 +454,7 @@ export function CreateProjectModal({
                 className="rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
                 style={{ backgroundColor: accent }}
               >
-                {lockServices ? (saving ? 'Creating…' : 'Create project') : 'Next · Services'}
+                {lockable ? (saving ? 'Creating…' : 'Create project') : 'Next · Services'}
               </button>
             </div>
           </form>
