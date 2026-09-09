@@ -181,6 +181,14 @@ export async function fetchJobs(): Promise<IJob[]> {
   return res.data.jobs;
 }
 
+/** Fetch jobs scoped to a single machine — faster than fetchJobs() for the detail page. */
+export async function fetchMachineJobs(machineId: string): Promise<IJob[]> {
+  const res = await apiRequest<ApiResponse<{ jobs: IJob[]; total: number }>>(
+    `/api/v1/machines/${machineId}/jobs`
+  );
+  return res.data.jobs;
+}
+
 export async function fetchJob(id: string): Promise<IJob> {
   const res = await apiRequest<ApiResponse<{ job: IJob }>>(`/api/v1/machines/jobs/${id}`);
   return res.data.job;
@@ -438,6 +446,22 @@ export function getEnrollmentAgentDownloadUrl(os: MachineOS): string {
 
 // ─── Reset API ────────────────────────────────────────────────────────────────
 
+/**
+ * One event off the reset stream.
+ *
+ * `reset_progress` carries the phase the agent is on; `reset_complete` carries
+ * the outcome and, on failure, the script output.
+ */
+export interface ResetStreamEvent {
+  type: string;
+  machineId?: string;
+  machineName?: string;
+  phase?: number;
+  message?: string;
+  success?: boolean;
+  error?: string;
+}
+
 export async function resetMachines(
   machineIds: string[],
   sessionId: string
@@ -487,7 +511,7 @@ export function openResetStatusStream(
 export function openResetStatusStreamWithReconnect(
   sessionId: string,
   streamToken: string,
-  onEvent: (event: { type: string; machineId?: string; success?: boolean; error?: string }) => void,
+  onEvent: (event: ResetStreamEvent) => void,
   onTerminal: () => void,
   onGiveUp: () => void,
   expectedCount: number = 1,
@@ -540,12 +564,7 @@ export function openResetStatusStreamWithReconnect(
             if (!raw) continue;
 
             try {
-              const event = JSON.parse(raw) as {
-                type: string;
-                machineId?: string;
-                success?: boolean;
-                error?: string;
-              };
+              const event = JSON.parse(raw) as ResetStreamEvent;
 
               if (event.type === 'reset_complete' && event.machineId) {
                 // Deduplicate — on reconnect the server replays all persisted results.

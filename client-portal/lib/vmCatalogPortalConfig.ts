@@ -8,6 +8,9 @@ import {
   ownedCatalogVmPowerAction,
   submitCatalogVmRequest,
   submitSuperAdminCatalogVmRequest,
+  extendCatalogVmExpiry,
+  deleteCatalogVm,
+  type DeleteCatalogVmResult,
   type CatalogSoftwareOption,
   type CatalogVmConsoleSession,
   type CatalogVmOverview,
@@ -52,6 +55,15 @@ export interface VmCatalogPortalApi {
     action: CatalogVmPowerAction,
     instanceId?: string
   ) => Promise<{ action: CatalogVmPowerAction; panelUrl?: string; vm: ICatalogVm }>;
+  /**
+   * Provider term upkeep. Only the super-admin portal supplies these, so the
+   * org and tenant portals render the shared My VM page without the actions.
+   */
+  extendExpiry?: (id: string, expiresAt: string) => Promise<ICatalogVm>;
+  deleteVm?: (
+    id: string,
+    confirmTerminatedAtProvider: boolean
+  ) => Promise<DeleteCatalogVmResult>;
 }
 
 export interface VmCatalogPortalConfig {
@@ -125,6 +137,8 @@ const superAdminApi: VmCatalogPortalApi = {
     const result = await ownedCatalogVmPowerAction(id, action, instanceId);
     return { action: result.action, panelUrl: result.panelUrl, vm: result.vm };
   },
+  extendExpiry: extendCatalogVmExpiry,
+  deleteVm: deleteCatalogVm,
 };
 
 export const superAdminVmCatalogPortalConfig: VmCatalogPortalConfig = {

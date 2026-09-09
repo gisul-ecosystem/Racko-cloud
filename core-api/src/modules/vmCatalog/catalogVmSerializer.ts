@@ -104,9 +104,31 @@ export function resolveDurationDays(billing: string, explicit?: number): number 
   return 30;
 }
 
+/**
+ * Whether a billing period is a fixed term that can lapse.
+ *
+ * Hourly and daily plans bill continuously from the wallet until someone
+ * terminates the VM, so there is no contract end date to warn about. Only
+ * weekly and longer terms expire.
+ */
+export function hasFixedProviderTerm(billing: string): boolean {
+  const b = String(billing || '').toLowerCase();
+  return !b.includes('hour') && !b.includes('day') && !b.includes('daily');
+}
+
 export function computeExpiresAt(durationDays: number): Date {
+  return computeExpiresFrom(new Date(), durationDays);
+}
+
+/**
+ * End of a provider term that started at `start`.
+ *
+ * Used for manual Webyne VMs, whose term runs from the day they were attached
+ * rather than from the moment the row is written.
+ */
+export function computeExpiresFrom(start: Date, durationDays: number): Date {
   const days = Math.max(1, durationDays);
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  return new Date(start.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
 export function isAutoCloudProvider(

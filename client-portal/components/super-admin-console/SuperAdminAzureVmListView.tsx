@@ -17,7 +17,7 @@ import { CatalogVmPowerControls } from '@/components/create-vm/CatalogVmPowerCon
 import {
   fetchSuperAdminExternalVmTargets,
   type SuperAdminTargetOption,
-} from '@/lib/superAdminExternalVmApi';
+} from '@/lib/superAdminTargetsApi';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { ReadMoreText } from '@/components/ui/ReadMoreText';
 

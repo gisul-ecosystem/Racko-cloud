@@ -232,6 +232,8 @@ export async function createProjectForAdmin(
     startDate?: string;
     endDate?: string;
     enabledServices: AdminServiceKey[];
+    reminderEmails?: string[];
+    autoArchiveEnabled?: boolean;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
@@ -314,6 +316,8 @@ export async function createProjectForTenant(
     startDate?: string;
     endDate?: string;
     enabledServices: AdminServiceKey[];
+    reminderEmails?: string[];
+    autoArchiveEnabled?: boolean;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(

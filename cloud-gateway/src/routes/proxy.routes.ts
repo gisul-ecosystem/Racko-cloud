@@ -541,6 +541,22 @@ router.post(
   coreApiPricingProxy
 );
 
+/** Provider term upkeep — super-admin only, since delete drops the owner's VM. */
+router.patch(
+  '/api/v1/vm-catalog/vms/:id/extend',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin'),
+  coreApiProxy
+);
+router.delete(
+  '/api/v1/vm-catalog/vms/:id',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin'),
+  coreApiProxy
+);
+
 router.get('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans/seed', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
