@@ -22,8 +22,9 @@ import (
 )
 
 // directInstallTimeout is applied to msi/exe/zip/script installs where we
-// spawn the process directly with no built-in timeout of their own.
-const directInstallTimeout = 4 * time.Hour
+// spawn the process directly. 30 minutes is generous for any real installer —
+// if a process is still running after 30 minutes it is hung, not installing.
+const directInstallTimeout = 30 * time.Minute
 
 // ─── Win32 API declarations ───────────────────────────────────────────────────
 

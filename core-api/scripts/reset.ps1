@@ -698,6 +698,25 @@ foreach ($dir in (Get-ChildItem 'C:\ProgramData' -Directory -ErrorAction Silentl
     if (-not (Test-Path $dir.FullName)) { Write-Host "Removed:  $($dir.FullName)" -ForegroundColor Green }
 }
 
+# Force-remove Anaconda system-wide install directory.
+# Anaconda's uninstaller leaves C:\ProgramData\anaconda3 behind even after a
+# successful uninstall, causing subsequent installs to fail with "directory not empty".
+$anacondaPaths = @(
+    'C:\ProgramData\anaconda3',
+    'C:\ProgramData\Anaconda3'
+)
+foreach ($aPath in $anacondaPaths) {
+    if (Test-Path $aPath) {
+        Write-Host "Removing Anaconda directory: $aPath" -ForegroundColor Yellow
+        Remove-FolderWithRetry -Path $aPath
+        if (-not (Test-Path $aPath)) {
+            Write-Host "Removed: $aPath" -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: Could not fully remove $aPath (files may be locked)" -ForegroundColor DarkYellow
+        }
+    }
+}
+
 # ============================================================
 # PHASE 6 — Stale registry cleanup (HKLM + HKCU)
 # ============================================================

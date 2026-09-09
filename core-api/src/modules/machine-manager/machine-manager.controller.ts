@@ -149,6 +149,18 @@ export class MachineManagerController {
     }
   }
 
+  /** GET /api/v1/machines/:id/jobs — list jobs for a specific machine */
+  async listMachineJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const machineId = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const jobs = await machineManagerService.listJobsByMachine(machineId, adminId);
+      success(res, 'Jobs retrieved.', { jobs, total: jobs.length });
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** DELETE /api/v1/machines/:id/jobs — clear jobs for a specific machine */
   async clearMachineJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
