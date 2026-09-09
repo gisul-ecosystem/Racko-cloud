@@ -35,6 +35,34 @@ router.post(
   (req, res, next) => softwareCatalogController.issueUploadUrl(req, res, next)
 );
 
+// POST /api/v1/software-catalog/upload-url/multipart/start
+router.post(
+  '/upload-url/multipart/start',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.startMultipartUpload(req, res, next)
+);
+
+// POST /api/v1/software-catalog/upload-url/multipart/part
+router.post(
+  '/upload-url/multipart/part',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.getMultipartPartUrl(req, res, next)
+);
+
+// POST /api/v1/software-catalog/upload-url/multipart/complete
+router.post(
+  '/upload-url/multipart/complete',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.completeMultipartUpload(req, res, next)
+);
+
+// POST /api/v1/software-catalog/upload-url/multipart/abort
+router.post(
+  '/upload-url/multipart/abort',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.abortMultipartUpload(req, res, next)
+);
+
 // POST /api/v1/software-catalog — super_admin only
 router.post(
   '/',

@@ -264,6 +264,57 @@ export async function issueSoftwareCatalogUploadUrl(
   return res.data;
 }
 
+// ─── Multipart upload API ─────────────────────────────────────────────────────
+
+/** Step 1: Initiate a multipart upload. Returns uploadId + storageRef. */
+export async function startSoftwareCatalogMultipartUpload(
+  fileName: string,
+  mimeType: string
+): Promise<{ uploadId: string; storageRef: string }> {
+  const res = await apiRequest<ApiResponse<{ uploadId: string; storageRef: string }>>(
+    '/api/v1/software-catalog/upload-url/multipart/start',
+    { method: 'POST', body: JSON.stringify({ fileName, mimeType }) }
+  );
+  return res.data;
+}
+
+/** Step 2: Get a presigned PUT URL for a single part. */
+export async function getSoftwareCatalogPartUrl(
+  storageRef: string,
+  uploadId: string,
+  partNumber: number
+): Promise<{ presignedUrl: string }> {
+  const res = await apiRequest<ApiResponse<{ presignedUrl: string }>>(
+    '/api/v1/software-catalog/upload-url/multipart/part',
+    { method: 'POST', body: JSON.stringify({ storageRef, uploadId, partNumber }) }
+  );
+  return res.data;
+}
+
+/** Step 3: Complete the multipart upload with all part ETags. */
+export async function completeSoftwareCatalogMultipartUpload(
+  storageRef: string,
+  uploadId: string,
+  parts: Array<{ PartNumber: number; ETag: string }>
+): Promise<{ storageRef: string }> {
+  const res = await apiRequest<ApiResponse<{ storageRef: string }>>(
+    '/api/v1/software-catalog/upload-url/multipart/complete',
+    { method: 'POST', body: JSON.stringify({ storageRef, uploadId, parts }) }
+  );
+  return res.data;
+}
+
+/** Abort a multipart upload on error. */
+export async function abortSoftwareCatalogMultipartUpload(
+  storageRef: string,
+  uploadId: string
+): Promise<void> {
+  await apiRequest(
+    '/api/v1/software-catalog/upload-url/multipart/abort',
+    { method: 'POST', body: JSON.stringify({ storageRef, uploadId }) }
+  );
+}
+
 // ─── VM Push API ──────────────────────────────────────────────────────────────
 
 export interface VMPushTarget {

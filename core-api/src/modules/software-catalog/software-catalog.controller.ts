@@ -25,6 +25,69 @@ export class SoftwareCatalogController {
     } catch (err) { next(err); }
   }
 
+  /** POST /api/v1/software-catalog/upload-url/multipart/start */
+  async startMultipartUpload(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const uploadedBy = new mongoose.Types.ObjectId(
+        (req as AuthenticatedRequest).user.userId
+      );
+      const { fileName, mimeType } = req.body as { fileName: string; mimeType: string };
+      if (!fileName || !mimeType) {
+        res.status(400).json({ success: false, message: 'fileName and mimeType are required.' });
+        return;
+      }
+      const result = await softwareCatalogService.initiateMultipartUpload(fileName, mimeType, uploadedBy);
+      success(res, 'Multipart upload initiated.', result);
+    } catch (err) { next(err); }
+  }
+
+  /** POST /api/v1/software-catalog/upload-url/multipart/part */
+  async getMultipartPartUrl(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { storageRef, uploadId, partNumber } = req.body as {
+        storageRef: string;
+        uploadId: string;
+        partNumber: number;
+      };
+      if (!storageRef || !uploadId || !partNumber) {
+        res.status(400).json({ success: false, message: 'storageRef, uploadId and partNumber are required.' });
+        return;
+      }
+      const result = await softwareCatalogService.issuePartUploadUrl(storageRef, uploadId, partNumber);
+      success(res, 'Part upload URL issued.', result);
+    } catch (err) { next(err); }
+  }
+
+  /** POST /api/v1/software-catalog/upload-url/multipart/complete */
+  async completeMultipartUpload(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { storageRef, uploadId, parts } = req.body as {
+        storageRef: string;
+        uploadId: string;
+        parts: Array<{ PartNumber: number; ETag: string }>;
+      };
+      if (!storageRef || !uploadId || !Array.isArray(parts) || parts.length === 0) {
+        res.status(400).json({ success: false, message: 'storageRef, uploadId and parts are required.' });
+        return;
+      }
+      const result = await softwareCatalogService.completeMultipartUpload(storageRef, uploadId, parts);
+      success(res, 'Multipart upload completed.', result);
+    } catch (err) { next(err); }
+  }
+
+  /** POST /api/v1/software-catalog/upload-url/multipart/abort */
+  async abortMultipartUpload(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { storageRef, uploadId } = req.body as { storageRef: string; uploadId: string };
+      if (!storageRef || !uploadId) {
+        res.status(400).json({ success: false, message: 'storageRef and uploadId are required.' });
+        return;
+      }
+      await softwareCatalogService.abortMultipartUpload(storageRef, uploadId);
+      success(res, 'Multipart upload aborted.');
+    } catch (err) { next(err); }
+  }
+
   /** GET /api/v1/software-catalog */
   async list(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
