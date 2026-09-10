@@ -399,6 +399,19 @@ class MachineManagerService {
   }
 
   /** Delete all jobs for a specific machine owned by this admin. */
+  async listJobsByMachine(
+    machineId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<JobResponse[]> {
+    await this.findOwnedMachine(machineId, adminId); // ownership check
+    const docs = await JobModel.find({ machineId, adminId }).sort({ createdAt: -1 })
+      .populate<{ softwareIds: Array<{ _id: mongoose.Types.ObjectId; name: string }> }>('softwareIds', 'name');
+    return docs.map((d) => {
+      const swName = (d.softwareIds[0] as unknown as { name?: string } | undefined)?.name ?? '';
+      return this.toJobResponse(d as unknown as IJob, swName);
+    });
+  }
+
   async clearMachineJobs(
     machineId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
