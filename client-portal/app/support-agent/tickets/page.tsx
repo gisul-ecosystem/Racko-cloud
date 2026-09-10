@@ -16,6 +16,9 @@ import {
 import { ApiError } from '@/lib/apiClient';
 import {
   fetchMyTickets,
+  supportTicketProjectId,
+  supportTicketProjectLabel,
+  uniqueTicketProjects,
   type SupportTicket,
   type SupportTicketPriority,
   type SupportTicketStatus,
@@ -105,6 +108,7 @@ function tenantLabel(tenantId?: string): string {
 export default function SupportAgentAllTicketsPage() {
   const router = useRouter();
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [projectSourceTickets, setProjectSourceTickets] = useState<SupportTicket[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -112,6 +116,7 @@ export default function SupportAgentAllTicketsPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<'' | SupportTicketStatus>('');
   const [priorityFilter, setPriorityFilter] = useState<'' | SupportTicketPriority>('');
+  const [projectFilter, setProjectFilter] = useState('');
   const [search, setSearch] = useState('');
 
   const load = useCallback(
@@ -135,6 +140,7 @@ export default function SupportAgentAllTicketsPage() {
           }),
         ]);
         setTickets(pageTickets);
+        setProjectSourceTickets(countTickets);
         setTotalCount(countTickets.length);
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Failed to load tickets.');
@@ -150,8 +156,18 @@ export default function SupportAgentAllTicketsPage() {
     void load();
   }, [load]);
 
+  const agentProjects = useMemo(
+    () => uniqueTicketProjects(projectSourceTickets),
+    [projectSourceTickets]
+  );
+
   const filteredTickets = useMemo(() => {
     let rows = tickets;
+    if (projectFilter) {
+      rows = rows.filter(
+        (ticket) => supportTicketProjectId(ticket.projectId) === projectFilter
+      );
+    }
     if (priorityFilter) {
       rows = rows.filter((ticket) => ticket.priority === priorityFilter);
     }
@@ -164,7 +180,7 @@ export default function SupportAgentAllTicketsPage() {
       );
     }
     return rows;
-  }, [tickets, priorityFilter, search]);
+  }, [tickets, projectFilter, priorityFilter, search]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
   const rangeStart = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
@@ -173,6 +189,7 @@ export default function SupportAgentAllTicketsPage() {
   const clearFilters = () => {
     setStatusFilter('');
     setPriorityFilter('');
+    setProjectFilter('');
     setSearch('');
     setPage(1);
   };
@@ -239,6 +256,24 @@ export default function SupportAgentAllTicketsPage() {
               ))}
             </select>
           </div>
+          <div className="min-w-[160px] flex-1">
+            <label className="mb-1 block text-xs font-medium text-gray-500">Project</label>
+            <select
+              className={`${selectClass} w-full`}
+              value={projectFilter}
+              onChange={(e) => {
+                setProjectFilter(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All Projects</option>
+              {agentProjects.map((project) => (
+                <option key={project._id} value={project._id}>
+                  {project.clientName || project.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="min-w-[140px] flex-1">
             <label className="mb-1 block text-xs font-medium text-gray-500">Priority</label>
             <select
@@ -279,7 +314,7 @@ export default function SupportAgentAllTicketsPage() {
       </div>
 
       {loading && tickets.length === 0 ? (
-        <TableSkeleton rows={8} cols={8} />
+        <TableSkeleton rows={8} cols={9} />
       ) : filteredTickets.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 bg-white px-6 py-16 text-center shadow-sm">
           <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-red-50">
@@ -303,6 +338,7 @@ export default function SupportAgentAllTicketsPage() {
                     'Priority',
                     'Status',
                     'Tenant',
+                    'Project',
                     'Created',
                     'Action',
                   ].map((heading) => (
@@ -326,7 +362,14 @@ export default function SupportAgentAllTicketsPage() {
                         {ticket.ticketNumber}
                       </Link>
                     </td>
-                    <td className="max-w-xs truncate px-4 py-3.5 text-gray-900">{ticket.subject}</td>
+                    <td className="max-w-xs px-4 py-3.5 text-gray-900">
+                      <div className="truncate">{ticket.subject}</div>
+                      {supportTicketProjectLabel(ticket.projectId) ? (
+                        <span className="mt-1 block text-xs text-gray-500">
+                          Project: {supportTicketProjectLabel(ticket.projectId)}
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="px-4 py-3.5 capitalize text-gray-600">
                       {(ticket.type as SupportTicketType).replace(/_/g, ' ')}
                     </td>
@@ -338,6 +381,9 @@ export default function SupportAgentAllTicketsPage() {
                     </td>
                     <td className="px-4 py-3.5 font-mono text-xs text-gray-500">
                       {tenantLabel(ticket.tenantId)}
+                    </td>
+                    <td className="max-w-[10rem] truncate px-4 py-3.5 text-gray-600">
+                      {supportTicketProjectLabel(ticket.projectId) ?? '—'}
                     </td>
                     <td className="px-4 py-3.5 text-gray-600">
                       {formatRelativeTime(ticket.createdAt)}

@@ -1,5 +1,11 @@
 import mongoose from 'mongoose';
-import { User } from '../../models/user.model';
+import { User, type IUser } from '../../models/user.model';
+import { ProjectModel } from '../../models/project.model';
+import { CatalogVmModel } from '../../models/catalogVm.model';
+import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
+import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
+import { ExternalVMModel } from '../external-vm/external-vm.model';
+import { VM } from '../vm/vm.model';
 import { ConflictError, NotFoundError } from '../../utils/errors';
 import {
   Ticket,
@@ -75,6 +81,7 @@ export class SupportService {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
+      .populate('projectId', 'clientName name')
       .lean() as unknown as ITicket[];
   }
 
@@ -96,11 +103,14 @@ export class SupportService {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
+      .populate('projectId', 'clientName name')
       .lean() as unknown as ITicket[];
   }
 
   async getOne(ticketId: string): Promise<ITicket> {
-    const ticket = await Ticket.findById(ticketId).lean();
+    const ticket = await Ticket.findById(ticketId)
+      .populate('projectId', 'clientName name')
+      .lean();
 
     if (!ticket) {
       throw new NotFoundError('Ticket not found.');
@@ -306,3 +316,150 @@ export class SupportService {
 }
 
 export const supportService = new SupportService();
+
+async function getRoundRobinAgent(): Promise<IUser | null> {
+  return User.findOneAndUpdate(
+    { role: 'support_agent', isActive: true },
+    { $inc: { ticketCount: 1 } },
+    { sort: { ticketCount: 1 }, new: true }
+  );
+}
+
+/** Resolve a tenant user's project via resource assignments (VM, elastic server, etc.). */
+export async function resolveProjectForTenantUser(
+  tenantId: string,
+  tenantUserId: string
+): Promise<string | null> {
+  if (!mongoose.Types.ObjectId.isValid(tenantId) || !mongoose.Types.ObjectId.isValid(tenantUserId)) {
+    return null;
+  }
+
+  const tenantOid = new mongoose.Types.ObjectId(tenantId);
+  const userOid = new mongoose.Types.ObjectId(tenantUserId);
+
+  const vm = await VM.findOne({
+    tenantId: tenantOid,
+    assignedTenantUserId: userOid,
+    projectId: { $ne: null },
+  })
+    .sort({ updatedAt: -1 })
+    .select('projectId')
+    .lean();
+  if (vm?.projectId) return vm.projectId.toString();
+
+  const externalAssign = await ExternalVmTenantAssignmentModel.findOne({
+    tenantId: tenantOid,
+    tenantUserId: userOid,
+    status: 'active',
+  })
+    .sort({ createdAt: -1 })
+    .select('externalVmId')
+    .lean();
+  if (externalAssign?.externalVmId) {
+    const externalVm = await ExternalVMModel.findById(externalAssign.externalVmId)
+      .select('projectId')
+      .lean();
+    if (externalVm?.projectId) return externalVm.projectId.toString();
+  }
+
+  const dedicated = await DedicatedServerRequestModel.findOne({
+    tenantId: tenantOid,
+    tenantUserId: userOid,
+    projectId: { $ne: null },
+  })
+    .sort({ updatedAt: -1 })
+    .select('projectId')
+    .lean();
+  if (dedicated?.projectId) return dedicated.projectId.toString();
+
+  const catalogVm = await CatalogVmModel.findOne({
+    tenantId: tenantOid,
+    tenantUserId: userOid,
+    projectId: { $ne: null },
+  })
+    .sort({ updatedAt: -1 })
+    .select('projectId')
+    .lean();
+  if (catalogVm?.projectId) return catalogVm.projectId.toString();
+
+  return null;
+}
+
+export async function assignTicketAgent(
+  _tenantId: string,
+  projectId?: string | null
+): Promise<string | null> {
+  if (projectId) {
+    const project = await ProjectModel.findById(projectId)
+      .select('supportAgentId supportEscalationLog')
+      .populate<{ supportAgentId: IUser | null }>({
+        path: 'supportAgentId',
+        select: 'isActive role',
+      });
+
+    const projectAgent = project?.supportAgentId ?? null;
+
+    if (projectAgent?.isActive && projectAgent.role === 'support_agent') {
+      return projectAgent._id.toString();
+    }
+
+    if (project && projectAgent) {
+      const fallbackAgent = await getRoundRobinAgent();
+      if (fallbackAgent) {
+        project.supportEscalationLog.push({
+          originalAgentId: projectAgent._id,
+          fallbackAgentId: fallbackAgent._id,
+          reason: 'agent_inactive',
+          escalatedAt: new Date(),
+        });
+        await project.save();
+        return fallbackAgent._id.toString();
+      }
+    }
+  }
+
+  const agent = await getRoundRobinAgent();
+  return agent?._id.toString() ?? null;
+}
+
+async function loadPlatformAssignee(
+  agentId: string
+): Promise<{ platformAssigneeId: mongoose.Types.ObjectId; platformAssigneeName: string }> {
+  const agent = await User.findById(agentId).select('name email').lean();
+  return {
+    platformAssigneeId: new mongoose.Types.ObjectId(agentId),
+    platformAssigneeName: agent?.name?.trim() || agent?.email || 'Support',
+  };
+}
+
+/** Read-only: who would be picked next for project assignment (no counter update). */
+export async function previewNextSupportAgent(): Promise<{
+  _id: string;
+  name: string;
+  email: string;
+} | null> {
+  const agent = await User.findOne(
+    { role: 'support_agent', isActive: true },
+    { _id: 1, name: 1, email: 1 }
+  )
+    .sort({ assignedProjectCount: 1, _id: 1 })
+    .lean();
+  if (!agent) return null;
+  return {
+    _id: agent._id.toString(),
+    name: agent.name?.trim() || agent.email,
+    email: agent.email,
+  };
+}
+
+/** Pick the active support agent with the fewest assigned projects (round-robin). */
+export async function assignProjectSupportAgent(_projectId: string): Promise<IUser | null> {
+  const agent = await User.findOneAndUpdate(
+    { role: 'support_agent', isActive: true },
+    { $inc: { assignedProjectCount: 1 } },
+    { sort: { assignedProjectCount: 1 }, new: true }
+  );
+  return agent;
+}
+
+export { loadPlatformAssignee };

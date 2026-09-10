@@ -185,6 +185,16 @@ async function reportByProject(req: Request, res: Response, next: NextFunction):
   }
 }
 
+async function listSupportAgents(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = tenantAuth(req);
+    const agents = await projectsService.listSupportAgentsForTenantAdmin(authReq.tenantUser.role);
+    success(res, 'Support agents retrieved.', { agents });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function reportByService(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = tenantAuth(req);
@@ -202,6 +212,7 @@ async function reportByService(req: Request, res: Response, next: NextFunction):
 
 export const tenantProjectsController = {
   list,
+  listSupportAgents,
   previewName,
   listClientNames,
   listEligibleServices,

@@ -26,6 +26,22 @@ const router = Router();
 
 router.use(requireAuth);
 
+router.get(
+  '/support-agent-preview',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    projectsController.supportAgentPreview(req, res, next);
+  }
+);
+
+router.get(
+  '/support-agents-list',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    projectsController.supportAgentsList(req, res, next);
+  }
+);
+
 /** Super-admin: manage projects for an organization owner */
 router.get(
   '/admins/:adminId',
@@ -181,6 +197,15 @@ router.post(
   }
 );
 
+router.get(
+  '/tenants/:tenantId/:projectId',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
+  (req, res, next) => {
+    projectsController.getByIdForTenantSuperAdmin(req, res, next);
+  }
+);
+
 router.patch(
   '/tenants/:tenantId/:projectId',
   requirePermission('white_labelling.manage'),
@@ -253,6 +278,10 @@ router.get('/client-names', requirePlatformPermission('projects.read'), (req, re
   projectsController.listClientNames(req, res, next);
 });
 
+router.get('/support-agents', requirePlatformPermission('projects.manage'), (req, res, next) => {
+  projectsController.listSupportAgents(req, res, next);
+});
+
 router.get('/', requirePlatformPermission('projects.read'), (req, res, next) => {
   projectsController.list(req, res, next);
 });
@@ -263,6 +292,15 @@ router.post(
   validateRequest(createProjectSchema),
   (req, res, next) => {
     projectsController.create(req, res, next);
+  }
+);
+
+router.get(
+  '/:id/support-tickets',
+  requirePlatformPermission('projects.read'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    projectsController.listSupportTickets(req, res, next);
   }
 );
 

@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Bug, ChevronRight, Loader2, MessageCircle, Server } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
@@ -11,6 +11,7 @@ import {
   type TenantTicketPriority,
   type TenantTicketType,
 } from '@/lib/tenantSupportApi';
+import { fetchTenantProject } from '@/lib/tenantProjectsApi';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import {
@@ -58,6 +59,8 @@ const PRIORITY_OPTIONS: Array<{ value: TenantTicketPriority; label: string }> = 
 
 export default function TenantSubmitSupportTicketPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const lockedProjectId = searchParams.get('projectId')?.trim() || '';
   const { accentColor } = useTenantBranding();
   const { toasts, addToast, dismiss } = useToast();
   const focusRing = tenantAccentFocusRing(accentColor);
@@ -74,18 +77,50 @@ export default function TenantSubmitSupportTicketPage() {
   const [vmPurpose, setVmPurpose] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lockedProjectName, setLockedProjectName] = useState<string | null>(null);
+  const [projectContextError, setProjectContextError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!lockedProjectId) {
+      setLockedProjectName(null);
+      setProjectContextError(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchTenantProject(lockedProjectId)
+      .then((project) => {
+        if (cancelled) return;
+        setLockedProjectName(project.name);
+        setProjectContextError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLockedProjectName(null);
+        setProjectContextError(
+          err instanceof ApiError ? err.message : 'Could not load project for this ticket.'
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lockedProjectId]);
 
   const vmFieldsValid =
     type !== 'vm_request' ||
     (vmCpu.trim() && vmRam.trim() && vmStorage.trim() && vmOs.trim() && vmPurpose.trim());
+
+  const projectContextBlocking =
+    Boolean(lockedProjectId) &&
+    (Boolean(projectContextError) || (!lockedProjectName && !projectContextError));
 
   const canSubmit = useMemo(
     () =>
       subject.trim().length > 0 &&
       subject.length <= 255 &&
       description.trim().length >= 10 &&
-      vmFieldsValid,
-    [subject, description, vmFieldsValid]
+      vmFieldsValid &&
+      !projectContextBlocking,
+    [subject, description, vmFieldsValid, projectContextBlocking]
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -100,6 +135,7 @@ export default function TenantSubmitSupportTicketPage() {
         subject: subject.trim(),
         description: description.trim(),
         priority,
+        ...(lockedProjectId ? { projectId: lockedProjectId } : {}),
         ...(phone.trim() ? { requesterPhone: phone.trim() } : {}),
         ...(type === 'vm_request'
           ? {
@@ -140,6 +176,21 @@ export default function TenantSubmitSupportTicketPage() {
         <h1 className="text-2xl font-bold text-gray-900">Submit a Support Request</h1>
         <p className="mt-1 text-sm text-gray-500">Our team will respond as soon as possible.</p>
       </div>
+
+      {lockedProjectId && (
+        <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          {projectContextError ? (
+            <p>{projectContextError}</p>
+          ) : lockedProjectName ? (
+            <p>
+              This ticket will be raised under project:{' '}
+              <span className="font-semibold">{lockedProjectName}</span>
+            </p>
+          ) : (
+            <p className="text-sky-800">Loading project context…</p>
+          )}
+        </div>
+      )}
 
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-6">
         <fieldset>
