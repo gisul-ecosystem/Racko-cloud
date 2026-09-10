@@ -576,6 +576,17 @@ class ExternalVMService {
     );
   }
 
+  async closeConsoleSessionForActor(
+    id: mongoose.Types.ObjectId,
+    requestingUserId: mongoose.Types.ObjectId,
+    requestingRole: PlatformActorRole
+  ): Promise<{ killed: number }> {
+    const doc = await ExternalVMModel.findById(id);
+    if (!doc) throw new NotFoundError('External VM not found.');
+    await this.assertPlatformAccess(doc, requestingUserId.toString(), requestingRole);
+    return this.killGuacamoleSessionsForExternalVm(doc._id);
+  }
+
   async getMyAssignedExternalVMs(
     userId: mongoose.Types.ObjectId
   ): Promise<ExternalVMResponse[]> {
@@ -1028,6 +1039,17 @@ class ExternalVMService {
     );
   }
 
+  async closeTenantConsoleSession(
+    id: mongoose.Types.ObjectId,
+    actor: TenantExternalVmActor
+  ): Promise<{ killed: number }> {
+    const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
+    await migrateLegacyExternalVmAssignments(tenantId);
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    await this.assertTenantAccess(doc, actor);
+    return this.killGuacamoleSessionsForExternalVm(doc._id);
+  }
+
   async getTenantAssignedCounts(tenantId: mongoose.Types.ObjectId): Promise<Record<string, number>> {
     await migrateLegacyExternalVmAssignments(tenantId);
     return getAssignmentCountsByTenantUser(tenantId);
@@ -1438,6 +1460,21 @@ class ExternalVMService {
     }
 
     return { updated, results };
+  }
+
+  private async killGuacamoleSessionsForExternalVm(
+    externalVmId: mongoose.Types.ObjectId
+  ): Promise<{ killed: number }> {
+    const connectionName = `externalvm-${externalVmId.toString()}`;
+    const killed = await guacamoleClient.killSessionsForConnectionNameWithRetry(connectionName, {
+      throwOnPersistentFailure: false,
+    });
+    logger.info('[ExternalVM] Guacamole sessions closed', {
+      externalVmId: externalVmId.toString(),
+      connectionName,
+      killed,
+    });
+    return { killed };
   }
 
   private async openGuacamole(

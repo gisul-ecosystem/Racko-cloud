@@ -405,18 +405,25 @@ export class GuacamoleClient {
   }
 
   /**
-   * Force-disconnect live tunnels on a connection and confirm they are gone
-   * before minting a new client URL (last connection wins with max-connections=1).
+   * Force-disconnect live tunnels for a connection id and confirm they are gone.
+   * Shared by last-wins open, explicit console close, and access-schedule teardown.
    */
-  private async clearActiveSessionsForConnectionId(connectionIdentifier: string): Promise<number> {
+  async killSessionsForConnectionWithRetry(
+    connectionIdentifier: string,
+    options?: { username?: string; throwOnPersistentFailure?: boolean }
+  ): Promise<number> {
+    const throwOnPersistentFailure = options?.throwOnPersistentFailure ?? true;
+    const username = options?.username?.trim();
     let killedTotal = 0;
 
     for (let attempt = 1; attempt <= GuacamoleClient.KILL_CONFIRM_MAX_ATTEMPTS; attempt++) {
       const active = await this.listActiveConnections();
-      const matching = active.filter((a) => a.connectionIdentifier === connectionIdentifier);
+      const matching = active
+        .filter((a) => a.connectionIdentifier === connectionIdentifier)
+        .filter((a) => !username || a.username === username);
       if (matching.length === 0) {
         if (killedTotal > 0) {
-          logger.info('Guacamole connection cleared for new session', {
+          logger.info('Guacamole connection sessions cleared', {
             connectionIdentifier,
             killedTotal,
             attempt,
@@ -434,18 +441,43 @@ export class GuacamoleClient {
       }
     }
 
-    const remaining = (await this.listActiveConnections()).filter(
-      (a) => a.connectionIdentifier === connectionIdentifier
-    );
+    const remaining = (await this.listActiveConnections())
+      .filter((a) => a.connectionIdentifier === connectionIdentifier)
+      .filter((a) => !username || a.username === username);
     if (remaining.length > 0) {
       logger.error('Guacamole active sessions still open after kill retries', {
         connectionIdentifier,
         remaining: remaining.map((a) => a.identifier),
       });
-      throw new InternalError('Could not disconnect existing console session. Please try again.');
+      if (throwOnPersistentFailure) {
+        throw new InternalError('Could not disconnect existing console session. Please try again.');
+      }
     }
 
     return killedTotal;
+  }
+
+  /**
+   * Resolve stable connection name → id, then kill with confirm-retry.
+   * Idempotent when the connection definition does not exist.
+   */
+  async killSessionsForConnectionNameWithRetry(
+    connectionName: string,
+    options?: { username?: string; throwOnPersistentFailure?: boolean }
+  ): Promise<number> {
+    const connectionIdentifier = await this.getConnectionIdentifierByName(connectionName);
+    if (!connectionIdentifier) {
+      logger.info('Guacamole kill skipped — connection not found (idempotent)', { connectionName });
+      return 0;
+    }
+    return this.killSessionsForConnectionWithRetry(connectionIdentifier, options);
+  }
+
+  /** Last-wins takeover before minting a new client URL. */
+  private async clearActiveSessionsForConnectionId(connectionIdentifier: string): Promise<number> {
+    return this.killSessionsForConnectionWithRetry(connectionIdentifier, {
+      throwOnPersistentFailure: true,
+    });
   }
 
   /**
@@ -571,28 +603,13 @@ export class GuacamoleClient {
 
   /**
    * Kill active tunnels for a named connection (optional Guacamole username filter).
-   * Returns how many tunnels were targeted.
+   * Returns how many tunnel kill operations were issued (with confirm-retry).
    */
   async killActiveSessionsForConnection(
     connectionName: string,
-    options?: { username?: string }
+    options?: { username?: string; throwOnPersistentFailure?: boolean }
   ): Promise<number> {
-    const connectionIdentifier = await this.getConnectionIdentifierByName(connectionName);
-    if (!connectionIdentifier) {
-      logger.info('Guacamole kill skipped — connection not found', { connectionName });
-      return 0;
-    }
-
-    const active = await this.listActiveConnections();
-    const username = options?.username?.trim();
-    const ids = active
-      .filter((a) => a.connectionIdentifier === connectionIdentifier)
-      .filter((a) => !username || a.username === username)
-      .map((a) => a.identifier);
-
-    if (ids.length === 0) return 0;
-    await this.killActiveConnections(ids);
-    return ids.length;
+    return this.killSessionsForConnectionNameWithRetry(connectionName, options);
   }
 
   /**
