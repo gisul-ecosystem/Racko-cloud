@@ -268,6 +268,15 @@ export class TenantVmService {
     );
   }
 
+  async closeConsole(actor: TenantVmActor, vmId: string, req: Request): Promise<{ killed: number }> {
+    const vm = await this.loadTenantVmForActor(actor, vmId);
+    return vmService.closeConsole(
+      vm._id,
+      vm.adminId,
+      buildPlatformVmRequest(req, vm.adminId)
+    );
+  }
+
   async getAvailableVms(tenantId: mongoose.Types.ObjectId): Promise<TenantVmSummary[]> {
     const vms = await VM.find({
       tenantId,

@@ -3499,6 +3499,46 @@ export class VMService {
       connectionId: session.connectionId,
     };
   }
+
+  /**
+   * Kill live Guacamole tunnels for this VM (server-side disconnect).
+   * Same auth as openConsole; idempotent when no tunnels remain.
+   */
+  async closeConsole(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ killed: number }> {
+    const authReq = req as AuthenticatedRequest;
+
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    if (authReq.user.role === 'user') {
+      const access = await assertVmAccessibleForUser(vm, authReq.user.userId, 'user');
+      if (!access.allowed) {
+        throw new AccessWindowDeniedError(
+          access.error || 'Access denied: outside scheduled window.',
+          access.nextWindow ?? null
+        );
+      }
+    }
+
+    const connectionName = `vm-${vmId.toString()}`;
+    const killed = await guacamoleClient.killSessionsForConnectionNameWithRetry(connectionName, {
+      throwOnPersistentFailure: false,
+    });
+
+    logger.info('[VMConsole] Guacamole sessions closed', {
+      userId: authReq.user.userId,
+      vmId: vmId.toString(),
+      connectionName,
+      killed,
+    });
+
+    return { killed };
+  }
 }
 
 export const vmService = new VMService();

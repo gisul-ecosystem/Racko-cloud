@@ -55,12 +55,15 @@ export interface VMConsoleViewProps {
     protocol: ConsoleProtocol,
     dimensions?: ConsoleDimensions
   ) => Promise<ConsoleSession>;
+  /** Defaults to POST /api/v1/vms/:vmId/console/close */
+  closeSession?: (vmId: string) => void;
 }
 
 export function VMConsoleView({
   backHref,
   disconnectHref,
   getSession = getConsoleSession,
+  closeSession = closeConsoleSession,
 }: VMConsoleViewProps) {
   const { vmId } = useParams<{ vmId: string }>();
   const router = useRouter();
@@ -173,12 +176,26 @@ export function VMConsoleView({
     return () => {
       clearTimeout(timer);
       ctrl.abort();
-      const cached = sessionRef.current;
-      if (cached) {
-        void closeConsoleSession(cached.connectionId);
+      if (sessionRef.current && vmId) {
+        closeSession(vmId);
       }
     };
-  }, [fetchSession]);
+  }, [fetchSession, vmId, closeSession]);
+
+  useEffect(() => {
+    if (!vmId) return;
+    const onPageHide = () => {
+      if (sessionRef.current) {
+        closeSession(vmId);
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+    };
+  }, [vmId, closeSession]);
 
   useEffect(() => {
     if (!session) return;
@@ -327,14 +344,12 @@ export function VMConsoleView({
   };
 
   const handleDisconnect = () => {
-    const cached = sessionRef.current;
-    if (cached) void closeConsoleSession(cached.connectionId);
+    if (sessionRef.current && vmId) closeSession(vmId);
     router.push(disconnectHref);
   };
 
   const handleBack = () => {
-    const cached = sessionRef.current;
-    if (cached) void closeConsoleSession(cached.connectionId);
+    if (sessionRef.current && vmId) closeSession(vmId);
     router.push(backHref);
   };
 

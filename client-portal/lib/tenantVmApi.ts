@@ -1,4 +1,5 @@
-import { tenantPortalRequest } from './tenantPortalApiClient';
+import { tenantPortalRequest, getTenantAccessToken } from './tenantPortalApiClient';
+import { closeConsoleSessionAtPath, tenantVmConsoleClosePath } from './consoleApi';
 import type {
   ApiEnvelope,
   TenantBulkCreateUsersResult,
@@ -97,6 +98,13 @@ export async function openTenantVmConsole(
       `/api/v1/tenant-vms/${vmId}/console${qs}`
     )
   );
+}
+
+export function closeTenantVmConsole(vmId: string): void {
+  closeConsoleSessionAtPath(tenantVmConsoleClosePath(vmId), {
+    accessToken: getTenantAccessToken(),
+    tenantPortal: true,
+  });
 }
 
 export async function fetchAvailableTenantVms(): Promise<TenantVmsResult> {
