@@ -21,7 +21,10 @@ import {
   updateProjectForAdmin,
   type OrgProject,
   type ProjectReportByServiceRow,
+  type ProjectSupportAgent,
 } from '@/lib/projectsApi';
+import { fetchSupportAgents } from '@/lib/supportApi';
+import { ProjectSupportAgentSection } from '@/components/console/ProjectSupportAgentSection';
 
 function formatDate(iso: string): string {
   try {
@@ -87,6 +90,17 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
     project: OrgProject;
   } | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+
+  const loadSupportAgents = useCallback(async (): Promise<ProjectSupportAgent[]> => {
+    const agents = await fetchSupportAgents();
+    return agents
+      .filter((agent) => agent.isActive)
+      .map((agent) => ({
+        id: agent._id,
+        name: agent.name?.trim() || agent.email,
+        email: agent.email,
+      }));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -665,6 +679,21 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
                     {error}
                   </div>
                 )}
+
+                <ProjectSupportAgentSection
+                  supportAgent={detailProject.supportAgent}
+                  canManage
+                  disabled={detailProject.status === 'archived'}
+                  loadAgents={loadSupportAgents}
+                  onSave={async (supportAgentId) => {
+                    const updated = await updateProjectForAdmin(adminId, detailProject.id, {
+                      supportAgentId,
+                    });
+                    setDetailProject(updated);
+                    setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+                    setFlash('Support agent updated.');
+                  }}
+                />
 
                 <div>
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">

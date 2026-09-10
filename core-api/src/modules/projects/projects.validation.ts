@@ -21,6 +21,7 @@ export const createProjectSchema = z.object({
       enabledServices: z.array(adminServiceKeySchema).min(1),
       reminderEmails: z.array(emailSchema).max(10).optional(),
       autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional(),
     })
     .refine((d) => d.startDate <= d.endDate, {
       message: 'endDate must be on or after startDate',
@@ -39,6 +40,7 @@ export const updateProjectSchema = z.object({
       endDate: z.coerce.date().optional().nullable(),
       reminderEmails: z.array(emailSchema).max(10).optional().nullable(),
       autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional().nullable(),
     })
     .refine(
       (d) => {
@@ -89,6 +91,7 @@ export const createProjectForAdminSchema = z.object({
       enabledServices: z.array(adminServiceKeySchema).min(1),
       reminderEmails: z.array(emailSchema).max(10).optional(),
       autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional(),
     })
     .refine((d) => d.startDate <= d.endDate, {
       message: 'endDate must be on or after startDate',
@@ -112,6 +115,7 @@ export const createProjectForTenantSchema = z.object({
       enabledServices: z.array(adminServiceKeySchema).min(1),
       reminderEmails: z.array(emailSchema).max(10).optional(),
       autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional(),
     })
     .refine((d) => d.startDate <= d.endDate, {
       message: 'endDate must be on or after startDate',

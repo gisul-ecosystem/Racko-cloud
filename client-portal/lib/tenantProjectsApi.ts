@@ -5,9 +5,16 @@ import type {
   ProjectNamePreview,
   ProjectReportByProjectRow,
   ProjectReportByServiceRow,
+  ProjectSupportAgent,
 } from './projectsApi';
 
-export type { OrgProject, ProjectNamePreview, ProjectReportByProjectRow, ProjectReportByServiceRow };
+export type {
+  OrgProject,
+  ProjectNamePreview,
+  ProjectReportByProjectRow,
+  ProjectReportByServiceRow,
+  ProjectSupportAgent,
+};
 export { PROJECT_SERVICE_LABELS } from './projectsApi';
 export {
   formatReminderEmailsInput,
@@ -87,6 +94,13 @@ export async function createTenantProject(input: {
   return data.project;
 }
 
+export async function fetchTenantProjectSupportAgents(): Promise<ProjectSupportAgent[]> {
+  const data = await unwrap<{ agents: ProjectSupportAgent[] }>(
+    tenantPortalRequest(`${BASE}/support-agents`)
+  );
+  return data.agents;
+}
+
 export async function updateTenantProject(
   id: string,
   input: {
@@ -97,6 +111,7 @@ export async function updateTenantProject(
     endDate?: string | null;
     reminderEmails?: string[] | null;
     autoArchiveEnabled?: boolean;
+    supportAgentId?: string | null;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(

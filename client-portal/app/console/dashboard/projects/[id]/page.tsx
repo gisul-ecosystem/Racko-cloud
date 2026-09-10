@@ -25,7 +25,10 @@ import {
   type ProjectReportByServiceRow,
 } from '@/lib/tenantProjectsApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
+import { ProjectDetailNav } from '@/components/console/ProjectDetailNav';
+import { ProjectTicketList } from '@/components/console/ProjectTicketList';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import {
   getServiceLaunchHref,
@@ -170,6 +173,7 @@ export default function TenantProjectDetailPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const id = String(params?.id || '');
+  const { isTenantAdmin } = useTenantRbac();
 
   const [project, setProject] = useState<OrgProject | null>(null);
   const [available, setAvailable] = useState<AdminServiceKey[]>([]);
@@ -368,6 +372,9 @@ export default function TenantProjectDetailPage() {
   const daysRemaining = daysUntilEndDate(project.endDate);
   const showExpiryBanner =
     !archived && daysRemaining != null && daysRemaining >= 0 && daysRemaining <= 7;
+  const supportTab = searchParams.get('tab') === 'support';
+  const projectBasePath = tenantConsole.project(project.id);
+  const transactionsPath = `${projectBasePath}/transactions`;
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-8 pb-10">
@@ -458,7 +465,7 @@ export default function TenantProjectDetailPage() {
         </div>
       )}
 
-      {showExpiryBanner && (
+      {showExpiryBanner && !supportTab && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p className="font-medium">
             {daysRemaining === 0
@@ -474,6 +481,33 @@ export default function TenantProjectDetailPage() {
         </div>
       )}
 
+      <ProjectDetailNav basePath={projectBasePath} transactionsPath={transactionsPath} />
+
+      {supportTab ? (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-gray-900">Support Tickets</h3>
+              <p className="text-sm text-gray-500">Tickets raised for this project</p>
+            </div>
+            {!archived && (
+              <Link
+                href={`${tenantConsole.supportNew}?projectId=${encodeURIComponent(project.id)}`}
+                className="inline-flex items-center rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#991B1B]"
+              >
+                + Raise a Ticket
+              </Link>
+            )}
+          </div>
+          <ProjectTicketList
+            projectId={project.id}
+            mode="tenant"
+            isTenantAdmin={isTenantAdmin}
+            ticketHref={(ticketId) => tenantConsole.supportTicket(ticketId)}
+          />
+        </div>
+      ) : (
+        <>
       <section>
         <div className="mb-4 flex items-center justify-between">
           <div>
@@ -559,6 +593,8 @@ export default function TenantProjectDetailPage() {
           </div>
         )}
       </section>
+        </>
+      )}
 
       {/* Edit project modal */}
       {editOpen && !archived && (
