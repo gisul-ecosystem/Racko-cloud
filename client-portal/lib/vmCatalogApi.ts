@@ -109,6 +109,10 @@ export interface ICatalogVm {
   region?: string;
   providerInstanceId?: string;
   azureResourceGroup?: string;
+  /** End of the paid provider term. Absent until the VM is attached. */
+  expiresAt?: string;
+  /** false = manually fulfilled (Webyne), so no automatic teardown. */
+  autoProvisioned?: boolean;
   attachedAt?: string;
   rejectionReason?: string;
   reviewedBy?: string;
@@ -878,6 +882,47 @@ export async function ownedCatalogVmPowerAction(
     method: 'POST',
     body: JSON.stringify({ action, ...(instanceId ? { instanceId } : {}) }),
   });
+  return res.data;
+}
+
+/** Super-admin: push a provider term's end date out after renewing. */
+export async function extendCatalogVmExpiry(
+  id: string,
+  expiresAt: string
+): Promise<ICatalogVm> {
+  const res = await apiRequest<ApiResponse<{ vm: ICatalogVm }>>(
+    `/api/v1/vm-catalog/vms/${id}/extend`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ expiresAt }),
+    }
+  );
+  return res.data.vm;
+}
+
+export interface DeleteCatalogVmResult {
+  planName: string;
+  ipAddresses: string[];
+  instancesDeleted: number;
+  ownerLabel: string | null;
+}
+
+/**
+ * Super-admin: erase a catalog VM from Racko. `confirmTerminatedAtProvider`
+ * asserts the machine is already gone at the provider, which the API demands
+ * for VMs that are still live — Racko cannot terminate Webyne itself.
+ */
+export async function deleteCatalogVm(
+  id: string,
+  confirmTerminatedAtProvider: boolean
+): Promise<DeleteCatalogVmResult> {
+  const res = await apiRequest<ApiResponse<DeleteCatalogVmResult>>(
+    `/api/v1/vm-catalog/vms/${id}`,
+    {
+      method: 'DELETE',
+      body: JSON.stringify({ confirmTerminatedAtProvider }),
+    }
+  );
   return res.data;
 }
 

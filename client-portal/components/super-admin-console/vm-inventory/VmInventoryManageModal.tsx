@@ -212,10 +212,15 @@ export function VmInventoryManageModal({
       setNewPassword('');
     });
 
-  function startEditLogin(credentialId: string, username: string) {
+  /**
+   * Open the edit form on a login, prefilled with the stored password so it can
+   * be read and tweaked rather than retyped. Empty when it would not decrypt,
+   * which the save then treats as "keep whatever is stored".
+   */
+  function startEditLogin(credentialId: string, username: string, password: string) {
     setEditingCredentialId(credentialId);
     setEditUsername(username);
-    setEditPassword('');
+    setEditPassword(password);
     setError(null);
   }
 
@@ -490,11 +495,10 @@ export function VmInventoryManageModal({
                           </div>
                           <div>
                             <label className="mb-1 block text-xs font-medium text-gray-600">
-                              New password
+                              Password
                             </label>
                             <input
-                              className={inputClass}
-                              type="password"
+                              className={`${inputClass} font-mono`}
                               value={editPassword}
                               onChange={(e) => setEditPassword(e.target.value)}
                               placeholder="Leave blank to keep current"
@@ -523,10 +527,29 @@ export function VmInventoryManageModal({
                       </div>
                     ) : (
                       <div className="flex items-center justify-between gap-3">
-                        <p className="font-mono text-sm text-gray-900">{cred.username}</p>
+                        <div className="min-w-0">
+                          <p className="font-mono text-sm text-gray-900">{cred.username}</p>
+                          {cred.password ? (
+                            <p className="select-all break-all font-mono text-xs text-gray-500">
+                              {cred.password}
+                            </p>
+                          ) : cred.hasPassword ? (
+                            <p className="text-xs text-amber-600">
+                              Password unreadable — re-enter it below
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400">No password stored</p>
+                          )}
+                        </div>
                         <button
                           type="button"
-                          onClick={() => startEditLogin(cred.credentialId!, cred.username ?? '')}
+                          onClick={() =>
+                            startEditLogin(
+                              cred.credentialId!,
+                              cred.username ?? '',
+                              cred.password ?? ''
+                            )
+                          }
                           disabled={busy}
                           className="text-xs font-semibold text-[#B91C1C] hover:underline disabled:opacity-50"
                         >
@@ -596,8 +619,7 @@ export function VmInventoryManageModal({
                     placeholder="Username"
                   />
                   <input
-                    className={inputClass}
-                    type="password"
+                    className={`${inputClass} font-mono`}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="Password"

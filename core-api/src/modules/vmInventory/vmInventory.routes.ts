@@ -13,7 +13,9 @@ import {
   bulkUnassignServersSchema,
   credentialIdParamSchema,
   importRowsSchema,
+  installRunIdParamSchema,
   installSoftwareSchema,
+  listInstallRunsSchema,
   listVmInventorySchema,
   mapOwnerSchema,
   ownerQuerySchema,
@@ -139,6 +141,17 @@ router.post(
   canWrite,
   validateRequest(installSoftwareSchema),
   (req, res, next) => vmInventoryController.installSoftware(req, res, next)
+);
+
+// Reading a past install batch needs nothing beyond the router-wide read gate.
+router.get('/install-runs', validateRequest(listInstallRunsSchema), (req, res, next) =>
+  vmInventoryController.listInstallRuns(req, res, next)
+);
+
+router.get(
+  '/install-runs/:runId',
+  validateRequest(installRunIdParamSchema),
+  (req, res, next) => vmInventoryController.getInstallRun(req, res, next)
 );
 
 router.post(

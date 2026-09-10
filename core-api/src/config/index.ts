@@ -265,6 +265,15 @@ const envSchema = z.object({
     .transform(Number)
     .default('300000'),
 
+  // Catalog VM — warn the owner and super admins this many days before a paid
+  // provider term ends. Manual Webyne VMs cannot be torn down automatically,
+  // so a super admin has to renew or terminate by hand before this date.
+  CATALOG_VM_EXPIRY_WARNING_DAYS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .default('2'),
+
   // SeaweedFS S3-compatible object storage (used for VM activity file tracking + clone replay)
   SEAWEEDFS_ENDPOINT:   z.string().url('SEAWEEDFS_ENDPOINT must be a valid URL').default('https://s3api.gisul.co.in'),
   SEAWEEDFS_ACCESS_KEY: z.string().min(1, 'SEAWEEDFS_ACCESS_KEY is required'),

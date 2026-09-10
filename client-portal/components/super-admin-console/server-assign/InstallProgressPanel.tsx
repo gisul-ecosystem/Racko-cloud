@@ -47,15 +47,22 @@ function JobStreamSubscriber({
  * Live view of the install jobs queued by an assignment batch, grouped by VM.
  * Jobs are owned by the super admin who started them, so their streams are
  * readable from here without leaving the assign flow.
+ *
+ * The prop is narrowed to the three fields it actually reads so a recorded run
+ * fetched later renders identically to a fresh install — same grouping, same
+ * live SSE, no snapshot of stale statuses.
  */
 export function InstallProgressPanel({
   result,
   catalog,
   isAuthenticated,
+  frame = 'card',
 }: {
-  result: InstallSoftwareResult;
+  result: Pick<InstallSoftwareResult, 'jobs' | 'targets' | 'notManaged'>;
   catalog: ISoftwareCatalog[];
   isAuthenticated: boolean;
+  /** `plain` drops the outer card, for nesting inside one. */
+  frame?: 'card' | 'plain';
 }) {
   const [jobs, setJobs] = useState<IJob[]>(result.jobs);
 
@@ -105,7 +112,7 @@ export function InstallProgressPanel({
   };
 
   return (
-    <section className="rounded-xl border border-gray-100 bg-white p-5">
+    <section className={frame === 'card' ? 'rounded-xl border border-gray-100 bg-white p-5' : ''}>
       {jobs.map((job) => (
         <JobStreamSubscriber
           key={job._id}

@@ -200,6 +200,14 @@ machineRouter.post(
   (req, res, next) => machineManagerController.execCommand(req, res, next)
 );
 
+// GET /api/v1/machines/:id/jobs — list jobs for a specific machine (scoped, fast)
+machineRouter.get(
+  '/:id/jobs',
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
+  validateRequest(machineIdParamSchema),
+  (req, res, next) => machineManagerController.listMachineJobs(req, res, next)
+);
+
 // DELETE /api/v1/machines/:id/jobs — clear all jobs for a specific machine
 machineRouter.delete(
   '/:id/jobs',
