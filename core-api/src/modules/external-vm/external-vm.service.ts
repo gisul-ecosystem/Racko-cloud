@@ -481,7 +481,13 @@ class ExternalVMService {
   }
 
   async listExternalVMs(adminId: mongoose.Types.ObjectId): Promise<ExternalVMResponse[]> {
-    const docs = await ExternalVMModel.find({ adminId, source: { $in: ['admin_import', 'tenant_import'] } }).sort({ createdAt: -1 });
+    // Elastic Servers is the admin's own import surface. Servers attached via
+    // super-admin Server Assign (source: superadmin_bulk) belong on My VM
+    // Dashboard instead — never mix the two lists.
+    const docs = await ExternalVMModel.find({
+      adminId,
+      source: { $in: ['admin_import', 'tenant_import'] },
+    }).sort({ createdAt: -1 });
     const summaries = await this.loadPlatformAssignmentSummaries(docs);
     return docs.map((doc) =>
       this.toResponse(doc, {
@@ -599,20 +605,60 @@ class ExternalVMService {
   }
 
   async getAssignedCounts(adminId: mongoose.Types.ObjectId): Promise<Record<string, number>> {
-    const results = await ExternalVMModel.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
-      { $match: { adminId, assignedTo: { $ne: null } } },
+    // Prefer the junction table (inventory mirrors + multi-assign). Fall back to
+    // the legacy ExternalVM.assignedTo field only for VMs that have no junction
+    // row yet, so a VM that still has both fields is not double-counted.
+    const activeStatus = {
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    };
+    const [junction, junctionVmIds] = await Promise.all([
+      ExternalVmUserAssignmentModel.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
+        { $match: { adminId, ...activeStatus } },
+        { $group: { _id: '$userId', count: { $sum: 1 } } },
+      ]),
+      ExternalVmUserAssignmentModel.distinct('externalVmId', { adminId, ...activeStatus }),
+    ]);
+
+    const legacy = await ExternalVMModel.aggregate<{
+      _id: mongoose.Types.ObjectId;
+      count: number;
+    }>([
+      {
+        $match: {
+          adminId,
+          assignedTo: { $ne: null },
+          _id: { $nin: junctionVmIds },
+        },
+      },
       { $group: { _id: '$assignedTo', count: { $sum: 1 } } },
     ]);
 
     const map: Record<string, number> = {};
-    for (const r of results) {
+    for (const r of junction) {
       map[r._id.toString()] = r.count;
+    }
+    for (const r of legacy) {
+      const key = r._id.toString();
+      map[key] = (map[key] ?? 0) + r.count;
     }
     return map;
   }
 
   async getAvailableExternalVMs(adminId: mongoose.Types.ObjectId): Promise<ExternalVMResponse[]> {
-    const docs = await ExternalVMModel.find({ adminId, assignedTo: null }).sort({ createdAt: -1 });
+    // Inventory mirrors are owned by Server Assign / VM Inventory — keep them out
+    // of the elastic-server "available to assign" pool so admins don't re-grant
+    // them through the legacy path. Also skip anything already granted via the
+    // junction (assignedTo alone misses inventory mirrors).
+    const takenIds = await ExternalVmUserAssignmentModel.distinct('externalVmId', {
+      adminId,
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    });
+    const docs = await ExternalVMModel.find({
+      adminId,
+      assignedTo: null,
+      source: { $in: ['admin_import', 'tenant_import'] },
+      _id: { $nin: takenIds },
+    }).sort({ createdAt: -1 });
     return docs.map((doc) => this.toResponse(doc));
   }
 
@@ -626,7 +672,21 @@ class ExternalVMService {
       throw new ForbiddenError('You can only manage users you created.');
     }
 
-    const docs = await ExternalVMModel.find({ adminId, assignedTo: targetUserId }).sort({ createdAt: -1 });
+    // Inventory mirrors write ExternalVmUserAssignment and leave assignedTo null,
+    // so the junction is the primary source; legacy assignedTo covers older rows.
+    const junction = await ExternalVmUserAssignmentModel.find({
+      adminId,
+      userId: targetUserId,
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    })
+      .select('externalVmId')
+      .lean();
+    const fromJunction = junction.map((j) => j.externalVmId);
+
+    const docs = await ExternalVMModel.find({
+      adminId,
+      $or: [{ assignedTo: targetUserId }, { _id: { $in: fromJunction } }],
+    }).sort({ createdAt: -1 });
     return docs.map((doc) => this.toResponse(doc));
   }
 
@@ -864,9 +924,18 @@ class ExternalVMService {
     const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
     await migrateLegacyExternalVmAssignments(tenantId);
 
+    // Tenant admins manage only VMs they imported themselves. End users still
+    // need Server Assign mirrors (superadmin_bulk) on their personal My VMs
+    // view, which reuses this endpoint with an assignment filter.
+    const ownSources = ['admin_import', 'tenant_import'] as const;
     const query: Record<string, unknown> = {
       tenantId,
-      source: { $in: ['admin_import', 'tenant_import', 'superadmin_bulk'] },
+      source: {
+        $in:
+          actor.role === 'tenant_user'
+            ? [...ownSources, 'superadmin_bulk']
+            : [...ownSources],
+      },
     };
     if (actor.role === 'tenant_user') {
       const assignedIds = await getExternalVmIdsForTenantUser(

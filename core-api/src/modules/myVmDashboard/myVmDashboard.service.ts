@@ -72,6 +72,7 @@ function externalOrigin(source: ExternalVMSource): {
   originServiceLabel: MyVmOriginServiceLabel;
 } {
   if (source === 'superadmin_bulk') {
+    // Attached by super-admin Server Assign — shown on My VMs, not Elastic Servers.
     return { originServiceKey: 'external-vm', originServiceLabel: 'External VM Import' };
   }
   return { originServiceKey: 'elastic-servers', originServiceLabel: 'Elastic Server Import' };
