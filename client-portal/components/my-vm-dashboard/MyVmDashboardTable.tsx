@@ -8,8 +8,9 @@ import { formatAssignmentHolders } from '@/lib/externalVmAssignmentFormat';
 import type { CatalogVmPowerAction, ICatalogVm } from '@/lib/vmCatalogApi';
 import { CatalogVmDashboardDetails } from '@/components/my-vm-dashboard/CatalogVmDashboardDetails';
 import { CatalogVmPowerControls } from '@/components/create-vm/CatalogVmPowerControls';
-import Link from 'next/link';
-import { ChevronDown, ChevronUp, Monitor, ExternalLink } from 'lucide-react';
+import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
+import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
+import { ChevronDown, ChevronUp, Monitor } from 'lucide-react';
 
 const SOURCE_BADGE_STYLES: Record<MyVmOriginServiceLabel, string> = {
   'VPS Hosting': 'border-red-200 bg-red-50 text-red-700',
@@ -17,6 +18,20 @@ const SOURCE_BADGE_STYLES: Record<MyVmOriginServiceLabel, string> = {
   'Elastic Server Import': 'border-teal-200 bg-teal-50 text-teal-700',
   'External VM Import': 'border-slate-200 bg-slate-100 text-slate-700',
 };
+
+/**
+ * Tenant auth lives in sessionStorage, so a plain new-tab navigation drops the
+ * session and the auth gate bounces to login. Hand the session through `_s`
+ * the same way the elastic-servers list does. Platform auth is shared across
+ * tabs, so a normal window.open is enough there.
+ */
+function openConsoleInNewTab(path: string): void {
+  if (path.startsWith(TENANT_CONSOLE)) {
+    openTenantUrlWithSession(path);
+    return;
+  }
+  window.open(path, '_blank', 'noopener,noreferrer');
+}
 
 export function rowKey(row: MyVmDashboardRow): string {
   return `${row.resourceType}:${row._id}:${row.instanceId ?? ''}`;
@@ -139,13 +154,14 @@ function ActionButtons({
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {row.canConsole && row.consolePath ? (
-        <Link
-          href={row.consolePath}
+        <button
+          type="button"
+          onClick={() => openConsoleInNewTab(row.consolePath!)}
           className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717]"
         >
           <Monitor className="h-3.5 w-3.5" />
           Console
-        </Link>
+        </button>
       ) : (
         <span
           className="inline-flex items-center rounded-md border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-400"
@@ -164,14 +180,6 @@ function ActionButtons({
           {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           {isExpanded ? 'Hide' : 'Details'}
         </button>
-      ) : row.managePath ? (
-        <Link
-          href={row.managePath}
-          className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          Open
-        </Link>
       ) : null}
     </div>
   );
