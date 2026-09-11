@@ -10,7 +10,7 @@ import { User } from '../../models/user.model';
 import { CatalogVmModel } from '../../models/catalogVm.model';
 import { CatalogVmInstanceModel } from '../../models/catalogVmInstance.model';
 import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
-import { getVmInventorySettings } from '../../models/vmInventorySettings.model';
+import { getVmInventorySettings, resolveProviderExpiryWarningDays } from '../../models/vmInventorySettings.model';
 import { InstallRunModel } from '../../models/installRun.model';
 import { VM } from '../vm/vm.model';
 import { SoftwareCatalogModel } from '../software-catalog/software-catalog.model';
@@ -1470,13 +1470,14 @@ class VmInventoryService {
     const settings = await getVmInventorySettings();
     return {
       providerExpiryRecipients: settings.providerExpiryRecipients,
-      warningDays: config.INVENTORY_PROVIDER_EXPIRY_WARNING_DAYS,
+      warningDays: resolveProviderExpiryWarningDays(settings.warningDays),
     };
   }
 
   async updateNotificationSettings(
     recipients: string[],
-    updatedBy: mongoose.Types.ObjectId
+    updatedBy: mongoose.Types.ObjectId,
+    warningDays?: number
   ): Promise<InventoryNotificationSettings> {
     // Case and order are noise here; a duplicate address would just mail twice.
     const cleaned = [
@@ -1485,12 +1486,15 @@ class VmInventoryService {
 
     const settings = await getVmInventorySettings();
     settings.providerExpiryRecipients = cleaned;
+    if (warningDays !== undefined) {
+      settings.warningDays = warningDays;
+    }
     settings.updatedBy = updatedBy;
     await settings.save();
 
     return {
       providerExpiryRecipients: cleaned,
-      warningDays: config.INVENTORY_PROVIDER_EXPIRY_WARNING_DAYS,
+      warningDays: resolveProviderExpiryWarningDays(settings.warningDays),
     };
   }
 }

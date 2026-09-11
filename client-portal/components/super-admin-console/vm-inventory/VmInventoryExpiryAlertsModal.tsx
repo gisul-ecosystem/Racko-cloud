@@ -9,9 +9,27 @@ import {
 } from '@/lib/vmInventoryApi';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_WARNING_DAYS = 0;
+const MAX_WARNING_DAYS = 30;
+
+const LEAD_PRESETS: Array<{ days: number; label: string; hint: string }> = [
+  { days: 0, label: 'Today', hint: 'On the expiry day' },
+  { days: 1, label: '1 day before', hint: 'The day before expiry' },
+  { days: 2, label: '2 days before', hint: 'Two days before expiry' },
+  { days: 3, label: '3 days before', hint: 'Three days before expiry' },
+  { days: 7, label: '7 days before', hint: 'One week before expiry' },
+];
+
+const PRESET_DAYS = new Set(LEAD_PRESETS.map((p) => p.days));
+
+function warningDaysCaption(days: number): string {
+  if (days === 0) return 'Sent on the provider end date';
+  if (days === 1) return 'Sent 1 day before a provider end date';
+  return `Sent ${days} days before a provider end date`;
+}
 
 /**
- * Who hears about provider contracts running out.
+ * Who hears about provider contracts running out, and how far ahead.
  *
  * The alert itself is one email covering every VM in the window, so this is a
  * single inventory-wide list rather than a setting per machine.
@@ -19,12 +37,15 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void }) {
   const [emails, setEmails] = useState<string[]>([]);
   const [warningDays, setWarningDays] = useState(2);
+  const [customDays, setCustomDays] = useState('');
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const usingCustom = !PRESET_DAYS.has(warningDays);
 
   useEffect(() => {
     let active = true;
@@ -33,9 +54,12 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
         if (!active) return;
         setEmails(settings.providerExpiryRecipients);
         setWarningDays(settings.warningDays);
+        if (!PRESET_DAYS.has(settings.warningDays)) {
+          setCustomDays(String(settings.warningDays));
+        }
       })
       .catch(() => {
-        if (active) setError('Could not load the alert recipients.');
+        if (active) setError('Could not load the alert settings.');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -43,6 +67,28 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
     return () => {
       active = false;
     };
+  }, []);
+
+  const chooseDays = useCallback((days: number) => {
+    setError(null);
+    setSaved(false);
+    setWarningDays(days);
+    setCustomDays('');
+    setDirty(true);
+  }, []);
+
+  const applyCustomDays = useCallback((raw: string) => {
+    setCustomDays(raw);
+    const parsed = Number.parseInt(raw, 10);
+    if (raw.trim() === '' || !Number.isInteger(parsed)) return;
+    if (parsed < MIN_WARNING_DAYS || parsed > MAX_WARNING_DAYS) {
+      setError(`Lead time must be between ${MIN_WARNING_DAYS} and ${MAX_WARNING_DAYS} days.`);
+      return;
+    }
+    setError(null);
+    setSaved(false);
+    setWarningDays(parsed);
+    setDirty(true);
   }, []);
 
   const add = useCallback(() => {
@@ -70,16 +116,17 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
     setSaving(true);
     setError(null);
     try {
-      const next = await updateInventoryNotificationSettings(emails);
+      const next = await updateInventoryNotificationSettings(emails, warningDays);
       setEmails(next.providerExpiryRecipients);
+      setWarningDays(next.warningDays);
       setDirty(false);
       setSaved(true);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not save the recipients.');
+      setError(err instanceof ApiError ? err.message : 'Could not save the alert settings.');
     } finally {
       setSaving(false);
     }
-  }, [emails]);
+  }, [emails, warningDays]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8">
@@ -90,9 +137,7 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Contract expiry alerts</h2>
               <p className="mt-0.5 text-sm text-gray-500">
-                {loading
-                  ? 'Loading…'
-                  : `Sent ${warningDays} day${warningDays === 1 ? '' : 's'} before a provider end date`}
+                {loading ? 'Loading…' : warningDaysCaption(warningDays)}
               </p>
             </div>
           </div>
@@ -116,10 +161,56 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
           {loading ? (
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Loading recipients…
+              Loading settings…
             </div>
           ) : (
             <>
+              <div>
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">
+                  When to send
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {LEAD_PRESETS.map((preset) => {
+                    const selected = warningDays === preset.days && !usingCustom;
+                    return (
+                      <button
+                        key={preset.days}
+                        type="button"
+                        title={preset.hint}
+                        onClick={() => chooseDays(preset.days)}
+                        className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                          selected
+                            ? 'bg-[#B91C1C] text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <label
+                    htmlFor="custom-warning-days"
+                    className="shrink-0 text-xs font-medium text-gray-500"
+                  >
+                    Custom days
+                  </label>
+                  <input
+                    id="custom-warning-days"
+                    type="number"
+                    min={MIN_WARNING_DAYS}
+                    max={MAX_WARNING_DAYS}
+                    inputMode="numeric"
+                    value={usingCustom ? customDays || String(warningDays) : customDays}
+                    onChange={(e) => applyCustomDays(e.target.value)}
+                    placeholder="0–30"
+                    className="w-24 rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20"
+                  />
+                  <span className="text-xs text-gray-400">0 = today, 1 = one day before</span>
+                </div>
+              </div>
+
               <div>
                 <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">
                   Recipients
@@ -204,7 +295,7 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
             ) : (
               <CheckCircle2 className="h-4 w-4" />
             )}
-            Save recipients
+            Save settings
           </button>
         </div>
       </div>

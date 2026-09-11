@@ -162,7 +162,8 @@ class VmInventoryController {
       const authReq = req as AuthenticatedRequest;
       const data = await vmInventoryService.updateNotificationSettings(
         req.body.providerExpiryRecipients,
-        new mongoose.Types.ObjectId(authReq.user.userId)
+        new mongoose.Types.ObjectId(authReq.user.userId),
+        req.body.warningDays
       );
       success(res, 'Notification settings saved.', data);
     } catch (err) {

@@ -168,82 +168,123 @@ class InventoryExternalVmMirrorService {
     const serverById = new Map(servers.map((s) => [s._id.toString(), s]));
     const projectById = new Map(projects.map((p) => [p._id.toString(), p]));
 
+    const failures: string[] = [];
     for (const assignment of assignments) {
-      const cred = credById.get(assignment.credentialId.toString());
-      const server = serverById.get(assignment.serverId.toString());
-      if (!cred || !server) continue;
+      try {
+        const cred = credById.get(assignment.credentialId.toString());
+        const server = serverById.get(assignment.serverId.toString());
+        if (!cred || !server) {
+          failures.push(assignment._id.toString());
+          logger.warn('[InventoryMirror] Missing credential or server for assignment', {
+            assignmentId: assignment._id.toString(),
+            credentialId: assignment.credentialId.toString(),
+            serverId: assignment.serverId.toString(),
+          });
+          continue;
+        }
 
-      if (assignment.assigneeType === 'platform_user' && !assignment.adminId) {
-        // ExternalVmUserAssignment requires an owning admin; without one the
-        // platform "my assigned" query has nothing to scope by.
-        logger.warn('[InventoryMirror] Skipped platform grant with no owning admin', {
-          assignmentId: assignment._id.toString(),
-        });
-        continue;
-      }
+        if (assignment.assigneeType === 'platform_user' && !assignment.adminId) {
+          // ExternalVmUserAssignment requires an owning admin; without one the
+          // platform "my assigned" query has nothing to scope by.
+          logger.warn('[InventoryMirror] Skipped platform grant with no owning admin', {
+            assignmentId: assignment._id.toString(),
+          });
+          continue;
+        }
+        if (assignment.assigneeType === 'tenant_user' && !assignment.tenantId) {
+          logger.warn('[InventoryMirror] Skipped tenant grant with no tenantId', {
+            assignmentId: assignment._id.toString(),
+          });
+          continue;
+        }
 
-      const project = projectById.get(assignment.projectId.toString());
-      const schedule = toAssignmentSchedule(assignment, project ?? {});
+        const project = projectById.get(assignment.projectId.toString());
+        const schedule = toAssignmentSchedule(assignment, project ?? {});
+        const protocol =
+          server.vmType === 'rdp' || server.vmType === 'ssh' || server.vmType === 'vnc'
+            ? server.vmType
+            : 'rdp';
 
-      const mirror = await ExternalVMModel.findOneAndUpdate(
-        {
-          source: MIRROR_SOURCE,
-          ipAddress: server.ipAddress,
-          username: cred.username,
-          ...ownerFilter(assignment),
-        },
-        {
-          $set: {
-            name: `${cred.username}@${server.ipAddress}`,
-            protocol: server.vmType,
-            // Already AES-encrypted by the inventory with the same key, so the
-            // ciphertext moves across as-is rather than being re-encrypted.
-            password: cred.password,
-            projectId: assignment.projectId,
-            updatedAt: new Date(),
-          },
-          $setOnInsert: {
+        const mirror = await ExternalVMModel.findOneAndUpdate(
+          {
             source: MIRROR_SOURCE,
             ipAddress: server.ipAddress,
             username: cred.username,
             ...ownerFilter(assignment),
           },
-        },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
-      );
-
-      const grant = {
-        schedule,
-        status: 'active' as const,
-        accessOverride: Boolean(assignment.accessOverride),
-        accessOverrideUntil: assignment.accessOverride
-          ? assignment.accessOverrideUntil ?? null
-          : null,
-      };
-
-      if (assignment.assigneeType === 'tenant_user') {
-        await ExternalVmTenantAssignmentModel.updateOne(
           {
-            tenantId: assignment.tenantId,
-            externalVmId: mirror._id,
-            tenantUserId: assignment.assigneeId,
-          },
-          { $set: grant, $setOnInsert: { createdAt: new Date() } },
-          { upsert: true }
-        );
-      } else {
-        await ExternalVmUserAssignmentModel.updateOne(
-          { externalVmId: mirror._id, userId: assignment.assigneeId },
-          {
-            $set: { ...grant, adminId: assignment.adminId },
+            $set: {
+              name: `${cred.username}@${server.ipAddress}`,
+              protocol,
+              // Already AES-encrypted by the inventory with the same key, so the
+              // ciphertext moves across as-is rather than being re-encrypted.
+              password: cred.password,
+              projectId: assignment.projectId,
+              ...(assignment.assigneeType === 'tenant_user'
+                ? { assignedTenantUserId: assignment.assigneeId }
+                : { assignedTo: assignment.assigneeId }),
+              updatedAt: new Date(),
+            },
             $setOnInsert: {
-              createdAt: new Date(),
-              assignedBy: assignment.assignedBy ?? assignment.assigneeId,
+              source: MIRROR_SOURCE,
+              ipAddress: server.ipAddress,
+              username: cred.username,
+              ...ownerFilter(assignment),
             },
           },
-          { upsert: true }
+          { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
         );
+
+        if (!mirror) {
+          failures.push(assignment._id.toString());
+          continue;
+        }
+
+        const grant = {
+          schedule,
+          status: 'active' as const,
+          accessOverride: Boolean(assignment.accessOverride),
+          accessOverrideUntil: assignment.accessOverride
+            ? assignment.accessOverrideUntil ?? null
+            : null,
+        };
+
+        if (assignment.assigneeType === 'tenant_user') {
+          await ExternalVmTenantAssignmentModel.updateOne(
+            {
+              tenantId: assignment.tenantId,
+              externalVmId: mirror._id,
+              tenantUserId: assignment.assigneeId,
+            },
+            { $set: grant, $setOnInsert: { createdAt: new Date() } },
+            { upsert: true }
+          );
+        } else {
+          await ExternalVmUserAssignmentModel.updateOne(
+            { externalVmId: mirror._id, userId: assignment.assigneeId },
+            {
+              $set: { ...grant, adminId: assignment.adminId },
+              $setOnInsert: {
+                createdAt: new Date(),
+                assignedBy: assignment.assignedBy ?? assignment.assigneeId,
+              },
+            },
+            { upsert: true }
+          );
+        }
+      } catch (err) {
+        failures.push(assignment._id.toString());
+        logger.error('[InventoryMirror] Failed to publish assignment to portal', {
+          assignmentId: assignment._id.toString(),
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
+    }
+
+    if (failures.length > 0 && failures.length === assignments.length) {
+      throw new Error(
+        `Portal mirror failed for all ${failures.length} assignment(s).`
+      );
     }
   }
 

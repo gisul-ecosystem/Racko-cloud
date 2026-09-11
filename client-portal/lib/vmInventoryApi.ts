@@ -280,7 +280,7 @@ export async function pushInventoryAgent(
 export interface InventoryNotificationSettings {
   /** Alerted before a provider contract lapses. Empty means nobody is told. */
   providerExpiryRecipients: string[];
-  /** How many days ahead the alert goes out, from server config. */
+  /** Days before expiry to send. `0` is the expiry day itself. */
   warningDays: number;
 }
 
@@ -292,13 +292,14 @@ export async function fetchInventoryNotificationSettings(): Promise<InventoryNot
 }
 
 export async function updateInventoryNotificationSettings(
-  providerExpiryRecipients: string[]
+  providerExpiryRecipients: string[],
+  warningDays: number
 ): Promise<InventoryNotificationSettings> {
   const res = await apiRequest<ApiEnvelope<InventoryNotificationSettings>>(
     `${BASE}/notification-settings`,
     {
       method: 'PUT',
-      body: JSON.stringify({ providerExpiryRecipients }),
+      body: JSON.stringify({ providerExpiryRecipients, warningDays }),
     }
   );
   return res.data;

@@ -7,10 +7,9 @@ import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
-import { useTenantServices } from '@/context/TenantServicesContext';
 import { ApiError } from '@/lib/apiClient';
 import { hexToRgba, tenantAccentSurface } from '@/lib/tenantAccentStyles';
-import { tenantConsole } from '@/lib/tenantAdminRoutes';
+import { tenantVps } from '@/lib/tenantAdminRoutes';
 import { fetchTenantExternalVMs } from '@/lib/tenantExternalVmApi';
 import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
 import { fetchTenantVms } from '@/lib/tenantVmApi';
@@ -28,8 +27,6 @@ function ProtocolBadge({ protocol }: { protocol: string }) {
 
 export function TenantUserResourcesTabs() {
   const { accentColor } = useTenantBranding();
-  const { hasActiveService } = useTenantServices();
-  const hasElastic = hasActiveService('elastic-servers');
 
   const [vms, setVms] = useState<TenantVmSummary[]>([]);
   const [servers, setServers] = useState<IExternalVM[]>([]);
@@ -42,18 +39,35 @@ export function TenantUserResourcesTabs() {
     setLoading(true);
     setError(null);
     try {
-      const [vmResult, serverResult] = await Promise.all([
+      // Inventory grants from super-admin Server Assign. The Elastic Servers
+      // tenant product must not gate this list — that product is only for
+      // tenant-side import, not for assigned inventory visibility.
+      const [vmResult, serverResult] = await Promise.allSettled([
         fetchTenantVms(),
-        hasElastic ? fetchTenantExternalVMs() : Promise.resolve([]),
+        fetchTenantExternalVMs(),
       ]);
-      setVms(vmResult.vms);
-      setServers(serverResult);
+      if (vmResult.status === 'fulfilled') {
+        setVms(vmResult.value.vms);
+      } else {
+        setVms([]);
+      }
+      if (serverResult.status === 'fulfilled') {
+        setServers(serverResult.value);
+      } else {
+        setServers([]);
+      }
+      const vmErr = vmResult.status === 'rejected' ? vmResult.reason : null;
+      const srvErr = serverResult.status === 'rejected' ? serverResult.reason : null;
+      if (vmErr && srvErr) {
+        const err = vmErr instanceof ApiError ? vmErr : srvErr;
+        setError(err instanceof ApiError ? err.message : 'Failed to load resources.');
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load resources.');
     } finally {
       setLoading(false);
     }
-  }, [hasElastic]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -67,7 +81,7 @@ export function TenantUserResourcesTabs() {
         <div>
           <h1 className="text-lg font-semibold text-gray-900">My VMs</h1>
           <p className="text-sm text-gray-500">
-            Assigned virtual machines{hasElastic ? ' and imported servers' : ''}
+            Assigned virtual machines and servers
           </p>
         </div>
         <button
@@ -149,7 +163,7 @@ export function TenantUserResourcesTabs() {
                           </p>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-500">Imported Server</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">Assigned Server</td>
                       <td className="px-4 py-3">
                         <ProtocolBadge protocol={s.protocol} />
                       </td>
@@ -160,7 +174,7 @@ export function TenantUserResourcesTabs() {
                           disabled={blocked}
                           onClick={() => {
                             if (blocked) return;
-                            openTenantUrlWithSession(`${tenantConsole.elastic}/${s._id}/console`);
+                            openTenantUrlWithSession(tenantVps.assignedServerConsole(s._id));
                           }}
                           className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline disabled:cursor-not-allowed disabled:opacity-40 disabled:no-underline"
                           style={blocked ? undefined : accentLinkStyle}

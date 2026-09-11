@@ -11,6 +11,8 @@ export const tenantVps = {
     protocol
       ? `${TENANT_VPS}/vms/${id}/console?protocol=${encodeURIComponent(protocol)}`
       : `${TENANT_VPS}/vms/${id}/console`,
+  /** Super-admin Server Assign mirrors — not gated on the Elastic Servers product. */
+  assignedServerConsole: (id: string) => `${TENANT_VPS}/vms/assigned/${id}/console`,
   restricted: `${TENANT_VPS}/vms/restricted`,
   jobs: `${TENANT_VPS}/jobs`,
   job: (id: string) => `${TENANT_VPS}/jobs/${id}`,

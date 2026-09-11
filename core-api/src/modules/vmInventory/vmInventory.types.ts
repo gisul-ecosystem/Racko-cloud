@@ -19,7 +19,7 @@ export type InventorySource =
 export interface InventoryNotificationSettings {
   /** Alerted before a provider contract lapses. Empty means nobody is told. */
   providerExpiryRecipients: string[];
-  /** How many days ahead the alert goes out, from server config. */
+  /** Days before expiry to send. `0` is the expiry day itself. */
   warningDays: number;
 }
 
