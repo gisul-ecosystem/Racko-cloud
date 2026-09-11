@@ -28,6 +28,28 @@ function warningDaysCaption(days: number): string {
   return `Sent ${days} days before a provider end date`;
 }
 
+function dispatchCaption(dispatch: {
+  projectsSent: number;
+  vmsMarked: number;
+  vmsInWindow: number;
+  skipped: string | null;
+}): string {
+  if (dispatch.vmsMarked > 0) {
+    const vmLabel = dispatch.vmsMarked === 1 ? 'VM' : 'VMs';
+    return `Saved — emailed ${dispatch.vmsMarked} ${vmLabel} (IP and provider end date).`;
+  }
+  if (dispatch.skipped === 'no_recipients') {
+    return 'Saved — add a recipient to send the current window.';
+  }
+  if (dispatch.skipped === 'none_in_window') {
+    return 'Saved — no contracts in this lead-time window.';
+  }
+  if (dispatch.skipped === 'send_failed') {
+    return 'Saved — alerts could not be sent. Check email configuration.';
+  }
+  return 'Saved.';
+}
+
 /**
  * Who hears about provider contracts running out, and how far ahead.
  *
@@ -43,6 +65,7 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [dispatchNote, setDispatchNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const usingCustom = !PRESET_DAYS.has(warningDays);
@@ -72,6 +95,7 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
   const chooseDays = useCallback((days: number) => {
     setError(null);
     setSaved(false);
+    setDispatchNote(null);
     setWarningDays(days);
     setCustomDays('');
     setDirty(true);
@@ -87,6 +111,7 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
     }
     setError(null);
     setSaved(false);
+    setDispatchNote(null);
     setWarningDays(parsed);
     setDirty(true);
   }, []);
@@ -101,6 +126,7 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
     setError(null);
     setDraft('');
     setSaved(false);
+    setDispatchNote(null);
     setEmails((prev) => (prev.includes(value) ? prev : [...prev, value]));
     setDirty(true);
   }, [draft]);
@@ -108,6 +134,7 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
   const remove = useCallback((email: string) => {
     setError(null);
     setSaved(false);
+    setDispatchNote(null);
     setEmails((prev) => prev.filter((e) => e !== email));
     setDirty(true);
   }, []);
@@ -121,6 +148,7 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
       setWarningDays(next.warningDays);
       setDirty(false);
       setSaved(true);
+      setDispatchNote(next.dispatch ? dispatchCaption(next.dispatch) : 'Saved.');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not save the alert settings.');
     } finally {
@@ -153,10 +181,10 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
 
         <div className="space-y-4 px-6 py-5">
           <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600 ring-1 ring-gray-100">
-            One email per project: the project name and the resources on it whose
-            provider contract is ending. Each resource is reported once per end
-            date. Changing when to send can trigger immediately for projects not
-            yet mailed.
+            Lists each inventory VM’s IP and provider end date. This is not the
+            project end-date mail. Saving sends the current window to the
+            recipient list now. The hourly job still mails each VM only once
+            per provider end date.
           </div>
 
           {loading ? (
@@ -273,9 +301,13 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
 
         <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4">
           {saved && !dirty && (
-            <span className="mr-auto inline-flex items-center gap-1 text-xs text-emerald-600">
+            <span
+              className={`mr-auto inline-flex items-center gap-1 text-xs ${
+                dispatchNote?.includes('could not be sent') ? 'text-rose-600' : 'text-emerald-600'
+              }`}
+            >
               <CheckCircle2 className="h-3.5 w-3.5" />
-              Saved
+              {dispatchNote ?? 'Saved'}
             </span>
           )}
           <button

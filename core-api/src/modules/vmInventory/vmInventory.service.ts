@@ -17,7 +17,7 @@ import { decrypt, encrypt } from '../../utils/crypto';
 import { NotFoundError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { inventoryExternalVmMirrorService } from './inventoryExternalVmMirror.service';
-import { triggerProviderExpiryCheck } from './providerExpiryScheduler';
+import { runProviderExpiryCheck } from './providerExpiryScheduler';
 import { isSameUtcDay } from '../projects/projectExpiryDates';
 import type { PushVmInput } from '../machine-manager/machine-manager.service';
 import type { JobResponse } from '../machine-manager/machine-manager.types';
@@ -1494,6 +1494,11 @@ class VmInventoryService {
     ].sort();
 
     const settings = await getVmInventorySettings();
+    const previousRecipients = [
+      ...new Set(
+        settings.providerExpiryRecipients.map((e) => e.trim().toLowerCase()).filter(Boolean)
+      ),
+    ].sort();
     const previousDays = resolveProviderExpiryWarningDays(settings.warningDays);
     settings.providerExpiryRecipients = cleaned;
     if (warningDays !== undefined) {
@@ -1503,13 +1508,24 @@ class VmInventoryService {
     await settings.save();
 
     const nextDays = resolveProviderExpiryWarningDays(settings.warningDays);
-    if (warningDays !== undefined && previousDays !== nextDays) {
-      triggerProviderExpiryCheck('lead-time-changed', { force: true });
+    const recipientsChanged = previousRecipients.join('\0') !== cleaned.join('\0');
+    const daysChanged = warningDays !== undefined && previousDays !== nextDays;
+
+    let dispatch: InventoryNotificationSettings['dispatch'];
+    if (recipientsChanged || daysChanged) {
+      const result = await runProviderExpiryCheck({ force: true });
+      dispatch = {
+        projectsSent: result.projectsSent,
+        vmsMarked: result.vmsMarked,
+        vmsInWindow: result.vmsInWindow,
+        skipped: result.skipped,
+      };
     }
 
     return {
       providerExpiryRecipients: cleaned,
       warningDays: nextDays,
+      ...(dispatch ? { dispatch } : {}),
     };
   }
 }

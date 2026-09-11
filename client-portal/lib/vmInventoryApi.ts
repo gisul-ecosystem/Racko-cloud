@@ -277,11 +277,19 @@ export async function pushInventoryAgent(
   return res.data;
 }
 
+export interface InventoryNotificationDispatch {
+  projectsSent: number;
+  vmsMarked: number;
+  vmsInWindow: number;
+  skipped: 'already_sent_today' | 'none_in_window' | 'already_alerted' | 'no_recipients' | 'send_failed' | null;
+}
+
 export interface InventoryNotificationSettings {
   /** Alerted before a provider contract lapses. Empty means nobody is told. */
   providerExpiryRecipients: string[];
   /** Days before expiry to send. `0` is the expiry day itself. */
   warningDays: number;
+  dispatch?: InventoryNotificationDispatch;
 }
 
 export async function fetchInventoryNotificationSettings(): Promise<InventoryNotificationSettings> {
