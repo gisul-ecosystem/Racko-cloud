@@ -6,6 +6,9 @@ import { ChevronLeft, ChevronRight, Inbox, Loader2, RefreshCw } from 'lucide-rea
 import { ApiError } from '@/lib/apiClient';
 import {
   fetchMyTickets,
+  supportTicketProjectId,
+  supportTicketProjectLabel,
+  uniqueTicketProjects,
   type SupportTicket,
   type SupportTicketPriority,
   type SupportTicketStatus,
@@ -116,6 +119,11 @@ function TicketCard({ ticket }: { ticket: SupportTicket }) {
         <span>
           Tenant: <span className="font-mono text-gray-700">{tenantLabel(ticket.tenantId)}</span>
         </span>
+        {supportTicketProjectLabel(ticket.projectId) ? (
+          <span className="text-xs text-gray-500">
+            Project: {supportTicketProjectLabel(ticket.projectId)}
+          </span>
+        ) : null}
         <span>{formatRelativeTime(ticket.createdAt)}</span>
       </div>
 
@@ -135,6 +143,7 @@ export default function SupportAgentQueuePage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabFilter>('');
+  const [projectFilter, setProjectFilter] = useState('');
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
 
@@ -172,11 +181,21 @@ export default function SupportAgentQueuePage() {
     setPage(1);
   };
 
+  const agentProjects = useMemo(() => uniqueTicketProjects(tickets), [tickets]);
+
+  const filteredTickets = useMemo(() => {
+    if (!projectFilter) return tickets;
+    return tickets.filter(
+      (ticket) => supportTicketProjectId(ticket.projectId) === projectFilter
+    );
+  }, [tickets, projectFilter]);
+
   const emptyMessage = useMemo(() => {
+    if (projectFilter) return 'No tickets for this project';
     if (activeTab === '') return 'No tickets assigned to you';
     const tabLabel = TABS.find((t) => t.id === activeTab)?.label ?? 'matching';
     return `No ${tabLabel.toLowerCase()} tickets assigned to you`;
-  }, [activeTab]);
+  }, [activeTab, projectFilter]);
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-6">
@@ -200,24 +219,41 @@ export default function SupportAgentQueuePage() {
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {TABS.map((tab) => {
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id || 'all'}
-              type="button"
-              onClick={() => handleTabChange(tab.id)}
-              className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                isActive
-                  ? 'bg-[#B91C1C] text-white shadow-sm'
-                  : 'bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap gap-2">
+          {TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id || 'all'}
+                type="button"
+                onClick={() => handleTabChange(tab.id)}
+                className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+                  isActive
+                    ? 'bg-[#B91C1C] text-white shadow-sm'
+                    : 'bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+        <select
+          value={projectFilter}
+          onChange={(e) => {
+            setProjectFilter(e.target.value);
+            setPage(1);
+          }}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20"
+        >
+          <option value="">All Projects</option>
+          {agentProjects.map((project) => (
+            <option key={project._id} value={project._id}>
+              {project.clientName || project.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       {loading && tickets.length === 0 ? (
@@ -228,7 +264,7 @@ export default function SupportAgentQueuePage() {
         </div>
       ) : error && tickets.length === 0 ? (
         <ErrorState title="Failed to load queue" message={error} onRetry={() => void load()} />
-      ) : tickets.length === 0 ? (
+      ) : filteredTickets.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 bg-white px-6 py-16 text-center shadow-sm">
           <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-red-50">
             <Inbox className="h-6 w-6 text-[#B91C1C]" />
@@ -243,7 +279,7 @@ export default function SupportAgentQueuePage() {
             </p>
           ) : null}
           <div className="grid gap-4 sm:grid-cols-2">
-            {tickets.map((ticket) => (
+            {filteredTickets.map((ticket) => (
               <TicketCard key={ticket._id} ticket={ticket} />
             ))}
           </div>

@@ -102,6 +102,14 @@ router.get(
   (req, res, next) => externalVMController.openConsole(req, res, next)
 );
 
+// POST /api/v1/external-vms/:id/console/close
+router.post(
+  '/:id/console/close',
+  requireRole('admin', 'super_admin', 'user'),
+  validateRequest(externalVMIdParamSchema),
+  (req, res, next) => externalVMController.closeConsole(req, res, next)
+);
+
 // GET /api/v1/external-vms/:id — single external VM
 router.get(
   '/:id',

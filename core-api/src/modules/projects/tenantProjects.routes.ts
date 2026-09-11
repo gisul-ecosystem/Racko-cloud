@@ -47,6 +47,10 @@ router.get('/eligible-services', requireTenantPermission('projects.manage'), (re
   tenantProjectsController.listEligibleServices(req, res, next);
 });
 
+router.get('/support-agents', (req, res, next) => {
+  tenantProjectsController.listSupportAgents(req, res, next);
+});
+
 /** Used by service purchase flows — any authenticated tenant user can pick a project. */
 router.get('/for-service/:serviceKey', (req, res, next) => {
   tenantProjectsController.listForService(req, res, next);

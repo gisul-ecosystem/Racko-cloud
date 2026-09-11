@@ -56,6 +56,8 @@ export interface ITicket extends Document {
   tenantAssigneeName?: string;
   platformAssigneeId?: mongoose.Types.ObjectId;
   platformAssigneeName?: string;
+  /** Source project when the ticket is tied to a customer/tenant project. */
+  projectId?: mongoose.Types.ObjectId | null;
   escalatedAt?: Date;
   escalatedByTenantUserId?: mongoose.Types.ObjectId;
   escalatedByName?: string;
@@ -225,6 +227,11 @@ const ticketSchema = new Schema<ITicket>(
       type: String,
       trim: true,
       maxlength: 200,
+    },
+    projectId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Project',
+      default: null,
     },
     escalatedAt: {
       type: Date,

@@ -83,6 +83,12 @@ router.get(
 );
 
 router.post(
+  '/:vmId/console/close',
+  validateRequest(tenantVmIdParamSchema),
+  (req, res, next) => tenantVmController.closeConsole(req, res, next)
+);
+
+router.post(
   '/:vmId/start',
   validateRequest(tenantVmIdParamSchema),
   (req, res, next) => tenantVmController.startVm(req, res, next)

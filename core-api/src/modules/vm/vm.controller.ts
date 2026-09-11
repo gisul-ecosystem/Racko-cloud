@@ -626,6 +626,19 @@ export class VMController {
     }
   }
 
+  /** POST /api/v1/vms/:vmId/console/close — kill live Guacamole tunnels (idempotent). */
+  async closeConsole(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const data = await vmService.closeConsole(vmId, adminId, req);
+      success(res, 'VM console session closed.', data);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * GET /api/v1/vms/admin/all — super_admin only
    */

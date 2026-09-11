@@ -14,12 +14,16 @@ import {
   fetchEligibleProjectServicesForTenant,
   fetchProjectClientNames,
   fetchProjectClientNamesForTenant,
+  fetchSupportAgentPreview,
+  fetchSupportAgentsListForSuperAdmin,
   previewProjectName,
   previewProjectNameForAdmin,
   previewProjectNameForTenant,
   PROJECT_SERVICE_LABELS,
   type OrgProject,
+  type SupportAgentPreview,
 } from '@/lib/projectsApi';
+import { useAuth } from '@/context/AuthContext';
 import {
   createTenantProject,
   fetchTenantEligibleProjectServices,
@@ -31,17 +35,6 @@ import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 import { PROJECT_SERVICE_META } from '@/lib/projectServiceMeta';
 
 const ORG_ACCENT = '#B91C1C';
-
-function parseReminderEmails(raw: string): string[] {
-  return [
-    ...new Set(
-      raw
-        .split(/[,;\n]+/)
-        .map((part) => part.trim().toLowerCase())
-        .filter(Boolean)
-    ),
-  ].slice(0, 10);
-}
 
 export function CreateProjectModal({
   open,
@@ -67,6 +60,8 @@ export function CreateProjectModal({
    */
   owner?: { type: 'admin' | 'tenant'; id: string } | null;
 }) {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
   const accent = accentColor?.trim() || ORG_ACCENT;
   const ownerType = owner?.type ?? null;
   const ownerId = owner?.id ?? null;
@@ -83,7 +78,11 @@ export function CreateProjectModal({
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [reminderEmailsRaw, setReminderEmailsRaw] = useState('');
+  const [clientEmail, setClientEmail] = useState('');
+  const [previewAgent, setPreviewAgent] = useState<SupportAgentPreview | null>(null);
+  const [allAgents, setAllAgents] = useState<SupportAgentPreview[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [agentLoading, setAgentLoading] = useState(false);
   const [availableServices, setAvailableServices] = useState<
     { key: AdminServiceKey; label: string }[]
   >([]);
@@ -105,7 +104,13 @@ export function CreateProjectModal({
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setPreviewAgent(null);
+      setAllAgents([]);
+      setSelectedAgentId('');
+      setAgentLoading(false);
+      return;
+    }
 
     setStep('info');
     setError(null);
@@ -114,13 +119,38 @@ export function CreateProjectModal({
     setDescription('');
     setStartDate('');
     setEndDate('');
-    setReminderEmailsRaw('');
+    setClientEmail('');
+    setPreviewAgent(null);
+    setAllAgents([]);
+    setSelectedAgentId('');
     setSelectedServices(lockServices ? lockedServices : []);
     setLockable(false);
 
     let cancelled = false;
     (async () => {
       setLoading(true);
+      if (isSuperAdmin) {
+        setAgentLoading(true);
+        try {
+          const [agent, agents] = await Promise.all([
+            fetchSupportAgentPreview(),
+            fetchSupportAgentsListForSuperAdmin(),
+          ]);
+          if (!cancelled) {
+            setPreviewAgent(agent);
+            setSelectedAgentId(agent?._id ?? agents[0]?._id ?? '');
+            setAllAgents(agents);
+          }
+        } catch {
+          if (!cancelled) {
+            setPreviewAgent(null);
+            setAllAgents([]);
+            setSelectedAgentId('');
+          }
+        } finally {
+          if (!cancelled) setAgentLoading(false);
+        }
+      }
       try {
         const loadClientNames = () => {
           // No client-name suggestion endpoint exists for the admin-owner path.
@@ -223,7 +253,7 @@ export function CreateProjectModal({
     return () => {
       cancelled = true;
     };
-  }, [open, portal, lockServices, lockedServices, ownerType, ownerId]);
+  }, [open, portal, lockServices, lockedServices, ownerType, ownerId, isSuperAdmin]);
 
   function handleClose() {
     if (saving) return;
@@ -267,9 +297,10 @@ export function CreateProjectModal({
         description: description.trim() || undefined,
         startDate,
         endDate,
+        clientEmail: clientEmail.trim() || undefined,
         enabledServices: services,
-        reminderEmails: parseReminderEmails(reminderEmailsRaw),
         autoArchiveEnabled: true,
+        ...(isSuperAdmin && selectedAgentId ? { supportAgentId: selectedAgentId } : {}),
       };
       let created: OrgProject;
       if (ownerId) {
@@ -292,6 +323,9 @@ export function CreateProjectModal({
 
   if (!open) return null;
 
+  const displayedAgent =
+    allAgents.find((a) => a._id === selectedAgentId) ?? previewAgent;
+
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4 backdrop-blur-[1px]"
@@ -312,7 +346,7 @@ export function CreateProjectModal({
             </h2>
             <p className="mt-1 text-sm text-gray-500">
               {lockable
-                ? 'Set client, dates, and reminder emails. This project will include the current service.'
+                ? 'Set client, dates, and client email. This project will include the current service.'
                 : step === 'services'
                   ? 'Choose which services belong to this project.'
                   : 'Projects organize spend and resources by client or engagement.'}
@@ -414,19 +448,68 @@ export function CreateProjectModal({
 
               <div>
                 <label className="mb-1.5 block text-xs font-semibold text-gray-700">
-                  Reminder emails <span className="font-normal text-gray-400">(optional)</span>
+                  Client email <span className="font-normal text-gray-400">(optional)</span>
                 </label>
                 <input
-                  type="text"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm"
-                  value={reminderEmailsRaw}
-                  onChange={(e) => setReminderEmailsRaw(e.target.value)}
-                  placeholder="pm@client.com, billing@client.com"
+                  type="email"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:ring-1"
+                  style={{ ['--tw-ring-color' as string]: accent }}
+                  value={clientEmail}
+                  onChange={(e) => setClientEmail(e.target.value)}
+                  placeholder="client@example.com"
+                  disabled={saving}
                 />
                 <p className="mt-1 text-[11px] text-gray-500">
-                  We email these addresses one day before the project end date. Separate multiple
-                  addresses with commas.
+                  The client receives a project expiry notice 24 hours before the end date.
                 </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-700">Support Agent</label>
+
+                {agentLoading ? (
+                  <div className="h-10 animate-pulse rounded-lg bg-gray-100" />
+                ) : isSuperAdmin ? (
+                  <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{displayedAgent?.name ?? '—'}</p>
+                      <p className="truncate text-xs text-gray-500">{displayedAgent?.email}</p>
+                    </div>
+                    {allAgents.length > 1 && (
+                      <select
+                        value={selectedAgentId}
+                        onChange={(e) => setSelectedAgentId(e.target.value)}
+                        className="shrink-0 rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
+                      >
+                        {allAgents.map((a) => (
+                          <option key={a._id} value={a._id}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                    <svg
+                      className="h-4 w-4 shrink-0 text-green-500"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      aria-hidden
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span className="text-sm text-gray-600">
+                      A support agent will be assigned to this project
+                    </span>
+                  </div>
+                )}
               </div>
 
               {lockable && lockedServices.length > 0 ? (

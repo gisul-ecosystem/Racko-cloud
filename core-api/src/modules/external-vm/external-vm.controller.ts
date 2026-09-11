@@ -248,6 +248,23 @@ export class ExternalVMController {
       next(err);
     }
   }
+
+  /** POST /api/v1/external-vms/:id/console/close */
+  async closeConsole(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const userId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const data = await externalVMService.closeConsoleSessionForActor(
+        id,
+        userId,
+        authReq.user.role
+      );
+      success(res, 'External VM console session closed.', data);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const externalVMController = new ExternalVMController();

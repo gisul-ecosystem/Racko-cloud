@@ -1,4 +1,5 @@
-import { tenantPortalRequest } from './tenantPortalApiClient';
+import { tenantPortalRequest, getTenantAccessToken } from './tenantPortalApiClient';
+import { closeConsoleSessionAtPath } from './consoleApi';
 import type {
   BulkCreateExternalVMDto,
   CreateExternalVMDto,
@@ -97,6 +98,17 @@ export async function getTenantExternalVMConsole(
       `/api/v1/tenant-external-vms/${id}/console${qs}`
     )
   );
+}
+
+export function tenantExternalVmConsoleClosePath(id: string): string {
+  return `/api/v1/tenant-external-vms/${encodeURIComponent(id)}/console/close`;
+}
+
+export function closeTenantExternalVMConsole(id: string): void {
+  closeConsoleSessionAtPath(tenantExternalVmConsoleClosePath(id), {
+    accessToken: getTenantAccessToken(),
+    tenantPortal: true,
+  });
 }
 
 export async function fetchAvailableTenantExternalVMs(userId?: string): Promise<IExternalVM[]> {

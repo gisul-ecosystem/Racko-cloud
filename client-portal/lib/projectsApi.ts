@@ -3,22 +3,22 @@ import type { AdminServiceKey } from './adminServicesApi';
 
 export type ProjectStatus = 'active' | 'archived';
 
-export function formatReminderEmailsInput(emails?: string[] | null): string {
-  return (emails ?? []).join(', ');
-}
-
-export function parseReminderEmailsInput(raw: string): string[] {
-  return [
-    ...new Set(
-      raw
-        .split(/[,;\n]+/)
-        .map((part) => part.trim().toLowerCase())
-        .filter(Boolean)
-    ),
-  ].slice(0, 10);
-}
-
 export type ProjectArchivedReason = 'manual' | 'end_date_reached';
+
+export interface ProjectSupportAgent {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export interface ProjectSupportTicketRow {
+  id: string;
+  ticketNumber: string;
+  subject: string;
+  status: string;
+  platformAssigneeName: string | null;
+  createdAt: string;
+}
 
 export interface OrgProject {
   id: string;
@@ -30,16 +30,21 @@ export interface OrgProject {
   year: number;
   sequenceNumber: number;
   clientName: string;
+  clientEmail?: string | null;
   description: string | null;
   startDate: string | null;
   endDate: string | null;
   reminderEmails?: string[];
   autoArchiveEnabled?: boolean;
+  gracePeriodEndsAt?: string | null;
+  expiryCleanupCompletedAt?: string | null;
   archivedAt?: string | null;
   archivedReason?: ProjectArchivedReason | null;
   enabledServices: AdminServiceKey[];
   status: ProjectStatus;
   createdBy: string;
+  supportAgentId: string | null;
+  supportAgent?: ProjectSupportAgent | null;
   createdAt: string;
   updatedAt: string;
   resourceCounts?: Record<string, number>;
@@ -102,8 +107,37 @@ export async function fetchProject(id: string): Promise<OrgProject> {
   return data.project;
 }
 
+export async function fetchProjectSupportTickets(
+  projectId: string
+): Promise<ProjectSupportTicketRow[]> {
+  const data = await unwrap<{ tickets: ProjectSupportTicketRow[] }>(
+    apiRequest(`/api/v1/projects/${projectId}/support-tickets`)
+  );
+  return data.tickets;
+}
+
 export async function previewProjectName(): Promise<ProjectNamePreview> {
   return unwrap(apiRequest('/api/v1/projects/name-preview'));
+}
+
+export interface SupportAgentPreview {
+  _id: string;
+  name: string;
+  email: string;
+}
+
+export async function fetchSupportAgentPreview(): Promise<SupportAgentPreview | null> {
+  const data = await unwrap<{ agent: SupportAgentPreview | null }>(
+    apiRequest('/api/v1/projects/support-agent-preview')
+  );
+  return data.agent;
+}
+
+export async function fetchSupportAgentsListForSuperAdmin(): Promise<SupportAgentPreview[]> {
+  const data = await unwrap<{ agents: SupportAgentPreview[] }>(
+    apiRequest('/api/v1/projects/support-agents-list')
+  );
+  return data.agents;
 }
 
 export async function createProject(input: {
@@ -113,8 +147,9 @@ export async function createProject(input: {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
-  reminderEmails?: string[];
+  clientEmail?: string;
   autoArchiveEnabled?: boolean;
+  supportAgentId?: string;
 }): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     apiRequest('/api/v1/projects', {
@@ -125,6 +160,13 @@ export async function createProject(input: {
   return data.project;
 }
 
+export async function fetchProjectSupportAgents(): Promise<ProjectSupportAgent[]> {
+  const data = await unwrap<{ agents: ProjectSupportAgent[] }>(
+    apiRequest('/api/v1/projects/support-agents')
+  );
+  return data.agents;
+}
+
 export async function updateProject(
   id: string,
   input: {
@@ -133,8 +175,9 @@ export async function updateProject(
     description?: string | null;
     startDate?: string | null;
     endDate?: string | null;
-    reminderEmails?: string[] | null;
+    clientEmail?: string | null;
     autoArchiveEnabled?: boolean;
+    supportAgentId?: string | null;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
@@ -232,8 +275,9 @@ export async function createProjectForAdmin(
     startDate?: string;
     endDate?: string;
     enabledServices: AdminServiceKey[];
-    reminderEmails?: string[];
+    clientEmail?: string;
     autoArchiveEnabled?: boolean;
+    supportAgentId?: string;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
@@ -280,6 +324,16 @@ export async function fetchServiceCostReportForAdmin(
 }
 
 /** Super-admin: list projects for a white-label tenant. */
+export async function fetchProjectForTenant(
+  tenantId: string,
+  projectId: string
+): Promise<OrgProject> {
+  const data = await unwrap<{ project: OrgProject }>(
+    apiRequest(`/api/v1/projects/tenants/${tenantId}/${projectId}`)
+  );
+  return data.project;
+}
+
 export async function fetchProjectsForTenant(tenantId: string): Promise<OrgProject[]> {
   const data = await unwrap<{ projects: OrgProject[]; total: number }>(
     apiRequest(`/api/v1/projects/tenants/${tenantId}`)
@@ -316,8 +370,9 @@ export async function createProjectForTenant(
     startDate?: string;
     endDate?: string;
     enabledServices: AdminServiceKey[];
-    reminderEmails?: string[];
+    clientEmail?: string;
     autoArchiveEnabled?: boolean;
+    supportAgentId?: string;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
@@ -352,6 +407,7 @@ export async function updateProjectForAdmin(
     description?: string | null;
     startDate?: string | null;
     endDate?: string | null;
+    supportAgentId?: string | null;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
@@ -372,6 +428,7 @@ export async function updateProjectForTenant(
     description?: string | null;
     startDate?: string | null;
     endDate?: string | null;
+    supportAgentId?: string | null;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(

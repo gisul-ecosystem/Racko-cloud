@@ -118,6 +118,12 @@ router.get(
   (req, res, next) => tenantExternalVmController.openConsole(req, res, next)
 );
 
+router.post(
+  '/:id/console/close',
+  validateRequest(externalVMIdParamSchema),
+  (req, res, next) => tenantExternalVmController.closeConsole(req, res, next)
+);
+
 router.get(
   '/:id',
   validateRequest(externalVMIdParamSchema),

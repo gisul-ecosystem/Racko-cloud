@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { useParams, useRouter } from 'next/navigation';
 import { ChevronLeft, Maximize, RefreshCw, LogOut } from 'lucide-react';
 import {
+  closeExternalVMConsole,
   fetchExternalVM,
   getExternalVMConsole,
   type ExternalVMConsoleSession,
@@ -46,6 +47,7 @@ export interface ExternalVMConsoleViewProps {
     id: string,
     dimensions?: { width?: number; height?: number }
   ) => Promise<ExternalVMConsoleSession>;
+  closeSession?: (id: string) => void;
 }
 
 /**
@@ -61,12 +63,14 @@ export function ExternalVMConsoleView({
   disconnectHref,
   fetchVm = fetchExternalVM,
   openConsole = getExternalVMConsole,
+  closeSession = closeExternalVMConsole,
 }: ExternalVMConsoleViewProps) {
   const params = useParams<{ id?: string; serverId?: string }>();
   const id = params.id ?? params.serverId;
   const router = useRouter();
 
   const [session, setSession] = useState<ExternalVMConsoleSession | null>(null);
+  const sessionRef = useRef<ExternalVMConsoleSession | null>(null);
   const hasSessionRef = useRef(false);
   const [vmName, setVmName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -140,6 +144,7 @@ export function ExternalVMConsoleView({
         const data = await openConsole(id, dims);
         if (signal?.aborted) return;
         setSession(data);
+        sessionRef.current = data;
         setIframeKey((k) => k + 1);
       } catch (err) {
         if (signal?.aborted) return;
@@ -167,12 +172,31 @@ export function ExternalVMConsoleView({
     return () => {
       clearTimeout(timer);
       ctrl.abort();
+      if (sessionRef.current && id) {
+        closeSession(id);
+      }
     };
-  }, [fetchSession]);
+  }, [fetchSession, id, closeSession]);
 
   useEffect(() => {
     hasSessionRef.current = !!session;
+    sessionRef.current = session;
   }, [session]);
+
+  useEffect(() => {
+    if (!id) return;
+    const onPageHide = () => {
+      if (sessionRef.current) {
+        closeSession(id);
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+    };
+  }, [id, closeSession]);
 
   // Resolve the VM name for the toolbar title (best-effort, non-blocking).
   useEffect(() => {
@@ -330,7 +354,10 @@ export function ExternalVMConsoleView({
         <div style={styles.toolbarLeft}>
           <button
             type="button"
-            onClick={() => router.push(backHref)}
+            onClick={() => {
+              if (sessionRef.current && id) closeSession(id);
+              router.push(backHref);
+            }}
             style={styles.iconButton}
             title="Back"
             aria-label="Back"
@@ -384,7 +411,10 @@ export function ExternalVMConsoleView({
           </button>
           <button
             type="button"
-            onClick={() => router.push(disconnectHref)}
+            onClick={() => {
+              if (sessionRef.current && id) closeSession(id);
+              router.push(disconnectHref);
+            }}
             style={styles.disconnectButton}
             title="Disconnect and return"
           >

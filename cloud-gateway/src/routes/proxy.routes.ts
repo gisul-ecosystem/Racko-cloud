@@ -212,6 +212,7 @@ router.get('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId/status', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId/events', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId/console', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/console/close', authMiddleware, verifyMiddleware, coreApiProxy);
 router.delete('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/start', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/stop', authMiddleware, verifyMiddleware, coreApiProxy);
@@ -375,6 +376,7 @@ router.delete('/api/v1/external-vms/assign/:id', authMiddleware, verifyMiddlewar
 router.get('/api/v1/external-vms/my-assigned', authMiddleware, verifyMiddleware, requireRole('user'), coreApiProxy);
 router.get('/api/v1/external-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/external-vms/:id/console', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
+router.post('/api/v1/external-vms/:id/console/close', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
 router.get('/api/v1/external-vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
 router.delete('/api/v1/external-vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 

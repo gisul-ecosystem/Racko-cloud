@@ -17,6 +17,7 @@ import {
   templateSelectionSchema,
   userIdParamSchema,
   vmConsoleSchema,
+  vmConsoleCloseSchema,
   cloneVMSchema,
   updateVmScheduleSchema,
   updateVmOverrideSchema,
@@ -250,6 +251,14 @@ router.get(
   requireRole('admin', 'super_admin', 'user'),
   validateRequest(vmConsoleSchema),
   (req, res, next) => vmController.openConsole(req, res, next)
+);
+
+// POST /api/v1/vms/:vmId/console/close
+router.post(
+  '/:vmId/console/close',
+  requireRole('admin', 'super_admin', 'user'),
+  validateRequest(vmConsoleCloseSchema),
+  (req, res, next) => vmController.closeConsole(req, res, next)
 );
 
 // DELETE /api/v1/vms/:vmId

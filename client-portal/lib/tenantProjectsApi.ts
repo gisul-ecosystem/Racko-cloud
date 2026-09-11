@@ -5,14 +5,17 @@ import type {
   ProjectNamePreview,
   ProjectReportByProjectRow,
   ProjectReportByServiceRow,
+  ProjectSupportAgent,
 } from './projectsApi';
 
-export type { OrgProject, ProjectNamePreview, ProjectReportByProjectRow, ProjectReportByServiceRow };
+export type {
+  OrgProject,
+  ProjectNamePreview,
+  ProjectReportByProjectRow,
+  ProjectReportByServiceRow,
+  ProjectSupportAgent,
+};
 export { PROJECT_SERVICE_LABELS } from './projectsApi';
-export {
-  formatReminderEmailsInput,
-  parseReminderEmailsInput,
-} from './projectsApi';
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -75,7 +78,7 @@ export async function createTenantProject(input: {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
-  reminderEmails?: string[];
+  clientEmail?: string;
   autoArchiveEnabled?: boolean;
 }): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
@@ -87,6 +90,13 @@ export async function createTenantProject(input: {
   return data.project;
 }
 
+export async function fetchTenantProjectSupportAgents(): Promise<ProjectSupportAgent[]> {
+  const data = await unwrap<{ agents: ProjectSupportAgent[] }>(
+    tenantPortalRequest(`${BASE}/support-agents`)
+  );
+  return data.agents;
+}
+
 export async function updateTenantProject(
   id: string,
   input: {
@@ -95,8 +105,9 @@ export async function updateTenantProject(
     description?: string | null;
     startDate?: string | null;
     endDate?: string | null;
-    reminderEmails?: string[] | null;
+    clientEmail?: string | null;
     autoArchiveEnabled?: boolean;
+    supportAgentId?: string | null;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(

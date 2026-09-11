@@ -13,12 +13,16 @@ import {
   deleteProjectForTenant,
   fetchEligibleProjectServicesForTenant,
   fetchProjectClientNamesForTenant,
+  fetchProjectForTenant,
   fetchProjectsForTenant,
   previewProjectNameForTenant,
   PROJECT_SERVICE_LABELS,
   updateProjectForTenant,
   type OrgProject,
+  type ProjectSupportAgent,
 } from '@/lib/projectsApi';
+import { fetchSupportAgents } from '@/lib/supportApi';
+import { ProjectSupportAgentSection } from '@/components/console/ProjectSupportAgentSection';
 
 function formatDate(iso: string): string {
   try {
@@ -55,6 +59,7 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
   const [manageSelected, setManageSelected] = useState<AdminServiceKey[]>([]);
   const [manageLoading, setManageLoading] = useState(false);
   const [detailProject, setDetailProject] = useState<OrgProject | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   // Edit project details
   const [editProject, setEditProject] = useState<OrgProject | null>(null);
@@ -71,6 +76,17 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
     project: OrgProject;
   } | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+
+  const loadSupportAgents = useCallback(async (): Promise<ProjectSupportAgent[]> => {
+    const agents = await fetchSupportAgents();
+    return agents
+      .filter((agent) => agent.isActive)
+      .map((agent) => ({
+        id: agent._id,
+        name: agent.name?.trim() || agent.email,
+        email: agent.email,
+      }));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -179,12 +195,22 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
     }
   }
 
-  function openDetail(project: OrgProject) {
+  async function openDetail(project: OrgProject) {
     setShowCreate(false);
     setManageProject(null);
     setFlash(null);
     setError(null);
+    setDetailLoading(true);
     setDetailProject(project);
+    try {
+      const full = await fetchProjectForTenant(tenantId, project.id);
+      setDetailProject(full);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to load project details.');
+      setDetailProject(null);
+    } finally {
+      setDetailLoading(false);
+    }
   }
 
   const canSubmit = useMemo(
@@ -703,7 +729,27 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
               </button>
             </div>
 
+            {detailLoading ? (
+              <div className="flex justify-center py-16">
+                <Loader2 className="h-7 w-7 animate-spin text-[#B91C1C]" />
+              </div>
+            ) : (
             <div className="space-y-5 px-5 py-4">
+              <ProjectSupportAgentSection
+                supportAgent={detailProject.supportAgent}
+                canManage
+                disabled={detailProject.status === 'archived'}
+                loadAgents={loadSupportAgents}
+                onSave={async (supportAgentId) => {
+                  const updated = await updateProjectForTenant(tenantId, detailProject.id, {
+                    supportAgentId,
+                  });
+                  setDetailProject(updated);
+                  setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+                  setFlash('Support agent updated.');
+                }}
+              />
+
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-lg border border-gray-100 px-3 py-2.5">
                   <p className="text-xs font-medium text-gray-500">Project ID</p>
@@ -796,6 +842,7 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
                 </button>
               </div>
             </div>
+            )}
           </div>
         </div>
       )}

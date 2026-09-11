@@ -4,6 +4,7 @@ import { ExternalVMConsoleView } from '@/components/console/ExternalVMConsoleVie
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
 import {
+  closeTenantExternalVMConsole,
   fetchTenantExternalVM,
   getTenantExternalVMConsole,
 } from '@/lib/tenantExternalVmApi';
@@ -26,6 +27,7 @@ export default function TenantExternalVMConsolePage() {
       disconnectHref={listHref}
       fetchVm={fetchTenantExternalVM}
       openConsole={getTenantExternalVMConsole}
+      closeSession={closeTenantExternalVMConsole}
     />
   );
 }
