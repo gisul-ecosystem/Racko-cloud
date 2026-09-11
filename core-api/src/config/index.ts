@@ -143,6 +143,7 @@ const envSchema = z.object({
     .default('3600000'),
 
   PROJECT_EXPIRY_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('1'),
+  PROJECT_GRACE_PERIOD_HOURS: z.string().regex(/^\d+$/).transform(Number).default('24'),
   PROJECT_EXPIRY_CHECK_INTERVAL_MS: z
     .string()
     .regex(/^\d+$/)

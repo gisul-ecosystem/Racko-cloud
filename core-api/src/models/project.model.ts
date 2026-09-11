@@ -23,15 +23,21 @@ export interface IProject extends Document {
   year: number;
   sequenceNumber: number;
   clientName: string;
+  /** Client contact email for pre-expiry notifications. */
+  clientEmail?: string;
   description?: string;
   startDate?: Date;
   endDate?: Date;
-  /** Emails notified before project end date (expiry reminders). */
+  /** @deprecated Legacy field — expiry emails use supportAgentId + clientEmail. */
   reminderEmails: string[];
   /** When true, project auto-archives after endDate (default true). */
   autoArchiveEnabled: boolean;
   /** Last endDate value a pre-expiry warning was sent for (idempotency). */
   expiryWarningSentFor?: Date;
+  /** When set, project is in post-end-date grace before VM cleanup + archive. */
+  gracePeriodEndsAt?: Date;
+  /** Set after grace-period VM unassign completes (idempotency). */
+  expiryCleanupCompletedAt?: Date;
   archivedAt?: Date;
   archivedReason?: 'manual' | 'end_date_reached';
   enabledServices: AdminServiceKey[];
@@ -62,6 +68,7 @@ const projectSchema = new Schema<IProject>(
     year: { type: Number, required: true, min: 2000, max: 2100 },
     sequenceNumber: { type: Number, required: true, min: 1 },
     clientName: { type: String, required: true, trim: true, maxlength: 200 },
+    clientEmail: { type: String, trim: true, lowercase: true, maxlength: 320 },
     description: { type: String, trim: true, maxlength: 1000 },
     startDate: { type: Date },
     endDate: { type: Date },
@@ -71,6 +78,8 @@ const projectSchema = new Schema<IProject>(
     },
     autoArchiveEnabled: { type: Boolean, default: true },
     expiryWarningSentFor: { type: Date },
+    gracePeriodEndsAt: { type: Date },
+    expiryCleanupCompletedAt: { type: Date },
     archivedAt: { type: Date },
     archivedReason: {
       type: String,

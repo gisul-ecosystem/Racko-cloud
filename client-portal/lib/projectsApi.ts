@@ -3,21 +3,6 @@ import type { AdminServiceKey } from './adminServicesApi';
 
 export type ProjectStatus = 'active' | 'archived';
 
-export function formatReminderEmailsInput(emails?: string[] | null): string {
-  return (emails ?? []).join(', ');
-}
-
-export function parseReminderEmailsInput(raw: string): string[] {
-  return [
-    ...new Set(
-      raw
-        .split(/[,;\n]+/)
-        .map((part) => part.trim().toLowerCase())
-        .filter(Boolean)
-    ),
-  ].slice(0, 10);
-}
-
 export type ProjectArchivedReason = 'manual' | 'end_date_reached';
 
 export interface ProjectSupportAgent {
@@ -45,11 +30,14 @@ export interface OrgProject {
   year: number;
   sequenceNumber: number;
   clientName: string;
+  clientEmail?: string | null;
   description: string | null;
   startDate: string | null;
   endDate: string | null;
   reminderEmails?: string[];
   autoArchiveEnabled?: boolean;
+  gracePeriodEndsAt?: string | null;
+  expiryCleanupCompletedAt?: string | null;
   archivedAt?: string | null;
   archivedReason?: ProjectArchivedReason | null;
   enabledServices: AdminServiceKey[];
@@ -159,7 +147,7 @@ export async function createProject(input: {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
-  reminderEmails?: string[];
+  clientEmail?: string;
   autoArchiveEnabled?: boolean;
   supportAgentId?: string;
 }): Promise<OrgProject> {
@@ -187,7 +175,7 @@ export async function updateProject(
     description?: string | null;
     startDate?: string | null;
     endDate?: string | null;
-    reminderEmails?: string[] | null;
+    clientEmail?: string | null;
     autoArchiveEnabled?: boolean;
     supportAgentId?: string | null;
   }
@@ -287,7 +275,7 @@ export async function createProjectForAdmin(
     startDate?: string;
     endDate?: string;
     enabledServices: AdminServiceKey[];
-    reminderEmails?: string[];
+    clientEmail?: string;
     autoArchiveEnabled?: boolean;
     supportAgentId?: string;
   }
@@ -382,7 +370,7 @@ export async function createProjectForTenant(
     startDate?: string;
     endDate?: string;
     enabledServices: AdminServiceKey[];
-    reminderEmails?: string[];
+    clientEmail?: string;
     autoArchiveEnabled?: boolean;
     supportAgentId?: string;
   }

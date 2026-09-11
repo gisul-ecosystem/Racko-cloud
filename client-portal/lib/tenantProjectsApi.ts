@@ -16,10 +16,6 @@ export type {
   ProjectSupportAgent,
 };
 export { PROJECT_SERVICE_LABELS } from './projectsApi';
-export {
-  formatReminderEmailsInput,
-  parseReminderEmailsInput,
-} from './projectsApi';
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -82,7 +78,7 @@ export async function createTenantProject(input: {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
-  reminderEmails?: string[];
+  clientEmail?: string;
   autoArchiveEnabled?: boolean;
 }): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
@@ -109,7 +105,7 @@ export async function updateTenantProject(
     description?: string | null;
     startDate?: string | null;
     endDate?: string | null;
-    reminderEmails?: string[] | null;
+    clientEmail?: string | null;
     autoArchiveEnabled?: boolean;
     supportAgentId?: string | null;
   }

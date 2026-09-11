@@ -20,8 +20,9 @@ export interface BrandedEmailContent {
   subject: string;
   headline: string;
   bodyHtml: string;
-  ctaLabel: string;
-  ctaUrl: string;
+  /** Omit both to hide the primary button and fallback link block. */
+  ctaLabel?: string;
+  ctaUrl?: string;
   fallbackHint?: string;
   expiryText?: string;
   noticeTitle?: string;
@@ -102,9 +103,10 @@ export function buildBrandedEmail(
   const name = escapeHtml(brand.name);
   const websiteLabel = escapeHtml(brand.websiteLabel);
   const websiteUrl = escapeHtml(brand.websiteUrl);
-  const ctaUrl = escapeHtml(content.ctaUrl);
+  const hasCta = Boolean(content.ctaLabel?.trim() && content.ctaUrl?.trim());
+  const ctaUrl = hasCta ? escapeHtml(content.ctaUrl!) : '';
   const headline = escapeHtml(content.headline);
-  const ctaLabel = escapeHtml(content.ctaLabel);
+  const ctaLabel = hasCta ? escapeHtml(content.ctaLabel!) : '';
   const fallbackHint = escapeHtml(
     content.fallbackHint ??
       "If the button doesn't work, copy and paste this link into your browser:"
@@ -158,17 +160,23 @@ export function buildBrandedEmail(
               <p class="email-title" style="margin:8px 0 12px;font-size:26px;font-weight:700;color:#111827;letter-spacing:-0.4px;">${headline}</p>
               <div style="margin:0 0 24px;font-size:15px;color:#6b7280;line-height:1.65;text-align:center;">${content.bodyHtml}</div>
               ${content.detailsHtml ? `<div style="margin:0 0 24px;text-align:left;">${content.detailsHtml}</div>` : ''}
-              <table cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto 28px;">
+              ${
+                hasCta
+                  ? `<table cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto 28px;">
                 <tr>
                   <td style="background:${primary};border-radius:10px;">
                     <a href="${ctaUrl}" style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;">${ctaLabel} →</a>
                   </td>
                 </tr>
-              </table>
+              </table>`
+                  : ''
+              }
               ${content.afterCtaHtml ? `<div style="margin:-8px 0 28px;text-align:center;">${content.afterCtaHtml}</div>` : ''}
             </td>
           </tr>
-          <tr>
+          ${
+            hasCta
+              ? `<tr>
             <td class="email-pad" style="padding:0 36px 8px;">
               <div style="height:1px;background:#e5e7eb;line-height:1px;font-size:1px;">&nbsp;</div>
             </td>
@@ -181,7 +189,9 @@ export function buildBrandedEmail(
               </div>
               ${expiryBlock}
             </td>
-          </tr>
+          </tr>`
+              : ''
+          }
           <tr>
             <td class="email-pad" style="padding:24px 36px 32px;">
               <div style="padding:18px 16px;border-radius:12px;background:${softStrong};text-align:center;">
@@ -203,10 +213,14 @@ export function buildBrandedEmail(
   const text = `${content.headline}
 
 ${content.bodyHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()}
+${
+  hasCta
+    ? `
 
 ${content.ctaLabel}:
-${content.ctaUrl}
-${content.expiryText ? `\n${content.expiryText}` : ''}
+${content.ctaUrl}`
+    : ''
+}${content.expiryText ? `\n${content.expiryText}` : ''}
 
 ${noticeTitle}
 ${noticeBody}

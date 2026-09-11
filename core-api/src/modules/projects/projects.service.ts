@@ -58,11 +58,14 @@ export interface ProjectPublic {
   year: number;
   sequenceNumber: number;
   clientName: string;
+  clientEmail: string | null;
   description: string | null;
   startDate: string | null;
   endDate: string | null;
   reminderEmails: string[];
   autoArchiveEnabled: boolean;
+  gracePeriodEndsAt: string | null;
+  expiryCleanupCompletedAt: string | null;
   archivedAt: string | null;
   archivedReason: 'manual' | 'end_date_reached' | null;
   enabledServices: AdminServiceKey[];
@@ -89,17 +92,9 @@ export interface ProjectReportByServiceRow {
   transactionCount: number;
 }
 
-function normalizeReminderEmails(emails?: string[] | null): string[] {
-  if (!emails?.length) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of emails) {
-    const email = String(raw || '').trim().toLowerCase();
-    if (!email || seen.has(email)) continue;
-    seen.add(email);
-    out.push(email);
-  }
-  return out.slice(0, 10);
+function normalizeClientEmail(email?: string | null): string | undefined {
+  const trimmed = email?.trim().toLowerCase();
+  return trimmed || undefined;
 }
 
 function markProjectArchived(
@@ -115,6 +110,8 @@ function markProjectUnarchived(doc: IProject): void {
   doc.status = 'active';
   doc.archivedAt = undefined;
   doc.archivedReason = undefined;
+  doc.gracePeriodEndsAt = undefined;
+  doc.expiryCleanupCompletedAt = undefined;
 }
 
 function supportAgentFromDoc(doc: IProject): ProjectSupportAgentPublic | null {
@@ -172,16 +169,18 @@ function applyProjectUpdateFields(doc: IProject, input: UpdateProjectInput): voi
     doc.description = input.description?.trim() || undefined;
   }
   if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
+  if (input.clientEmail !== undefined) {
+    doc.clientEmail = normalizeClientEmail(input.clientEmail);
+  }
   if (input.endDate !== undefined) {
     const next = input.endDate ?? undefined;
     const prevMs = doc.endDate?.getTime();
     doc.endDate = next;
     if (next?.getTime() !== prevMs) {
       doc.expiryWarningSentFor = undefined;
+      doc.gracePeriodEndsAt = undefined;
+      doc.expiryCleanupCompletedAt = undefined;
     }
-  }
-  if (input.reminderEmails !== undefined) {
-    doc.reminderEmails = normalizeReminderEmails(input.reminderEmails);
   }
   if (input.autoArchiveEnabled !== undefined) {
     doc.autoArchiveEnabled = input.autoArchiveEnabled;
@@ -199,11 +198,16 @@ function toPublic(doc: IProject, resourceCounts?: Record<string, number>): Proje
     year: doc.year,
     sequenceNumber: doc.sequenceNumber,
     clientName: doc.clientName,
+    clientEmail: doc.clientEmail ?? null,
     description: doc.description ?? null,
     startDate: doc.startDate ? doc.startDate.toISOString() : null,
     endDate: doc.endDate ? doc.endDate.toISOString() : null,
     reminderEmails: [...(doc.reminderEmails ?? [])],
     autoArchiveEnabled: doc.autoArchiveEnabled !== false,
+    gracePeriodEndsAt: doc.gracePeriodEndsAt ? doc.gracePeriodEndsAt.toISOString() : null,
+    expiryCleanupCompletedAt: doc.expiryCleanupCompletedAt
+      ? doc.expiryCleanupCompletedAt.toISOString()
+      : null,
     archivedAt: doc.archivedAt ? doc.archivedAt.toISOString() : null,
     archivedReason: doc.archivedReason ?? null,
     enabledServices: [...doc.enabledServices],
@@ -396,10 +400,10 @@ async function createForOrg(
     year,
     sequenceNumber,
     clientName: input.clientName.trim(),
+    clientEmail: normalizeClientEmail(input.clientEmail),
     description: input.description?.trim() || undefined,
     startDate: input.startDate ?? undefined,
     endDate: input.endDate ?? undefined,
-    reminderEmails: normalizeReminderEmails(input.reminderEmails),
     autoArchiveEnabled: input.autoArchiveEnabled !== false,
     enabledServices,
     status: 'active',
@@ -432,10 +436,10 @@ async function createForTenant(
     year,
     sequenceNumber,
     clientName: input.clientName.trim(),
+    clientEmail: normalizeClientEmail(input.clientEmail),
     description: input.description?.trim() || undefined,
     startDate: input.startDate ?? undefined,
     endDate: input.endDate ?? undefined,
-    reminderEmails: normalizeReminderEmails(input.reminderEmails),
     autoArchiveEnabled: input.autoArchiveEnabled !== false,
     enabledServices,
     status: 'active',
