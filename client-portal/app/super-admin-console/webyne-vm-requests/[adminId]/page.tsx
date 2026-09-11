@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, Fragment } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -152,7 +152,12 @@ function PostReadyInstallBadge({
 
 export default function WebyneVmRequestsByAdminPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const adminId = typeof params?.adminId === 'string' ? params.adminId : '';
+  const isTenant = searchParams.get('scope') === 'tenant';
+  const listOpts = isTenant
+    ? { tenantId: adminId }
+    : { adminId };
 
   const [requests, setRequests] = useState<ICatalogVm[]>([]);
   const [loading, setLoading] = useState(true);
@@ -175,7 +180,7 @@ export default function WebyneVmRequestsByAdminPage() {
     }
     try {
       const data = await fetchCatalogVmRequests({
-        adminId,
+        ...listOpts,
         status: statusFilter,
       });
       setRequests(data);
@@ -186,7 +191,7 @@ export default function WebyneVmRequestsByAdminPage() {
     } finally {
       if (!opts?.silent) setLoading(false);
     }
-  }, [adminId, statusFilter]);
+  }, [adminId, isTenant, statusFilter]);
 
   useEffect(() => {
     void load();
@@ -252,7 +257,11 @@ export default function WebyneVmRequestsByAdminPage() {
     setSuccessMsg(null);
     try {
       await attachCatalogVmRequest(id);
-      setSuccessMsg('VM attached — now visible to the admin under My VM.');
+      setSuccessMsg(
+        isTenant
+          ? 'VM attached — now visible to the tenant under My VM.'
+          : 'VM attached — now visible to the admin under My VM.'
+      );
       setExpandedId(id);
       setStatusFilter('active');
       await load();
@@ -275,7 +284,7 @@ export default function WebyneVmRequestsByAdminPage() {
       let currentStatus: VmCatalogStatus | null = null;
 
       while (Date.now() - startedAt < FETCH_TO_ATTACH_TIMEOUT_MS) {
-        const latest = await fetchCatalogVmRequests({ adminId, status: 'all' });
+        const latest = await fetchCatalogVmRequests({ ...listOpts, status: 'all' });
         setRequests(latest);
 
         const row = latest.find((req) => req._id === id);
@@ -310,7 +319,11 @@ export default function WebyneVmRequestsByAdminPage() {
 
       setSuccessMsg('Fetched latest VM details from Webyne. Attaching now…');
       await attachCatalogVmRequest(id);
-      setSuccessMsg('VM attached — now visible to the admin under My VM.');
+      setSuccessMsg(
+        isTenant
+          ? 'VM attached — now visible to the tenant under My VM.'
+          : 'VM attached — now visible to the admin under My VM.'
+      );
       setExpandedId(id);
       setStatusFilter('active');
       await load();
@@ -464,6 +477,7 @@ export default function WebyneVmRequestsByAdminPage() {
         <h1 className="text-2xl font-bold text-gray-900">Requests</h1>
         <p className="mt-0.5 text-sm text-gray-500">
           From <span className="font-medium text-gray-700">{adminEmail}</span>
+          {isTenant ? ' (tenant)' : ''}
           {' · '}
           Approve to fulfill on Webyne, then Attach to release to admin. Windows
           requests on Linux-priced plans deploy as Linux first — use Change template

@@ -296,6 +296,15 @@ router.post(
 );
 
 router.get(
+  '/:id/resources/elastic-servers',
+  requirePlatformPermission('projects.read'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    projectsController.listElasticResources(req, res, next);
+  }
+);
+
+router.get(
   '/:id/support-tickets',
   requirePlatformPermission('projects.read'),
   validateRequest(projectIdParamSchema),

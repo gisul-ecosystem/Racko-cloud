@@ -139,7 +139,9 @@ export interface CreateCatalogVmRequestDto {
 }
 
 export interface CatalogVmRequesterGroup {
+  /** Platform admin user id, or tenant id when kind is tenant. */
   adminId: string;
+  kind: 'admin' | 'tenant';
   adminEmail: string;
   pendingCount: number;
   totalCount: number;

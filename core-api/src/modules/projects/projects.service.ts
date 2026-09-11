@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { ProjectModel, type IProject, type ProjectOwnerType, type ProjectStatus } from '../../models/project.model';
 import { OrganizationAccessRequestModel } from '../../models/organizationAccessRequest.model';
 import { User, type IUser } from '../../models/user.model';
+import { TenantUser } from '../../models/tenantUser.model';
 import { Tenant } from '../../models/tenant.model';
 import { CatalogVmModel } from '../../models/catalogVm.model';
 import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
@@ -90,6 +91,116 @@ export interface ProjectReportByServiceRow {
   serviceKey: string;
   totalDebit: number;
   transactionCount: number;
+}
+
+export interface ProjectElasticResource {
+  id: string;
+  name: string;
+  ipAddress: string;
+  username: string;
+  protocol: string;
+  assignedUsers: Array<{ email: string | null; username: string | null }>;
+}
+
+async function listElasticResourcesForOwner(
+  projectId: mongoose.Types.ObjectId,
+  owner: { tenantId: string } | { adminId: string }
+): Promise<ProjectElasticResource[]> {
+  // Match the project resource count (projectId only). Ownership was already
+  // checked on the Project document before this helper is called.
+  const docs = await ExternalVMModel.find({ projectId })
+    .select('_id name ipAddress username protocol assignedTo assignedTenantUserId')
+    .sort({ ipAddress: 1, username: 1 })
+    .lean();
+  if (docs.length === 0) return [];
+
+  const vmIds = docs.map((d) => d._id);
+  const assignedByVm = new Map<string, Array<{ email: string | null; username: string | null }>>();
+
+  if ('tenantId' in owner) {
+    const tenantOid = new mongoose.Types.ObjectId(owner.tenantId);
+    const rows = await ExternalVmTenantAssignmentModel.find({
+      tenantId: tenantOid,
+      externalVmId: { $in: vmIds },
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    })
+      .select('externalVmId tenantUserId')
+      .lean();
+    const userIds = [...new Set(rows.map((r) => r.tenantUserId.toString()))].map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+    const users = userIds.length
+      ? await TenantUser.find({ _id: { $in: userIds } }).select('email username').lean()
+      : [];
+    const userById = new Map(users.map((u) => [u._id.toString(), u]));
+    for (const row of rows) {
+      const u = userById.get(row.tenantUserId.toString());
+      const key = row.externalVmId.toString();
+      const list = assignedByVm.get(key) ?? [];
+      list.push({ email: u?.email ?? null, username: u?.username ?? null });
+      assignedByVm.set(key, list);
+    }
+    const missing = docs.filter(
+      (d) => !assignedByVm.has(d._id.toString()) && d.assignedTenantUserId
+    );
+    if (missing.length > 0) {
+      const legacyIds = missing.map((d) => d.assignedTenantUserId!);
+      const legacyUsers = await TenantUser.find({ _id: { $in: legacyIds } })
+        .select('email username')
+        .lean();
+      const legacyById = new Map(legacyUsers.map((u) => [u._id.toString(), u]));
+      for (const d of missing) {
+        const u = legacyById.get(d.assignedTenantUserId!.toString());
+        assignedByVm.set(d._id.toString(), [
+          { email: u?.email ?? null, username: u?.username ?? null },
+        ]);
+      }
+    }
+  } else {
+    const rows = await ExternalVmUserAssignmentModel.find({
+      externalVmId: { $in: vmIds },
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    })
+      .select('externalVmId userId')
+      .lean();
+    const userIds = [...new Set(rows.map((r) => r.userId.toString()))].map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+    const users = userIds.length
+      ? await User.find({ _id: { $in: userIds } }).select('email username').lean()
+      : [];
+    const userById = new Map(users.map((u) => [u._id.toString(), u]));
+    for (const row of rows) {
+      const u = userById.get(row.userId.toString());
+      const key = row.externalVmId.toString();
+      const list = assignedByVm.get(key) ?? [];
+      list.push({ email: u?.email ?? null, username: u?.username ?? null });
+      assignedByVm.set(key, list);
+    }
+    const missing = docs.filter((d) => !assignedByVm.has(d._id.toString()) && d.assignedTo);
+    if (missing.length > 0) {
+      const legacyIds = missing.map((d) => d.assignedTo!);
+      const legacyUsers = await User.find({ _id: { $in: legacyIds } })
+        .select('email username')
+        .lean();
+      const legacyById = new Map(legacyUsers.map((u) => [u._id.toString(), u]));
+      for (const d of missing) {
+        const u = legacyById.get(d.assignedTo!.toString());
+        assignedByVm.set(d._id.toString(), [
+          { email: u?.email ?? null, username: u?.username ?? null },
+        ]);
+      }
+    }
+  }
+
+  return docs.map((d) => ({
+    id: d._id.toString(),
+    name: d.name,
+    ipAddress: d.ipAddress,
+    username: d.username,
+    protocol: d.protocol,
+    assignedUsers: assignedByVm.get(d._id.toString()) ?? [],
+  }));
 }
 
 function normalizeClientEmail(email?: string | null): string | undefined {
@@ -852,6 +963,29 @@ export class ProjectsService {
     if (!doc) throw new NotFoundError('Project not found.');
     const resourceCounts = await resourceCountsByService(doc);
     return toPublicWithAgent(doc, resourceCounts);
+  }
+
+  async listElasticResourcesForTenant(
+    tenantId: string,
+    projectId: string
+  ): Promise<ProjectElasticResource[]> {
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      ownerType: 'tenant',
+      tenantId,
+    }).select('_id');
+    if (!doc) throw new NotFoundError('Project not found.');
+    return listElasticResourcesForOwner(doc._id, { tenantId });
+  }
+
+  async listElasticResources(userId: string, projectId: string): Promise<ProjectElasticResource[]> {
+    const { orgId } = await assertOrgOwner(userId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+    }).select('_id');
+    if (!doc) throw new NotFoundError('Project not found.');
+    return listElasticResourcesForOwner(doc._id, { adminId: orgId });
   }
 
   async updateForTenant(
