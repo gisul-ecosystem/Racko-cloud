@@ -78,6 +78,7 @@ export function CreateProjectModal({
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [clientEmail, setClientEmail] = useState('');
   const [previewAgent, setPreviewAgent] = useState<SupportAgentPreview | null>(null);
   const [allAgents, setAllAgents] = useState<SupportAgentPreview[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState('');
@@ -118,6 +119,7 @@ export function CreateProjectModal({
     setDescription('');
     setStartDate('');
     setEndDate('');
+    setClientEmail('');
     setPreviewAgent(null);
     setAllAgents([]);
     setSelectedAgentId('');
@@ -295,6 +297,7 @@ export function CreateProjectModal({
         description: description.trim() || undefined,
         startDate,
         endDate,
+        clientEmail: clientEmail.trim() || undefined,
         enabledServices: services,
         autoArchiveEnabled: true,
         ...(isSuperAdmin && selectedAgentId ? { supportAgentId: selectedAgentId } : {}),
@@ -343,7 +346,7 @@ export function CreateProjectModal({
             </h2>
             <p className="mt-1 text-sm text-gray-500">
               {lockable
-                ? 'Set client, dates, and reminder emails. This project will include the current service.'
+                ? 'Set client, dates, and client email. This project will include the current service.'
                 : step === 'services'
                   ? 'Choose which services belong to this project.'
                   : 'Projects organize spend and resources by client or engagement.'}
@@ -441,6 +444,24 @@ export function CreateProjectModal({
                     required
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                  Client email <span className="font-normal text-gray-400">(optional)</span>
+                </label>
+                <input
+                  type="email"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:ring-1"
+                  style={{ ['--tw-ring-color' as string]: accent }}
+                  value={clientEmail}
+                  onChange={(e) => setClientEmail(e.target.value)}
+                  placeholder="client@example.com"
+                  disabled={saving}
+                />
+                <p className="mt-1 text-[11px] text-gray-500">
+                  The client receives a project expiry notice 24 hours before the end date.
+                </p>
               </div>
 
               <div className="space-y-1.5">

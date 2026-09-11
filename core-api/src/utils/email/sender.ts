@@ -11,6 +11,13 @@ import { buildStaffInviteTemplate } from './templates/staffInvite';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
 import { buildOrgAdminInviteTemplate } from './templates/orgAdminInvite';
 import { buildProjectExpiryWarningTemplate } from './templates/projectExpiryWarning';
+import { buildProjectExpiryClientWarningTemplate } from './templates/projectExpiryClientWarning';
+import type {
+  ProjectExpiryAgentSummary,
+  ProjectExpiryClientSummary,
+} from '../../modules/projects/projectExpiryResources';
+import { buildProjectExpiryAgentAttachment } from '../../modules/projects/projectExpiryAgentWorkbook';
+import { buildProjectExpiryClientAttachment } from '../../modules/projects/projectExpiryClientWorkbook';
 import { buildProviderExpiryWarningTemplate } from './templates/providerExpiryWarning';
 import {
   buildCatalogVmExpiryWarningTemplate,
@@ -368,20 +375,65 @@ export async function sendProjectExpiryWarningEmail(input: {
   clientName: string;
   endDateLabel: string;
   daysRemaining: number;
+  graceHours: number;
   manageUrl: string;
   archiveUrl?: string;
+  agentSummary?: ProjectExpiryAgentSummary;
   brand?: EmailBrand;
 }): Promise<void> {
+  const attachment = input.agentSummary
+    ? buildProjectExpiryAgentAttachment(input.clientName, input.agentSummary.resources)
+    : null;
   const template = buildProjectExpiryWarningTemplate({
     projectName: input.projectName,
     clientName: input.clientName,
     endDateLabel: input.endDateLabel,
     daysRemaining: input.daysRemaining,
+    graceHours: input.graceHours,
     manageUrl: input.manageUrl,
     archiveUrl: input.archiveUrl,
+    agentSummary: input.agentSummary,
+    attachmentFilename: attachment?.filename,
     brand: input.brand,
   });
-  await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });
+  await sendEmail({
+    to: input.to,
+    ...template,
+    fromName: input.brand?.name,
+    ...(attachment ? { attachments: [attachment] } : {}),
+  });
+}
+
+export async function sendProjectExpiryClientWarningEmail(input: {
+  to: string;
+  projectName: string;
+  clientName: string;
+  endDateLabel: string;
+  daysRemaining: number;
+  graceHours: number;
+  clientSummary: ProjectExpiryClientSummary;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const attachment = buildProjectExpiryClientAttachment(
+    input.clientName,
+    input.clientSummary.accessRows
+  );
+  const template = buildProjectExpiryClientWarningTemplate({
+    projectName: input.projectName,
+    clientName: input.clientName,
+    endDateLabel: input.endDateLabel,
+    daysRemaining: input.daysRemaining,
+    graceHours: input.graceHours,
+    clientSummary: input.clientSummary,
+    attachmentFilename: attachment?.filename,
+    brand: input.brand,
+  });
+  await sendEmail({
+    to: input.to,
+    ...template,
+    fromName: input.brand?.name,
+    ...(attachment ? { attachments: [attachment] } : {}),
+  });
 }
 
 /**
