@@ -64,6 +64,34 @@ function SourceBadge({ label }: { label: MyVmOriginServiceLabel }) {
   );
 }
 
+/** Local part of an address: "aiuser1@gmail.com" → "aiuser1". */
+function emailLocalPart(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const trimmed = email.trim();
+  if (!trimmed) return null;
+  const at = trimmed.indexOf('@');
+  const local = at > 0 ? trimmed.slice(0, at) : trimmed;
+  return local || null;
+}
+
+/**
+ * Prefer the assigned end-user (aiuser1) over the VM login (Administrator@IP).
+ * Several holders on one box are listed, unique, in assignment order.
+ */
+function vmColumnTitle(row: MyVmDashboardRow): string {
+  const locals: string[] = [];
+  const seen = new Set<string>();
+  for (const assignment of row.assignments) {
+    const local = emailLocalPart(assignment.email);
+    if (!local) continue;
+    const key = local.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    locals.push(local);
+  }
+  return locals.length > 0 ? locals.join(', ') : row.name;
+}
+
 function ScheduleCell({ row }: { row: MyVmDashboardRow }) {
   if (!row.assignments.length) return <span className="text-gray-400">—</span>;
   const schedules = row.assignments
@@ -226,14 +254,8 @@ export function MyVmDashboardTable({
                 <Fragment key={key}>
                   <tr className="transition hover:bg-gray-50">
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-900">{row.name}</p>
+                      <p className="font-medium text-gray-900">{vmColumnTitle(row)}</p>
                       <p className="font-mono text-xs text-gray-500">{row.ipAddress || '—'}</p>
-                      {row.username ? (
-                        <p className="text-xs text-gray-400">
-                          {row.protocol ? `${row.protocol.toUpperCase()} · ` : ''}
-                          {row.username}
-                        </p>
-                      ) : null}
                     </td>
                     <td className="px-4 py-3">
                       <ProtocolBadge protocol={row.protocol} />

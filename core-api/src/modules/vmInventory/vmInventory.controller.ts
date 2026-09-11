@@ -81,6 +81,22 @@ class VmInventoryController {
     }
   }
 
+  /** GET /api/v1/super-admin/vm-inventory/series-preview */
+  async seriesPreview(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = await vmInventoryBulkAssignService.previewSeries({
+        emailPrefix: String(req.query['emailPrefix'] ?? ''),
+        count: Number(req.query['count']),
+        targetType: req.query['targetType'] as 'admin' | 'tenant',
+        targetId: String(req.query['targetId'] ?? ''),
+        projectId: String(req.query['projectId'] ?? ''),
+      });
+      success(res, 'Email series preview retrieved.', data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** POST /api/v1/super-admin/vm-inventory/bulk-assign */
   async bulkAssign(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

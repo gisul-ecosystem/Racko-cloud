@@ -27,9 +27,8 @@ export interface IServer extends Document {
   providerStartDate?: Date | null;
   providerEndDate?: Date | null;
   /**
-   * The `providerEndDate` an expiry alert has already gone out for. Stops the
-   * scheduler re-sending every tick, and re-arms itself when the date is
-   * extended because the new value no longer matches.
+   * The `providerEndDate` this contract was already mailed for. One send per
+   * end date, including a single catch-up after expiry. A new end date re-arms.
    */
   providerExpiryAlertSentFor?: Date | null;
   /** Ownership. Mutually exclusive — neither set means the server is in the free pool. */

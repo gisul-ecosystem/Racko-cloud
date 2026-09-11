@@ -153,9 +153,10 @@ export function VmInventoryExpiryAlertsModal({ onClose }: { onClose: () => void 
 
         <div className="space-y-4 px-6 py-5">
           <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600 ring-1 ring-gray-100">
-            One email per batch, with an Excel sheet attached listing every VM whose provider
-            contract is about to lapse — IP, username, VM spec, plan duration and expiry date, one
-            row per login. Each contract is reported once; extending the end date arms it again.
+            One email per project: the project name and the resources on it whose
+            provider contract is ending. Each resource is reported once per end
+            date. Changing when to send can trigger immediately for projects not
+            yet mailed.
           </div>
 
           {loading ? (

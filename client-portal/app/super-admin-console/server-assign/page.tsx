@@ -36,6 +36,7 @@ import {
   buildSeriesEmail,
   bulkAssignInventory,
   fetchInventoryProjects,
+  fetchSeriesPreview,
   fetchVmInventory,
   installInventorySoftware,
   type BulkAssignResult,
@@ -130,11 +131,14 @@ export default function ServerAssignPage() {
 
   // ── Series ───────────────────────────────────────────────────────────
   /** `project` derives the base address from the client and its start day. */
-  const [emailMode, setEmailMode] = useState<'manual' | 'project'>('manual');
+  const [emailMode, setEmailMode] = useState<'manual' | 'project'>('project');
   const [emailPrefix, setEmailPrefix] = useState('');
   const [seriesDomain, setSeriesDomain] = useState('gmail.com');
   const [passwordMode, setPasswordMode] = useState<'auto' | 'shared'>('shared');
   const [sharedPassword, setSharedPassword] = useState('');
+  const [seriesEmails, setSeriesEmails] = useState<string[]>([]);
+  const [seriesStartIndex, setSeriesStartIndex] = useState(1);
+  const [seriesPreviewLoading, setSeriesPreviewLoading] = useState(false);
 
   // ── Schedule ─────────────────────────────────────────────────────────
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -320,14 +324,55 @@ export default function ServerAssignPage() {
     (fromJson ||
       (emailValid && (passwordMode === 'auto' || (sharedPassword.length > 0 && !passwordHint))));
 
+  useEffect(() => {
+    if (fromJson || !emailValid || selected.length === 0 || !targetId || !projectId) {
+      setSeriesEmails([]);
+      setSeriesStartIndex(1);
+      setSeriesPreviewLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSeriesPreviewLoading(true);
+    const timer = window.setTimeout(() => {
+      fetchSeriesPreview({
+        emailPrefix: emailBase,
+        count: selected.length,
+        targetType,
+        targetId,
+        projectId,
+      })
+        .then((res) => {
+          if (cancelled) return;
+          setSeriesEmails(res.emails);
+          setSeriesStartIndex(res.startIndex);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setSeriesEmails(
+            Array.from({ length: selected.length }, (_, i) => buildSeriesEmail(emailBase, i + 1))
+          );
+          setSeriesStartIndex(1);
+        })
+        .finally(() => {
+          if (!cancelled) setSeriesPreviewLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [fromJson, emailValid, emailBase, selected.length, targetType, targetId, projectId]);
+
   /** Pairing preview, in the exact order the server will use. */
   const pairs = useMemo(
     () =>
       selected.map((credentialId, i) => ({
         login: loginById.get(credentialId),
-        email: buildSeriesEmail(emailBase, i + 1),
+        email: seriesEmails[i] ?? buildSeriesEmail(emailBase, seriesStartIndex + i),
       })),
-    [selected, loginById, emailBase]
+    [selected, loginById, emailBase, seriesEmails, seriesStartIndex]
   );
 
   const handleJsonChange = useCallback((next: JsonAssignPair[]) => {
@@ -1012,8 +1057,8 @@ export default function ServerAssignPage() {
                     setPreview(null);
                   }}
                 >
-                  <option value="manual">Type a base address</option>
                   <option value="project">From project — client + start day</option>
+                  <option value="manual">Type a base address</option>
                 </select>
 
                 {emailMode === 'manual' ? (
@@ -1036,7 +1081,9 @@ export default function ServerAssignPage() {
                       {projectSeriesLocal ? (
                         <>
                           {projectSeriesLocal}
-                          <span className="text-gray-400">1…{selected.length || 'n'}</span>
+                          <span className="text-gray-400">
+                            {seriesStartIndex}…{selected.length ? seriesStartIndex + selected.length - 1 : 'n'}
+                          </span>
                         </>
                       ) : (
                         '—'
@@ -1061,9 +1108,13 @@ export default function ServerAssignPage() {
                     ? projectId
                       ? 'This project has no client name or start date to build from.'
                       : 'Pick a project above to build the series.'
-                    : selected.length > 0 && emailValid
-                      ? `Creates ${buildSeriesEmail(emailBase, 1)} … ${buildSeriesEmail(emailBase, selected.length)}`
-                      : 'Numbering starts at 1, one user per selected login.'}
+                    : selected.length > 0 && emailValid && seriesEmails.length > 0
+                      ? seriesStartIndex > 1
+                        ? `Creates ${seriesEmails[0]} … ${seriesEmails[seriesEmails.length - 1]} — continues this project's series.`
+                        : `Creates ${seriesEmails[0]} … ${seriesEmails[seriesEmails.length - 1]}`
+                      : selected.length > 0 && emailValid && seriesPreviewLoading
+                        ? "Looking up the next addresses in this project's series…"
+                        : "Numbering continues from this project's last user, one address per selected login."}
                 </p>
               </div>
               <div>
@@ -1097,7 +1148,14 @@ export default function ServerAssignPage() {
 
             {pairs.length > 0 && emailValid && (
               <div className="mt-4 max-h-48 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-                <p className="text-xs font-medium text-gray-700">Pairing preview</p>
+                <p className="text-xs font-medium text-gray-700">
+                  Pairing preview
+                  {seriesStartIndex > 1 && (
+                    <span className="ml-1 font-normal text-gray-500">
+                      (continues this project)
+                    </span>
+                  )}
+                </p>
                 <ul className="mt-1 space-y-0.5 text-xs text-gray-600">
                   {pairs.map((p, i) => (
                     <li key={p.login?.credentialId ?? i}>
