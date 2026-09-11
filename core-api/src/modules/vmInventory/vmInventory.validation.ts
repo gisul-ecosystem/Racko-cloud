@@ -306,6 +306,16 @@ export const mapOwnerSchema = z.object({
     }),
 });
 
+export const seriesPreviewSchema = z.object({
+  query: z.object({
+    emailPrefix: z.string().email('emailPrefix must be a valid email address').max(200).trim(),
+    count: z.coerce.number().int().min(1).max(250),
+    targetType: z.enum(['admin', 'tenant']),
+    targetId: mongoObjectId,
+    projectId: mongoObjectId,
+  }),
+});
+
 export const ownerQuerySchema = z.object({
   query: z
     .object({

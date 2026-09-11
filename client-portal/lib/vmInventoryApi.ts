@@ -605,6 +605,29 @@ export function buildSeriesEmail(base: string, index: number): string {
   return `${base.slice(0, at)}${index}${base.slice(at)}`;
 }
 
+export interface SeriesPreview {
+  startIndex: number;
+  emails: string[];
+}
+
+export async function fetchSeriesPreview(params: {
+  emailPrefix: string;
+  count: number;
+  targetType: 'admin' | 'tenant';
+  targetId: string;
+  projectId: string;
+}): Promise<SeriesPreview> {
+  const qs = new URLSearchParams({
+    emailPrefix: params.emailPrefix,
+    count: String(params.count),
+    targetType: params.targetType,
+    targetId: params.targetId,
+    projectId: params.projectId,
+  });
+  const res = await apiRequest<ApiEnvelope<SeriesPreview>>(`${BASE}/series-preview?${qs.toString()}`);
+  return res.data;
+}
+
 export interface InventoryAssigneeOption {
   id: string;
   assigneeType: AssigneeType;
