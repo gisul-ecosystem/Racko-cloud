@@ -3,7 +3,7 @@ import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { ServerModel } from '../../models/server.model';
 import { ServerCredentialModel } from '../../models/serverCredential.model';
-import { getVmInventorySettings } from '../../models/vmInventorySettings.model';
+import { getVmInventorySettings, resolveProviderExpiryWarningDays } from '../../models/vmInventorySettings.model';
 import { sendProviderExpiryWarningEmail, type EmailAttachment } from '../../utils/email/sender';
 import { resolvePlatformEmailBrand } from '../../utils/email/templates/emailBrand';
 import {
@@ -62,10 +62,12 @@ function buildWorkbook(rows: SheetRow[]): EmailAttachment {
  */
 export async function runProviderExpiryCheck(): Promise<void> {
   const now = new Date();
-  const warningDays = config.INVENTORY_PROVIDER_EXPIRY_WARNING_DAYS;
+  const settings = await getVmInventorySettings();
+  const warningDays = resolveProviderExpiryWarningDays(settings.warningDays);
 
   // The whole window, not just the exact day: a scheduler that was down must
-  // not silently swallow the only warning a contract gets.
+  // not silently swallow the only warning a contract gets. warningDays=0 is
+  // the expiry day itself.
   const from = startOfUtcDay(now);
   const until = addUtcDays(now, warningDays + 1);
 
@@ -82,7 +84,6 @@ export async function runProviderExpiryCheck(): Promise<void> {
   );
   if (due.length === 0) return;
 
-  const settings = await getVmInventorySettings();
   const recipients = [
     ...new Set(settings.providerExpiryRecipients.map((e) => e.trim().toLowerCase()).filter(Boolean)),
   ];

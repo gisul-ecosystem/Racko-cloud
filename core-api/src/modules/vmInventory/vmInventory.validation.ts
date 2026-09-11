@@ -186,6 +186,8 @@ export const updateNotificationSettingsSchema = z.object({
     providerExpiryRecipients: z
       .array(z.string().trim().toLowerCase().email('Enter a valid email address.').max(200))
       .max(20),
+    /** 0 = on the expiry day, 1 = one day before, up to 30. */
+    warningDays: z.number().int().min(0).max(30).optional(),
   }),
 });
 
