@@ -79,44 +79,23 @@ function guacConnectionNameForExternalVm(externalVmId: string): string {
 }
 
 /**
- * Kill live Guacamole tunnels for a named connection.
- * Matches activeConnections by connectionIdentifier (and optional Guac username).
+ * Kill live Guacamole tunnels for a named connection (confirm-retry).
+ * JWT revoke still proceeds if Guacamole is unreachable.
  */
 async function killGuacamoleSessionsForConnection(
   connectionName: string,
   options?: { username?: string }
 ): Promise<void> {
   try {
-    const connectionIdentifier =
-      await guacamoleClient.getConnectionIdentifierByName(connectionName);
-    if (!connectionIdentifier) {
-      logger.info('[accessSchedule] no Guacamole connection to kill', { connectionName });
-      return;
-    }
-
-    const active = await guacamoleClient.listActiveConnections();
-    const username = options?.username?.trim();
-    const ids = active
-      .filter((a) => a.connectionIdentifier === connectionIdentifier)
-      .filter((a) => !username || a.username === username)
-      .map((a) => a.identifier);
-
-    if (ids.length === 0) {
-      logger.info('[accessSchedule] no active Guacamole tunnels', {
-        connectionName,
-        connectionIdentifier,
-      });
-      return;
-    }
-
-    await guacamoleClient.killActiveConnections(ids);
-    logger.info('[accessSchedule] Guacamole tunnels killed', {
+    const killed = await guacamoleClient.killSessionsForConnectionNameWithRetry(connectionName, {
+      username: options?.username,
+      throwOnPersistentFailure: false,
+    });
+    logger.info('[accessSchedule] Guacamole tunnel kill finished', {
       connectionName,
-      connectionIdentifier,
-      killed: ids.length,
+      killed,
     });
   } catch (err) {
-    // Don't fail the disconnect path if Guac is down — JWT expiry still applied.
     logger.error('[accessSchedule] Guacamole kill failed', {
       connectionName,
       error: err instanceof Error ? err.message : String(err),

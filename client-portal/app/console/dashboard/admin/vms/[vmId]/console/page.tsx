@@ -2,7 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { VMConsoleView } from '@/components/console/VMConsoleView';
-import { openTenantVmConsole } from '@/lib/tenantVmApi';
+import { closeTenantVmConsole, openTenantVmConsole } from '@/lib/tenantVmApi';
 import { tenantVps } from '@/lib/tenantAdminRoutes';
 import type { ConsoleProtocol, ConsoleSession } from '@/lib/consoleApi';
 
@@ -28,6 +28,7 @@ export default function TenantAdminVmConsolePage() {
       backHref={detailHref}
       disconnectHref={tenantVps.vms}
       getSession={getTenantSession}
+      closeSession={closeTenantVmConsole}
     />
   );
 }
