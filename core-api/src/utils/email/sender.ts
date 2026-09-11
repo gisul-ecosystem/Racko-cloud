@@ -478,13 +478,11 @@ export async function sendCatalogVmExpiryWarningEmail(input: {
 }
 
 /**
- * One alert per project whose inventory VMs are about to lapse.
- * The body lists that project and the resources on it.
+ * Inventory provider-contract alert: IP addresses and their provider end dates.
+ * Project VM-ending mail is a separate template.
  */
 export async function sendProviderExpiryWarningEmail(input: {
   to: string;
-  projectName: string;
-  clientName: string | null;
   resources: ProviderExpiryResourceRow[];
   soonestDays: number;
   soonestDateLabel: string;
@@ -492,8 +490,6 @@ export async function sendProviderExpiryWarningEmail(input: {
   brand?: EmailBrand;
 }): Promise<void> {
   const template = buildProviderExpiryWarningTemplate({
-    projectName: input.projectName,
-    clientName: input.clientName,
     resources: input.resources,
     soonestDays: input.soonestDays,
     soonestDateLabel: input.soonestDateLabel,

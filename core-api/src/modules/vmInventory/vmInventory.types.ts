@@ -16,11 +16,20 @@ export type InventorySource =
   | 'dedicated_server';
 
 /** One grant of a login to one person, with client dates resolved from its project. */
+export interface InventoryNotificationDispatch {
+  projectsSent: number;
+  vmsMarked: number;
+  vmsInWindow: number;
+  skipped: 'already_sent_today' | 'none_in_window' | 'already_alerted' | 'no_recipients' | 'send_failed' | null;
+}
+
 export interface InventoryNotificationSettings {
   /** Alerted before a provider contract lapses. Empty means nobody is told. */
   providerExpiryRecipients: string[];
   /** Days before expiry to send. `0` is the expiry day itself. */
   warningDays: number;
+  /** Present after saving settings, when a send was attempted. */
+  dispatch?: InventoryNotificationDispatch;
 }
 
 export interface InventoryAssignmentView {

@@ -3,15 +3,10 @@ import { resolvePlatformEmailBrand } from './emailBrand';
 
 export interface ProviderExpiryResourceRow {
   ipAddress: string;
-  username: string;
-  vmSpec: string;
-  planDuration: string;
   expiryDate: string;
 }
 
 export interface ProviderExpiryWarningTemplateData {
-  projectName: string;
-  clientName: string | null;
   resources: ProviderExpiryResourceRow[];
   soonestDays: number;
   soonestDateLabel: string;
@@ -43,8 +38,6 @@ function resourcesTable(resources: ProviderExpiryResourceRow[]): string {
       (row, index) => `
       <tr style="background:${index % 2 === 0 ? '#ffffff' : '#f9fafb'};">
         <td style="${td};font-family:ui-monospace,monospace;">${escapeHtml(row.ipAddress)}</td>
-        <td style="${td}">${escapeHtml(row.username || '—')}</td>
-        <td style="${td}">${escapeHtml(row.vmSpec || '—')}</td>
         <td style="${td}">${escapeHtml(row.expiryDate)}</td>
       </tr>`
     )
@@ -54,9 +47,7 @@ function resourcesTable(resources: ProviderExpiryResourceRow[]): string {
     <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;text-align:left;">
       <tr style="background:#f9fafb;">
         <th style="${th}">IP</th>
-        <th style="${th}">Username</th>
-        <th style="${th}">VM spec</th>
-        <th style="${th}">Expiry</th>
+        <th style="${th}">Provider end date</th>
       </tr>
       ${rows}
     </table>`;
@@ -65,45 +56,31 @@ function resourcesTable(resources: ProviderExpiryResourceRow[]): string {
 export function buildProviderExpiryWarningTemplate(data: ProviderExpiryWarningTemplateData) {
   const brand = data.brand ?? resolvePlatformEmailBrand();
   const timeLabel = dayLabel(data.soonestDays);
-  const resourceCount = data.resources.length;
-  const resourceLabel = `${resourceCount} ${resourceCount === 1 ? 'resource' : 'resources'}`;
+  const vmCount = data.resources.length;
+  const vmLabel = `${vmCount} ${vmCount === 1 ? 'VM' : 'VMs'}`;
 
   const detailsHtml = `
     <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;text-align:left;margin-bottom:16px;">
       <tr style="background:#f9fafb;">
-        <td style="padding:12px 16px;font-size:13px;color:#6b7280;width:38%;border-bottom:1px solid #e5e7eb;">Project</td>
-        <td style="padding:12px 16px;font-size:13px;color:#111827;border-bottom:1px solid #e5e7eb;">${escapeHtml(data.projectName)}</td>
-      </tr>
-      ${
-        data.clientName
-          ? `<tr>
-        <td style="padding:12px 16px;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb;">Client</td>
-        <td style="padding:12px 16px;font-size:13px;color:#111827;border-bottom:1px solid #e5e7eb;">${escapeHtml(data.clientName)}</td>
-      </tr>`
-          : ''
-      }
-      <tr style="background:#f9fafb;">
-        <td style="padding:12px 16px;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb;">First contract ends</td>
+        <td style="padding:12px 16px;font-size:13px;color:#6b7280;width:38%;border-bottom:1px solid #e5e7eb;">Soonest end date</td>
         <td style="padding:12px 16px;font-size:13px;color:#111827;border-bottom:1px solid #e5e7eb;">${escapeHtml(data.soonestDateLabel)} (${escapeHtml(timeLabel)})</td>
       </tr>
       <tr>
-        <td style="padding:12px 16px;font-size:13px;color:#6b7280;">Resources</td>
-        <td style="padding:12px 16px;font-size:13px;color:#111827;">${resourceLabel}</td>
+        <td style="padding:12px 16px;font-size:13px;color:#6b7280;">VMs</td>
+        <td style="padding:12px 16px;font-size:13px;color:#111827;">${vmLabel}</td>
       </tr>
     </table>
-    <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#374151;">Resources on this project</p>
     ${resourcesTable(data.resources)}`;
 
   const bodyHtml = `
     <p style="margin:0;font-size:15px;line-height:1.6;color:#374151;">
-      Provider contracts for this project are ending ${escapeHtml(timeLabel)}.
-      The resources below are the machines on
-      <strong>${escapeHtml(data.projectName)}</strong> that need renewal.
+      Provider contracts for the inventory VMs below are ending ${escapeHtml(timeLabel)}.
+      This is the provider end date, not a project end date.
     </p>`;
 
   return buildBrandedEmail(brand, {
-    subject: `${data.projectName} — ${resourceLabel} ending ${timeLabel}`,
-    headline: 'Project resources ending',
+    subject: `${vmLabel} — provider contracts ending ${timeLabel}`,
+    headline: 'Provider contract ending',
     bodyHtml,
     detailsHtml,
     ctaLabel: 'Open VM inventory',
