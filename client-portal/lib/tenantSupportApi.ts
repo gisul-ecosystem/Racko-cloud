@@ -40,6 +40,7 @@ export interface TenantSupportTicket {
   _id: string;
   ticketNumber: string;
   tenantId?: string;
+  projectId?: string | null;
   subject: string;
   description: string;
   type: TenantTicketType;
@@ -68,6 +69,7 @@ export interface SubmitTenantTicketPayload {
   subject: string;
   description: string;
   priority?: TenantTicketPriority;
+  projectId?: string;
   requesterPhone?: string;
   vmCpu?: string;
   vmRam?: string;
@@ -78,6 +80,7 @@ export interface SubmitTenantTicketPayload {
 
 export interface TenantTicketFilters {
   status?: TenantTicketStatus;
+  projectId?: string;
   skip?: number;
   limit?: number;
 }
@@ -85,6 +88,7 @@ export interface TenantTicketFilters {
 function buildTicketQuery(filters: TenantTicketFilters = {}): string {
   const params = new URLSearchParams();
   if (filters.status) params.set('status', filters.status);
+  if (filters.projectId) params.set('projectId', filters.projectId);
   if (filters.skip != null) params.set('skip', String(filters.skip));
   if (filters.limit != null) params.set('limit', String(filters.limit));
   const qs = params.toString();

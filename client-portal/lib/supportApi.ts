@@ -32,6 +32,12 @@ export interface SupportTicketVmDetails {
   purpose?: string;
 }
 
+export interface SupportTicketProjectRef {
+  _id: string;
+  clientName?: string;
+  name?: string;
+}
+
 export interface SupportTicketComment {
   _id: string;
   authorId: string;
@@ -57,6 +63,7 @@ export interface SupportTicket {
   requesterPhone?: string;
   platformAssigneeId?: string;
   platformAssigneeName?: string;
+  projectId?: string | SupportTicketProjectRef | null;
   tenantAssigneeId?: string;
   tenantAssigneeName?: string;
   escalatedAt?: string;
@@ -112,6 +119,39 @@ export interface MyTicketsFilters {
   status?: SupportTicketStatus;
   skip?: number;
   limit?: number;
+}
+
+export function supportTicketProjectId(
+  projectId: SupportTicket['projectId']
+): string | null {
+  if (!projectId) return null;
+  if (typeof projectId === 'string') return projectId;
+  return projectId._id ?? null;
+}
+
+export function supportTicketProjectLabel(
+  projectId: SupportTicket['projectId']
+): string | null {
+  if (!projectId || typeof projectId === 'string') return null;
+  return projectId.clientName?.trim() || projectId.name?.trim() || null;
+}
+
+export function uniqueTicketProjects(tickets: SupportTicket[]): SupportTicketProjectRef[] {
+  const seen = new Set<string>();
+  const out: SupportTicketProjectRef[] = [];
+  for (const ticket of tickets) {
+    const project = ticket.projectId;
+    if (!project || typeof project === 'string') continue;
+    const id = project._id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(project);
+  }
+  return out.sort((a, b) =>
+    (a.clientName || a.name || '').localeCompare(b.clientName || b.name || '', undefined, {
+      sensitivity: 'base',
+    })
+  );
 }
 
 export interface UpdateTicketPayload {

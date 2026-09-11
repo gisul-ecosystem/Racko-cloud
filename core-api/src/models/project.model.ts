@@ -4,6 +4,13 @@ import type { AdminServiceKey } from '../constants/adminServiceCatalog';
 export type ProjectStatus = 'active' | 'archived';
 export type ProjectOwnerType = 'org' | 'tenant';
 
+export interface IProjectSupportEscalation {
+  originalAgentId?: mongoose.Types.ObjectId;
+  fallbackAgentId?: mongoose.Types.ObjectId;
+  reason?: string;
+  escalatedAt: Date;
+}
+
 export interface IProject extends Document {
   _id: mongoose.Types.ObjectId;
   ownerType: ProjectOwnerType;
@@ -16,21 +23,31 @@ export interface IProject extends Document {
   year: number;
   sequenceNumber: number;
   clientName: string;
+  /** Client contact email for pre-expiry notifications. */
+  clientEmail?: string;
   description?: string;
   startDate?: Date;
   endDate?: Date;
-  /** Emails notified before project end date (expiry reminders). */
+  /** @deprecated Legacy field — expiry emails use supportAgentId + clientEmail. */
   reminderEmails: string[];
   /** When true, project auto-archives after endDate (default true). */
   autoArchiveEnabled: boolean;
   /** Last endDate value a pre-expiry warning was sent for (idempotency). */
   expiryWarningSentFor?: Date;
+  /** When set, project is in post-end-date grace before VM cleanup + archive. */
+  gracePeriodEndsAt?: Date;
+  /** Set after grace-period VM unassign completes (idempotency). */
+  expiryCleanupCompletedAt?: Date;
   archivedAt?: Date;
   archivedReason?: 'manual' | 'end_date_reached';
   enabledServices: AdminServiceKey[];
   status: ProjectStatus;
   /** Platform User or TenantUser id depending on creator. */
   createdBy: mongoose.Types.ObjectId;
+  /** Assigned support agent (platform User). */
+  supportAgentId?: mongoose.Types.ObjectId | null;
+  /** When the project agent is unavailable, fallback assignments are logged here. */
+  supportEscalationLog: IProjectSupportEscalation[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +68,7 @@ const projectSchema = new Schema<IProject>(
     year: { type: Number, required: true, min: 2000, max: 2100 },
     sequenceNumber: { type: Number, required: true, min: 1 },
     clientName: { type: String, required: true, trim: true, maxlength: 200 },
+    clientEmail: { type: String, trim: true, lowercase: true, maxlength: 320 },
     description: { type: String, trim: true, maxlength: 1000 },
     startDate: { type: Date },
     endDate: { type: Date },
@@ -60,6 +78,8 @@ const projectSchema = new Schema<IProject>(
     },
     autoArchiveEnabled: { type: Boolean, default: true },
     expiryWarningSentFor: { type: Date },
+    gracePeriodEndsAt: { type: Date },
+    expiryCleanupCompletedAt: { type: Date },
     archivedAt: { type: Date },
     archivedReason: {
       type: String,
@@ -76,6 +96,22 @@ const projectSchema = new Schema<IProject>(
       index: true,
     },
     createdBy: { type: Schema.Types.ObjectId, required: true },
+    supportAgentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    supportEscalationLog: {
+      type: [
+        {
+          originalAgentId: { type: Schema.Types.ObjectId, ref: 'User' },
+          fallbackAgentId: { type: Schema.Types.ObjectId, ref: 'User' },
+          reason: { type: String },
+          escalatedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
   },
   {
     timestamps: true,

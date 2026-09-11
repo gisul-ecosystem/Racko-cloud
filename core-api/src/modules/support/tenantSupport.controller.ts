@@ -1,12 +1,10 @@
 import mongoose from 'mongoose';
 import type { Request, Response, NextFunction } from 'express';
-import { User } from '../../models/user.model';
 import { TenantUser } from '../../models/tenantUser.model';
 import { ForbiddenError } from '../../utils/errors';
 import type { TenantAuthenticatedRequest } from '../../middleware/requireTenantAuth.middleware';
 import { tenantSupportService } from './tenantSupport.service';
 import type { TicketStatus } from './support.model';
-import type { IQueueAgent } from './support.queue';
 
 function success<T>(res: Response, message: string, data: T, statusCode = 200): void {
   res.status(statusCode).json({ success: true, message, data });
@@ -68,6 +66,7 @@ export class TenantSupportController {
     try {
       const ctx = await getTenantContext(req);
       const status = req.query['status'] as TicketStatus | undefined;
+      const projectId = req.query['projectId'] as string | undefined;
       const skip = req.query['skip'] as string | undefined;
       const limit = req.query['limit'] as string | undefined;
 
@@ -77,6 +76,7 @@ export class TenantSupportController {
         ctx.isTenantAdmin,
         {
           status,
+          projectId,
           skip: Number(skip ?? 0),
           limit: Number(limit ?? 50),
         }
@@ -130,26 +130,11 @@ export class TenantSupportController {
   async escalate(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const ctx = await getTenantContext(req);
-      const agentsRaw = await User.find({
-        role: 'support_agent',
-        isActive: true,
-      })
-        .select('_id name email')
-        .sort({ _id: 1 })
-        .lean();
-
-      const agents: IQueueAgent[] = agentsRaw.map((agent) => ({
-        _id: agent._id,
-        name: agent.name || agent.email,
-        email: agent.email,
-      }));
-
       const ticket = await tenantSupportService.escalateToPlatform(
         ctx.tenantId,
         req.params['ticketId'] as string,
         ctx.tenantUserId,
         ctx.tenantUserName,
-        agents,
         req.body.note as string | undefined
       );
       success(res, 'Ticket escalated to platform team.', { ticket });

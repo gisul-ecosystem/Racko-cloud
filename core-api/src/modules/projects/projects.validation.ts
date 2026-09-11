@@ -19,8 +19,9 @@ export const createProjectSchema = z.object({
       startDate: z.coerce.date(),
       endDate: z.coerce.date(),
       enabledServices: z.array(adminServiceKeySchema).min(1),
-      reminderEmails: z.array(emailSchema).max(10).optional(),
+      clientEmail: emailSchema.optional(),
       autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional(),
     })
     .refine((d) => d.startDate <= d.endDate, {
       message: 'endDate must be on or after startDate',
@@ -34,11 +35,12 @@ export const updateProjectSchema = z.object({
     .object({
       name: z.string().min(1).max(200).trim().optional(),
       clientName: z.string().min(1).max(200).trim().optional(),
+      clientEmail: emailSchema.optional().nullable(),
       description: z.string().max(1000).trim().optional().nullable(),
       startDate: z.coerce.date().optional().nullable(),
       endDate: z.coerce.date().optional().nullable(),
-      reminderEmails: z.array(emailSchema).max(10).optional().nullable(),
       autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional().nullable(),
     })
     .refine(
       (d) => {
@@ -87,8 +89,9 @@ export const createProjectForAdminSchema = z.object({
       startDate: z.coerce.date(),
       endDate: z.coerce.date(),
       enabledServices: z.array(adminServiceKeySchema).min(1),
-      reminderEmails: z.array(emailSchema).max(10).optional(),
+      clientEmail: emailSchema.optional(),
       autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional(),
     })
     .refine((d) => d.startDate <= d.endDate, {
       message: 'endDate must be on or after startDate',
@@ -110,8 +113,9 @@ export const createProjectForTenantSchema = z.object({
       startDate: z.coerce.date(),
       endDate: z.coerce.date(),
       enabledServices: z.array(adminServiceKeySchema).min(1),
-      reminderEmails: z.array(emailSchema).max(10).optional(),
+      clientEmail: emailSchema.optional(),
       autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional(),
     })
     .refine((d) => d.startDate <= d.endDate, {
       message: 'endDate must be on or after startDate',

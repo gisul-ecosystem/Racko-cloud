@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type { AuthenticatedRequest } from '../../types';
 import { isAdminServiceKey } from '../../constants/adminServiceCatalog';
 import { ValidationError } from '../../utils/errors';
+import { previewNextSupportAgent } from '../support/support.service';
 import { projectsService } from './projects.service';
 import type {
   AddProjectServicesInput,
@@ -101,6 +102,47 @@ async function update(req: Request, res: Response, next: NextFunction): Promise<
       body
     );
     success(res, 'Project updated.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSupportAgents(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const agents = await projectsService.listSupportAgentsForOrgOwner(authReq.user.userId);
+    success(res, 'Support agents retrieved.', { agents });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function supportAgentPreview(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const agent = await previewNextSupportAgent();
+    success(res, 'Support agent preview retrieved.', { agent });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function supportAgentsList(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const agents = await projectsService.listSupportAgentsListForSuperAdmin();
+    success(res, 'Support agents retrieved.', { agents });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSupportTickets(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const tickets = await projectsService.listSupportTicketsForProject(
+      authReq.user.userId,
+      String(req.params['id'])
+    );
+    success(res, 'Support tickets retrieved.', { tickets });
   } catch (err) {
     next(err);
   }
@@ -286,6 +328,22 @@ async function addServicesForTenantSuperAdmin(
       body
     );
     success(res, 'Services added to project.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getByIdForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const project = await projectsService.getByIdForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project retrieved.', { project });
   } catch (err) {
     next(err);
   }
@@ -486,6 +544,10 @@ export const projectsController = {
   listElasticResources,
   create,
   update,
+  listSupportAgents,
+  supportAgentPreview,
+  supportAgentsList,
+  listSupportTickets,
   addServices,
   removeService,
   archive,
@@ -509,6 +571,7 @@ export const projectsController = {
   previewNameForTenant,
   listEligibleServicesForTenant,
   createForTenant,
+  getByIdForTenantSuperAdmin,
   updateForTenantSuperAdmin,
   archiveForTenantSuperAdmin,
   unarchiveForTenantSuperAdmin,

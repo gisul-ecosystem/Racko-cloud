@@ -20,13 +20,14 @@ import {
   PROJECT_SERVICE_LABELS,
   removeTenantProjectService,
   updateTenantProject,
-  formatReminderEmailsInput,
-  parseReminderEmailsInput,
   type OrgProject,
   type ProjectReportByServiceRow,
 } from '@/lib/tenantProjectsApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
+import { ProjectDetailNav } from '@/components/console/ProjectDetailNav';
+import { ProjectTicketList } from '@/components/console/ProjectTicketList';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { ProjectElasticResourcesModal } from '@/components/console/ProjectElasticResourcesModal';
 import {
@@ -183,6 +184,7 @@ export default function TenantProjectDetailPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const id = String(params?.id || '');
+  const { isTenantAdmin } = useTenantRbac();
 
   const [project, setProject] = useState<OrgProject | null>(null);
   const [available, setAvailable] = useState<AdminServiceKey[]>([]);
@@ -193,7 +195,7 @@ export default function TenantProjectDetailPage() {
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [reminderEmailsRaw, setReminderEmailsRaw] = useState('');
+  const [clientEmail, setClientEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -226,7 +228,7 @@ export default function TenantProjectDetailPage() {
       setDescription(p.description || '');
       setStartDate(p.startDate ? p.startDate.slice(0, 10) : '');
       setEndDate(p.endDate ? p.endDate.slice(0, 10) : '');
-      setReminderEmailsRaw(formatReminderEmailsInput(p.reminderEmails));
+      setClientEmail(p.clientEmail || '');
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
       setCostRows(costs);
       // Always include the current project's clientName so it appears as a selection not create
@@ -281,10 +283,10 @@ export default function TenantProjectDetailPage() {
         description: description.trim() || null,
         startDate: startDate || null,
         endDate: endDate || null,
-        reminderEmails: parseReminderEmailsInput(reminderEmailsRaw),
+        clientEmail: clientEmail.trim() || null,
       });
       setProject(updated);
-      setReminderEmailsRaw(formatReminderEmailsInput(updated.reminderEmails));
+      setClientEmail(updated.clientEmail || '');
       setFlash('Project updated.');
       setEditOpen(false);
     } catch (err) {
@@ -301,7 +303,7 @@ export default function TenantProjectDetailPage() {
     setDescription(project.description || '');
     setStartDate(project.startDate ? project.startDate.slice(0, 10) : '');
     setEndDate(project.endDate ? project.endDate.slice(0, 10) : '');
-    setReminderEmailsRaw(formatReminderEmailsInput(project.reminderEmails));
+    setClientEmail(project.clientEmail || '');
     setError(null);
     setEditOpen(true);
   }
@@ -387,6 +389,13 @@ export default function TenantProjectDetailPage() {
   const daysRemaining = daysUntilEndDate(project.endDate);
   const showExpiryBanner =
     !archived && daysRemaining != null && daysRemaining >= 0 && daysRemaining <= 7;
+  const inGracePeriod =
+    !archived &&
+    Boolean(project.gracePeriodEndsAt) &&
+    new Date(project.gracePeriodEndsAt!).getTime() > Date.now();
+  const supportTab = searchParams.get('tab') === 'support';
+  const projectBasePath = tenantConsole.project(project.id);
+  const transactionsPath = `${projectBasePath}/transactions`;
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-8 pb-10">
@@ -422,10 +431,18 @@ export default function TenantProjectDetailPage() {
                 {formatProjectDate(project.startDate)} → {formatProjectDate(project.endDate)}
               </p>
             )}
-            {(project.reminderEmails?.length ?? 0) > 0 && (
+            {project.clientEmail && (
               <p className="mt-2 text-xs text-gray-500">
-                Reminder emails:{' '}
-                <span className="text-gray-700">{project.reminderEmails!.join(', ')}</span>
+                Client email:{' '}
+                <span className="text-gray-700">{project.clientEmail}</span>
+              </p>
+            )}
+            {project.supportAgent && (
+              <p className="mt-2 text-xs text-gray-500">
+                Support agent:{' '}
+                <span className="text-gray-700">
+                  {project.supportAgent.name} ({project.supportAgent.email})
+                </span>
               </p>
             )}
             {archived && project.archivedReason && (
@@ -477,7 +494,18 @@ export default function TenantProjectDetailPage() {
         </div>
       )}
 
-      {showExpiryBanner && (
+      {inGracePeriod && !supportTab && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          <p className="font-medium">This project is in its grace period.</p>
+          <p className="mt-1 text-xs text-red-800">
+            Assigned VMs will be released and the project archived on{' '}
+            {formatProjectDate(project.gracePeriodEndsAt)}. Extend the end date now if the client
+            needs more time.
+          </p>
+        </div>
+      )}
+
+      {showExpiryBanner && !inGracePeriod && !supportTab && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p className="font-medium">
             {daysRemaining === 0
@@ -487,12 +515,39 @@ export default function TenantProjectDetailPage() {
                 : `This project ends in ${daysRemaining} days.`}
           </p>
           <p className="mt-1 text-xs text-amber-800">
-            Extend the end date in Edit if the engagement continues. Reminder emails are sent one
-            day before expiry.
+            Extend the end date in Edit if the engagement continues. The support agent and client
+            email receive a notice 24 hours before expiry.
           </p>
         </div>
       )}
 
+      <ProjectDetailNav basePath={projectBasePath} transactionsPath={transactionsPath} />
+
+      {supportTab ? (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-gray-900">Support Tickets</h3>
+              <p className="text-sm text-gray-500">Tickets raised for this project</p>
+            </div>
+            {!archived && (
+              <Link
+                href={`${tenantConsole.supportNew}?projectId=${encodeURIComponent(project.id)}`}
+                className="inline-flex items-center rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#991B1B]"
+              >
+                + Raise a Ticket
+              </Link>
+            )}
+          </div>
+          <ProjectTicketList
+            projectId={project.id}
+            mode="tenant"
+            isTenantAdmin={isTenantAdmin}
+            ticketHref={(ticketId) => tenantConsole.supportTicket(ticketId)}
+          />
+        </div>
+      ) : (
+        <>
       <section>
         <div className="mb-4 flex items-center justify-between">
           <div>
@@ -581,6 +636,8 @@ export default function TenantProjectDetailPage() {
           </div>
         )}
       </section>
+        </>
+      )}
 
       {/* Edit project modal */}
       {editOpen && !archived && (
@@ -671,19 +728,18 @@ export default function TenantProjectDetailPage() {
 
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                    Reminder emails{' '}
-                    <span className="font-normal text-gray-400">(optional)</span>
+                    Client email <span className="font-normal text-gray-400">(optional)</span>
                   </label>
                   <input
-                    type="text"
-                    value={reminderEmailsRaw}
-                    onChange={(e) => setReminderEmailsRaw(e.target.value)}
-                    placeholder="pm@client.com, billing@client.com"
+                    type="email"
+                    value={clientEmail}
+                    onChange={(e) => setClientEmail(e.target.value)}
+                    placeholder="client@example.com"
                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
                   />
                   <p className="mt-1 text-[11px] text-gray-500">
-                    We email these addresses one day before the project end date. Separate multiple
-                    addresses with commas.
+                    The client receives a project expiry notice with resource details 24 hours
+                    before the end date.
                   </p>
                 </div>
               </div>

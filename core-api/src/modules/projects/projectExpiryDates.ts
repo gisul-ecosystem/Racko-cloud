@@ -28,6 +28,32 @@ export function isProjectEndDateOnWarningDay(
   return isSameUtcDay(endDate, target);
 }
 
+/** True on the end-date calendar day (UTC) and every day after. */
+export function isProjectOnOrAfterEndDate(endDate: Date, now = new Date()): boolean {
+  return startOfUtcDay(now).getTime() >= startOfUtcDay(endDate).getTime();
+}
+
+/** Grace ends this many hours after the start of the end-date UTC day. */
+export function computeGracePeriodEndsAt(endDate: Date, graceHours: number): Date {
+  return new Date(startOfUtcDay(endDate).getTime() + graceHours * 60 * 60 * 1000);
+}
+
+export function isGracePeriodComplete(gracePeriodEndsAt: Date, now = new Date()): boolean {
+  return now.getTime() >= gracePeriodEndsAt.getTime();
+}
+
+export function formatGracePeriodEndsLabel(date: Date): string {
+  return date.toLocaleString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  });
+}
+
 export function formatProjectDateLabel(date: Date): string {
   return date.toLocaleDateString('en-IN', {
     day: 'numeric',
