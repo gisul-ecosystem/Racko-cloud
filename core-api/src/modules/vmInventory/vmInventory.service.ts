@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import { config } from '../../config';
 import { ServerModel } from '../../models/server.model';
 import { ServerCredentialModel } from '../../models/serverCredential.model';
 import { CredentialAssignmentModel } from '../../models/credentialAssignment.model';
