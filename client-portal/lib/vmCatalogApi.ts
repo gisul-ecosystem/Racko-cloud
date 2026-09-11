@@ -178,6 +178,7 @@ export interface CatalogVmOverview {
 
 export interface CatalogVmRequesterGroup {
   adminId: string;
+  kind?: 'admin' | 'tenant';
   adminEmail: string;
   pendingCount: number;
   totalCount: number;
@@ -769,10 +770,12 @@ export async function fetchCatalogVmRequesters(): Promise<CatalogVmRequesterGrou
 export async function fetchCatalogVmRequests(opts?: {
   status?: VmCatalogStatus | 'all';
   adminId?: string;
+  tenantId?: string;
 }): Promise<ICatalogVm[]> {
   const qs = new URLSearchParams();
   if (opts?.status) qs.set('status', opts.status);
-  if (opts?.adminId) qs.set('adminId', opts.adminId);
+  if (opts?.tenantId) qs.set('tenantId', opts.tenantId);
+  else if (opts?.adminId) qs.set('adminId', opts.adminId);
   const suffix = qs.toString() ? `?${qs}` : '';
   const res = await apiRequest<ApiResponse<{ requests: ICatalogVm[]; total: number }>>(
     `/api/v1/vm-catalog/requests${suffix}`

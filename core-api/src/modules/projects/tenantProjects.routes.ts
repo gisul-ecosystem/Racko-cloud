@@ -66,6 +66,15 @@ router.post(
 );
 
 router.get(
+  '/:id/resources/elastic-servers',
+  requireTenantPermission('projects.read'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    tenantProjectsController.listElasticResources(req, res, next);
+  }
+);
+
+router.get(
   '/:id',
   requireTenantPermission('projects.read'),
   validateRequest(projectIdParamSchema),

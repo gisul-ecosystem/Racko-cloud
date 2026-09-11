@@ -13,6 +13,7 @@ import {
   unarchiveProject,
   fetchProject,
   fetchProjectClientNames,
+  fetchProjectElasticResources,
   fetchServiceCostReport,
   PROJECT_SERVICE_LABELS,
   removeProjectService,
@@ -24,6 +25,7 @@ import {
 } from '@/lib/projectsApi';
 import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { ProjectElasticResourcesModal } from '@/components/console/ProjectElasticResourcesModal';
 import {
   getServiceLaunchHref,
   getServiceTransactionsHref,
@@ -59,6 +61,7 @@ function ServiceCard({
   archived,
   saving,
   onRemove,
+  onViewResources,
 }: {
   serviceKey: AdminServiceKey;
   projectId: string;
@@ -67,6 +70,7 @@ function ServiceCard({
   archived: boolean;
   saving: boolean;
   onRemove: (key: AdminServiceKey) => void;
+  onViewResources?: () => void;
 }) {
   const meta = PROJECT_SERVICE_META[serviceKey] ?? {
     label: serviceKey,
@@ -170,6 +174,15 @@ function ServiceCard({
               View transactions
             </Link>
           ) : null}
+          {serviceKey === 'elastic-servers' && resourceCount > 0 && onViewResources && (
+            <button
+              type="button"
+              onClick={onViewResources}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
+            >
+              View resources
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -200,6 +213,12 @@ export default function ProjectDetailPage() {
   const [flash, setFlash] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<'archive' | 'restore' | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
+
+  const loadElasticResources = useCallback(
+    () => fetchProjectElasticResources(id),
+    [id]
+  );
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -526,6 +545,9 @@ export default function ProjectDetailPage() {
                 archived={archived}
                 saving={pendingService !== null}
                 onRemove={handleRemoveService}
+                onViewResources={
+                  key === 'elastic-servers' ? () => setResourcesOpen(true) : undefined
+                }
               />
             ))}
           </div>
@@ -754,6 +776,12 @@ export default function ProjectDetailPage() {
         onCancel={() => {
           if (!confirmLoading) setConfirmAction(null);
         }}
+      />
+
+      <ProjectElasticResourcesModal
+        open={resourcesOpen}
+        onClose={() => setResourcesOpen(false)}
+        load={loadElasticResources}
       />
     </div>
   );

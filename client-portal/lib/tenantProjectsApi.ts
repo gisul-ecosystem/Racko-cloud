@@ -50,6 +50,25 @@ export async function fetchTenantProject(id: string): Promise<OrgProject> {
   return data.project;
 }
 
+export interface TenantProjectElasticResource {
+  id: string;
+  name: string;
+  ipAddress: string;
+  username: string;
+  protocol: string;
+  assignedUsers: Array<{ email: string | null; username: string | null }>;
+}
+
+export async function fetchTenantProjectElasticResources(
+  projectId: string
+): Promise<TenantProjectElasticResource[]> {
+  const data = await unwrap<{
+    resources: TenantProjectElasticResource[];
+    total: number;
+  }>(tenantPortalRequest(`${BASE}/${projectId}/resources/elastic-servers`));
+  return data.resources;
+}
+
 export async function previewTenantProjectName(): Promise<ProjectNamePreview> {
   return unwrap(tenantPortalRequest(`${BASE}/name-preview`));
 }

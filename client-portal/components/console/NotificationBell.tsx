@@ -125,6 +125,13 @@ export function NotificationBell() {
         router.push(`/super-admin-console/webyne-vm-requests/${adminId}`);
         return;
       }
+      const tenantId = notification.metadata?.tenantId;
+      if (typeof tenantId === 'string' && tenantId) {
+        router.push(
+          `/super-admin-console/webyne-vm-requests/${tenantId}?scope=tenant`
+        );
+        return;
+      }
       router.push('/super-admin-console/webyne-vm-requests');
       return;
     }

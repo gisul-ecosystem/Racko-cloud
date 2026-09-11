@@ -63,7 +63,8 @@ export default function WebyneVmRequestsHubPage() {
           )}
         </div>
         <p className="mt-0.5 text-sm text-gray-500">
-          Buy requests from platform admins, grouped by requester. Open a card to review.
+          Buy requests from platform admins and tenants, grouped by requester. Open a
+          card to review.
         </p>
       </div>
 
@@ -83,7 +84,8 @@ export default function WebyneVmRequestsHubPage() {
           </div>
           <p className="text-sm font-medium text-gray-500">No Webyne VM requests yet</p>
           <p className="mt-1 text-xs text-gray-400">
-            When an admin clicks Buy Now in VM Catalog, their request appears here.
+            When an admin or tenant clicks Buy Now in VM Catalog, their request appears
+            here.
           </p>
         </div>
       )}
@@ -92,8 +94,12 @@ export default function WebyneVmRequestsHubPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {requesters.map((requester) => (
             <Link
-              key={requester.adminId}
-              href={`/super-admin-console/webyne-vm-requests/${requester.adminId}`}
+              key={`${requester.kind ?? 'admin'}:${requester.adminId}`}
+              href={
+                requester.kind === 'tenant'
+                  ? `/super-admin-console/webyne-vm-requests/${requester.adminId}?scope=tenant`
+                  : `/super-admin-console/webyne-vm-requests/${requester.adminId}`
+              }
               className="group rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition hover:border-[#B91C1C] hover:shadow-md"
             >
               <div className="flex items-start gap-3">
@@ -104,7 +110,9 @@ export default function WebyneVmRequestsHubPage() {
                   <p className="truncate text-sm font-semibold text-gray-900">
                     {requester.adminEmail}
                   </p>
-                  <p className="mt-0.5 text-xs text-gray-500">Platform admin</p>
+                  <p className="mt-0.5 text-xs text-gray-500">
+                    {requester.kind === 'tenant' ? 'Tenant' : 'Platform admin'}
+                  </p>
                 </div>
               </div>
 

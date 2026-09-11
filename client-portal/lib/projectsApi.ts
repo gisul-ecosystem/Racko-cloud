@@ -102,6 +102,24 @@ export async function fetchProject(id: string): Promise<OrgProject> {
   return data.project;
 }
 
+export interface ProjectElasticResource {
+  id: string;
+  name: string;
+  ipAddress: string;
+  username: string;
+  protocol: string;
+  assignedUsers: Array<{ email: string | null; username: string | null }>;
+}
+
+export async function fetchProjectElasticResources(
+  projectId: string
+): Promise<ProjectElasticResource[]> {
+  const data = await unwrap<{ resources: ProjectElasticResource[]; total: number }>(
+    apiRequest(`/api/v1/projects/${projectId}/resources/elastic-servers`)
+  );
+  return data.resources;
+}
+
 export async function previewProjectName(): Promise<ProjectNamePreview> {
   return unwrap(apiRequest('/api/v1/projects/name-preview'));
 }

@@ -83,6 +83,23 @@ async function getById(req: Request, res: Response, next: NextFunction): Promise
   }
 }
 
+async function listElasticResources(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = tenantAuth(req);
+    const resources = await projectsService.listElasticResourcesForTenant(
+      authReq.tenantUser.tenantId,
+      String(req.params['id'])
+    );
+    success(res, 'Project resources retrieved.', { resources, total: resources.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function create(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = tenantAuth(req);
@@ -207,6 +224,7 @@ export const tenantProjectsController = {
   listEligibleServices,
   listForService,
   getById,
+  listElasticResources,
   create,
   update,
   addServices,

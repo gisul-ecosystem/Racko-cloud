@@ -63,6 +63,23 @@ async function getById(req: Request, res: Response, next: NextFunction): Promise
   }
 }
 
+async function listElasticResources(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const resources = await projectsService.listElasticResources(
+      authReq.user.userId,
+      String(req.params['id'])
+    );
+    success(res, 'Project resources retrieved.', { resources, total: resources.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function create(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = req as AuthenticatedRequest;
@@ -466,6 +483,7 @@ export const projectsController = {
   list,
   listForService,
   getById,
+  listElasticResources,
   create,
   update,
   addServices,
