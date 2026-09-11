@@ -17,6 +17,8 @@ import { decrypt, encrypt } from '../../utils/crypto';
 import { NotFoundError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { inventoryExternalVmMirrorService } from './inventoryExternalVmMirror.service';
+import { triggerProviderExpiryCheck } from './providerExpiryScheduler';
+import { isSameUtcDay } from '../projects/projectExpiryDates';
 import type { PushVmInput } from '../machine-manager/machine-manager.service';
 import type { JobResponse } from '../machine-manager/machine-manager.types';
 import type {
@@ -879,6 +881,14 @@ class VmInventoryService {
       throw new ValidationError('providerStartDate must be on or before providerEndDate.');
     }
 
+    if (body.providerEndDate !== undefined) {
+      const prev = server.providerEndDate ?? null;
+      const next = body.providerEndDate;
+      if (!prev || !next || !isSameUtcDay(prev, next)) {
+        server.providerExpiryAlertSentFor = null;
+      }
+    }
+
     Object.assign(server, body);
     await server.save();
   }
@@ -1484,6 +1494,7 @@ class VmInventoryService {
     ].sort();
 
     const settings = await getVmInventorySettings();
+    const previousDays = resolveProviderExpiryWarningDays(settings.warningDays);
     settings.providerExpiryRecipients = cleaned;
     if (warningDays !== undefined) {
       settings.warningDays = warningDays;
@@ -1491,9 +1502,14 @@ class VmInventoryService {
     settings.updatedBy = updatedBy;
     await settings.save();
 
+    const nextDays = resolveProviderExpiryWarningDays(settings.warningDays);
+    if (warningDays !== undefined && previousDays !== nextDays) {
+      triggerProviderExpiryCheck('lead-time-changed', { force: true });
+    }
+
     return {
       providerExpiryRecipients: cleaned,
-      warningDays: resolveProviderExpiryWarningDays(settings.warningDays),
+      warningDays: nextDays,
     };
   }
 }

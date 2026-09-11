@@ -1,16 +1,20 @@
 import { buildBrandedEmail, type EmailBrand } from './brandedLayout';
 import { resolvePlatformEmailBrand } from './emailBrand';
 
+export interface ProviderExpiryResourceRow {
+  ipAddress: string;
+  username: string;
+  vmSpec: string;
+  planDuration: string;
+  expiryDate: string;
+}
+
 export interface ProviderExpiryWarningTemplateData {
-  /** Machines in the alert. The per-VM detail travels in the attached sheet. */
-  vmCount: number;
-  /** Rows in the attachment — higher than vmCount when a VM has several logins. */
-  loginCount: number;
-  /** Days until the nearest contract ends. */
+  projectName: string;
+  clientName: string | null;
+  resources: ProviderExpiryResourceRow[];
   soonestDays: number;
   soonestDateLabel: string;
-  /** The sheet's filename, so the body can name what to open. */
-  attachmentName: string;
   inventoryUrl: string;
   brand?: EmailBrand;
 }
@@ -29,53 +33,84 @@ function dayLabel(days: number): string {
   return `in ${days} days`;
 }
 
-export function buildProviderExpiryWarningTemplate(data: ProviderExpiryWarningTemplateData) {
-  const brand = data.brand ?? resolvePlatformEmailBrand();
-  const { vmCount, loginCount, soonestDays } = data;
-  const timeLabel = dayLabel(soonestDays);
-  const vmLabel = `${vmCount} ${vmCount === 1 ? 'VM' : 'VMs'}`;
+function resourcesTable(resources: ProviderExpiryResourceRow[]): string {
+  const th =
+    'padding:10px 12px;font-size:12px;color:#6b7280;text-align:left;border-bottom:1px solid #e5e7eb;';
+  const td =
+    'padding:10px 12px;font-size:13px;color:#111827;border-bottom:1px solid #e5e7eb;';
+  const rows = resources
+    .map(
+      (row, index) => `
+      <tr style="background:${index % 2 === 0 ? '#ffffff' : '#f9fafb'};">
+        <td style="${td};font-family:ui-monospace,monospace;">${escapeHtml(row.ipAddress)}</td>
+        <td style="${td}">${escapeHtml(row.username || '—')}</td>
+        <td style="${td}">${escapeHtml(row.vmSpec || '—')}</td>
+        <td style="${td}">${escapeHtml(row.expiryDate)}</td>
+      </tr>`
+    )
+    .join('');
 
-  const cell = 'padding:12px 16px;font-size:13px;color:#111827;border-bottom:1px solid #e5e7eb;';
-  const label =
-    'padding:12px 16px;font-size:13px;color:#6b7280;width:38%;border-bottom:1px solid #e5e7eb;';
-
-  const detailsHtml = `
+  return `
     <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;text-align:left;">
       <tr style="background:#f9fafb;">
-        <td style="${label}">Machines</td>
-        <td style="${cell}">${vmCount}</td>
+        <th style="${th}">IP</th>
+        <th style="${th}">Username</th>
+        <th style="${th}">VM spec</th>
+        <th style="${th}">Expiry</th>
+      </tr>
+      ${rows}
+    </table>`;
+}
+
+export function buildProviderExpiryWarningTemplate(data: ProviderExpiryWarningTemplateData) {
+  const brand = data.brand ?? resolvePlatformEmailBrand();
+  const timeLabel = dayLabel(data.soonestDays);
+  const resourceCount = data.resources.length;
+  const resourceLabel = `${resourceCount} ${resourceCount === 1 ? 'resource' : 'resources'}`;
+
+  const detailsHtml = `
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;text-align:left;margin-bottom:16px;">
+      <tr style="background:#f9fafb;">
+        <td style="padding:12px 16px;font-size:13px;color:#6b7280;width:38%;border-bottom:1px solid #e5e7eb;">Project</td>
+        <td style="padding:12px 16px;font-size:13px;color:#111827;border-bottom:1px solid #e5e7eb;">${escapeHtml(data.projectName)}</td>
+      </tr>
+      ${
+        data.clientName
+          ? `<tr>
+        <td style="padding:12px 16px;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb;">Client</td>
+        <td style="padding:12px 16px;font-size:13px;color:#111827;border-bottom:1px solid #e5e7eb;">${escapeHtml(data.clientName)}</td>
+      </tr>`
+          : ''
+      }
+      <tr style="background:#f9fafb;">
+        <td style="padding:12px 16px;font-size:13px;color:#6b7280;border-bottom:1px solid #e5e7eb;">First contract ends</td>
+        <td style="padding:12px 16px;font-size:13px;color:#111827;border-bottom:1px solid #e5e7eb;">${escapeHtml(data.soonestDateLabel)} (${escapeHtml(timeLabel)})</td>
       </tr>
       <tr>
-        <td style="${label}">First contract ends</td>
-        <td style="${cell}">${escapeHtml(data.soonestDateLabel)} (${escapeHtml(timeLabel)})</td>
+        <td style="padding:12px 16px;font-size:13px;color:#6b7280;">Resources</td>
+        <td style="padding:12px 16px;font-size:13px;color:#111827;">${resourceLabel}</td>
       </tr>
-      <tr style="background:#f9fafb;">
-        <td style="${label}">Attached</td>
-        <td style="${cell}">${escapeHtml(data.attachmentName)} — ${loginCount} row${loginCount === 1 ? '' : 's'} with IP, username, VM spec, plan duration and expiry date</td>
-      </tr>
-    </table>`;
+    </table>
+    <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#374151;">Resources on this project</p>
+    ${resourcesTable(data.resources)}`;
 
   const bodyHtml = `
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#374151;">
-      The provider contract for ${vmLabel} in the Racko VM inventory ends ${escapeHtml(timeLabel)}.
-      The attached sheet lists every affected machine.
-    </p>
     <p style="margin:0;font-size:15px;line-height:1.6;color:#374151;">
-      Renew with the provider to keep ${vmCount === 1 ? 'it' : 'them'} running. When a contract
-      lapses the provider reclaims the machine — Racko does not renew automatically and cannot
-      recover the box afterwards.
+      Provider contracts for this project are ending ${escapeHtml(timeLabel)}.
+      The resources below are the machines on
+      <strong>${escapeHtml(data.projectName)}</strong> that need renewal.
     </p>`;
 
   return buildBrandedEmail(brand, {
-    subject: `${vmCount} VM${vmCount === 1 ? '' : 's'} — provider contract ends ${timeLabel}`,
-    headline: vmCount === 1 ? 'VM contract ending' : 'VM contracts ending',
+    subject: `${data.projectName} — ${resourceLabel} ending ${timeLabel}`,
+    headline: 'Project resources ending',
     bodyHtml,
     detailsHtml,
     ctaLabel: 'Open VM inventory',
     ctaUrl: data.inventoryUrl,
     noticeTitle: 'Renewed already?',
     noticeBody:
-      'Import the provider sheet again with the new end dates, or edit the dates on each VM in the inventory. This alert is sent once per contract end date.',
+      'Update the provider end date on these VMs in the inventory. This alert is sent once per contract end date.',
     hero: 'alert',
   });
 }

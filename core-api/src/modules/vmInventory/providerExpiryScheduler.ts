@@ -1,18 +1,24 @@
-import * as XLSX from 'xlsx';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { ServerModel } from '../../models/server.model';
 import { ServerCredentialModel } from '../../models/serverCredential.model';
+import { CredentialAssignmentModel } from '../../models/credentialAssignment.model';
+import { ProjectModel } from '../../models/project.model';
 import { getVmInventorySettings, resolveProviderExpiryWarningDays } from '../../models/vmInventorySettings.model';
-import { sendProviderExpiryWarningEmail, type EmailAttachment } from '../../utils/email/sender';
+import { sendProviderExpiryWarningEmail } from '../../utils/email/sender';
 import { resolvePlatformEmailBrand } from '../../utils/email/templates/emailBrand';
+import type { ProviderExpiryResourceRow } from '../../utils/email/templates/providerExpiryWarning';
 import {
   addUtcDays,
   formatProjectDateLabel as formatDateLabel,
+  isSameUtcDay,
   startOfUtcDay,
 } from '../projects/projectExpiryDates';
+import { calendarDateInTimezone, parseDateOnlyUtc } from '../vmAutomation/timezoneUtils';
 
-const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+/** Operators pick calendar dates in India; "today" follows that, not UTC. */
+const ALERT_TIMEZONE = 'Asia/Kolkata';
+const UNASSIGNED_KEY = 'unassigned';
 
 let tickInProgress = false;
 
@@ -21,68 +27,67 @@ function daysUntil(endDate: Date, now: Date): number {
   return Math.round(ms / 86_400_000);
 }
 
-/** YYYY-MM-DD, matching the import template so the sheet can be edited and re-imported. */
 function isoDate(value: Date): string {
   return value.toISOString().slice(0, 10);
 }
 
-interface SheetRow {
-  IP: string;
-  Username: string;
-  'VM Spec': string;
-  'Plan Duration': string;
-  'Expiry Date': string;
-}
-
-function buildWorkbook(rows: SheetRow[]): EmailAttachment {
-  const sheet = XLSX.utils.json_to_sheet(rows, {
-    header: ['IP', 'Username', 'VM Spec', 'Plan Duration', 'Expiry Date'],
-  });
-  sheet['!cols'] = [{ wch: 18 }, { wch: 20 }, { wch: 38 }, { wch: 14 }, { wch: 12 }];
-
-  const book = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(book, sheet, 'Expiring VMs');
-  const buffer = XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
-
-  return {
-    filename: `expiring-vms-${isoDate(new Date())}.xlsx`,
-    content: buffer.toString('base64'),
-    mimeType: XLSX_MIME,
-  };
+interface ProjectExpiryGroup {
+  key: string;
+  projectName: string;
+  clientName: string | null;
+  resources: ProviderExpiryResourceRow[];
+  serverIds: string[];
+  soonestEnd: Date;
 }
 
 /**
- * Alerts the configured recipients about provider contracts about to lapse.
+ * Alerts the configured recipients, one email per project: the project name
+ * and the inventory resources on it whose provider contract is ending.
  *
- * One email covers the whole batch, with the machines in an attached sheet —
- * an operator renewing with a vendor works from that list, not from an inbox.
- *
- * A VM is reported once per end date. Extending the date re-arms the alert,
- * because the stored marker no longer matches the new value.
+ * Each VM is mailed once for a given end date. Changing the lead-time
+ * schedule can send immediately, but never for a contract already reported.
  */
-export async function runProviderExpiryCheck(): Promise<void> {
+export async function runProviderExpiryCheck(options?: { force?: boolean }): Promise<void> {
+  const force = Boolean(options?.force);
   const now = new Date();
   const settings = await getVmInventorySettings();
   const warningDays = resolveProviderExpiryWarningDays(settings.warningDays);
 
-  // The whole window, not just the exact day: a scheduler that was down must
-  // not silently swallow the only warning a contract gets. warningDays=0 is
-  // the expiry day itself.
-  const from = startOfUtcDay(now);
-  const until = addUtcDays(now, warningDays + 1);
+  const todayYmd = calendarDateInTimezone(now, ALERT_TIMEZONE);
+  const from = parseDateOnlyUtc(todayYmd);
+  const until = addUtcDays(from, warningDays + 1);
+  const overdueFrom = addUtcDays(from, -30);
+
+  if (!force && settings.lastProviderExpiryAlertOn === todayYmd) {
+    logger.info('[ProviderExpiry] Already sent today', { today: todayYmd });
+    return;
+  }
 
   const expiring = await ServerModel.find({
-    providerEndDate: { $gte: from, $lt: until },
+    providerEndDate: { $gte: overdueFrom, $lt: until },
   })
-    .select('ipAddress vmSpec planDuration providerEndDate providerExpiryAlertSentFor')
+    .select(
+      'ipAddress vmSpec planDuration providerEndDate providerExpiryAlertSentFor projectId'
+    )
     .lean();
 
   const due = expiring.filter(
     (s) =>
       s.providerEndDate &&
-      s.providerExpiryAlertSentFor?.getTime() !== s.providerEndDate.getTime()
+      (!s.providerExpiryAlertSentFor ||
+        !isSameUtcDay(s.providerExpiryAlertSentFor, s.providerEndDate))
   );
-  if (due.length === 0) return;
+  if (due.length === 0) {
+    if (expiring.length > 0) {
+      logger.info('[ProviderExpiry] Window has contracts already alerted', {
+        warningDays,
+        today: todayYmd,
+        scanned: expiring.length,
+        force,
+      });
+    }
+    return;
+  }
 
   const recipients = [
     ...new Set(settings.providerExpiryRecipients.map((e) => e.trim().toLowerCase()).filter(Boolean)),
@@ -94,106 +99,214 @@ export async function runProviderExpiryCheck(): Promise<void> {
     return;
   }
 
-  const credentials = await ServerCredentialModel.find({
-    serverId: { $in: due.map((s) => s._id) },
-  })
-    .select('serverId username')
-    .lean();
+  const dueIds = due.map((s) => s._id);
+  const [assignments, credentials] = await Promise.all([
+    CredentialAssignmentModel.find({
+      serverId: { $in: dueIds },
+      status: 'active',
+    })
+      .select('serverId credentialId projectId')
+      .lean(),
+    ServerCredentialModel.find({ serverId: { $in: dueIds } })
+      .select('_id serverId username')
+      .lean(),
+  ]);
 
-  const usernames = new Map<string, string[]>();
-  for (const credential of credentials) {
-    const key = credential.serverId.toString();
-    usernames.set(key, [...(usernames.get(key) ?? []), credential.username]);
+  const credById = new Map(credentials.map((c) => [c._id.toString(), c]));
+  const credsByServer = new Map<string, typeof credentials>();
+  for (const cred of credentials) {
+    const key = cred.serverId.toString();
+    const list = credsByServer.get(key) ?? [];
+    list.push(cred);
+    credsByServer.set(key, list);
   }
 
-  // Sorted by urgency so the top of the sheet is what needs renewing first.
-  const ordered = [...due].sort(
-    (a, b) => a.providerEndDate!.getTime() - b.providerEndDate!.getTime()
-  );
+  const asgsByServer = new Map<string, typeof assignments>();
+  const projectIds = new Set<string>();
+  for (const asg of assignments) {
+    const key = asg.serverId.toString();
+    const list = asgsByServer.get(key) ?? [];
+    list.push(asg);
+    asgsByServer.set(key, list);
+    projectIds.add(asg.projectId.toString());
+  }
+  for (const server of due) {
+    if (server.projectId) projectIds.add(server.projectId.toString());
+  }
 
-  // One row per login: the same box can carry several, and each is a line the
-  // operator has to account for when the contract ends.
-  const rows: SheetRow[] = ordered.flatMap((server) => {
-    const base = {
-      IP: server.ipAddress,
-      'VM Spec': server.vmSpec ?? '',
-      'Plan Duration': server.planDuration ?? '',
-      'Expiry Date': isoDate(server.providerEndDate!),
+  const projects = projectIds.size
+    ? await ProjectModel.find({ _id: { $in: [...projectIds] } })
+        .select('name clientName')
+        .lean()
+    : [];
+  const projectById = new Map(projects.map((p) => [p._id.toString(), p]));
+
+  const groups = new Map<string, ProjectExpiryGroup>();
+
+  const addResource = (
+    key: string,
+    projectName: string,
+    clientName: string | null,
+    server: (typeof due)[number],
+    username: string
+  ): void => {
+    const existing = groups.get(key);
+    const resource: ProviderExpiryResourceRow = {
+      ipAddress: server.ipAddress,
+      username,
+      vmSpec: server.vmSpec ?? '',
+      planDuration: server.planDuration ?? '',
+      expiryDate: isoDate(server.providerEndDate!),
     };
-    const logins = usernames.get(server._id.toString()) ?? [];
-    return logins.length > 0
-      ? logins.map((username) => ({ ...base, Username: username }))
-      : [{ ...base, Username: '' }];
-  });
+    if (!existing) {
+      groups.set(key, {
+        key,
+        projectName,
+        clientName,
+        resources: [resource],
+        serverIds: [server._id.toString()],
+        soonestEnd: server.providerEndDate!,
+      });
+      return;
+    }
+    existing.resources.push(resource);
+    if (!existing.serverIds.includes(server._id.toString())) {
+      existing.serverIds.push(server._id.toString());
+    }
+    if (server.providerEndDate! < existing.soonestEnd) {
+      existing.soonestEnd = server.providerEndDate!;
+    }
+  };
 
-  const soonestEnd = ordered[0]!.providerEndDate!;
-  const attachment = buildWorkbook(rows);
+  for (const server of due) {
+    const serverKey = server._id.toString();
+    const asgs = asgsByServer.get(serverKey) ?? [];
+    if (asgs.length > 0) {
+      for (const asg of asgs) {
+        const project = projectById.get(asg.projectId.toString());
+        const cred = credById.get(asg.credentialId.toString());
+        addResource(
+          asg.projectId.toString(),
+          project?.name ?? 'Unknown project',
+          project?.clientName ?? null,
+          server,
+          cred?.username ?? ''
+        );
+      }
+      continue;
+    }
+
+    const fallbackId = server.projectId?.toString();
+    const project = fallbackId ? projectById.get(fallbackId) : undefined;
+    const groupKey = fallbackId && project ? fallbackId : UNASSIGNED_KEY;
+    const logins = credsByServer.get(serverKey) ?? [];
+    const usernames = logins.length > 0 ? logins.map((c) => c.username) : [''];
+    for (const username of usernames) {
+      addResource(
+        groupKey,
+        project?.name ?? 'Unassigned',
+        project?.clientName ?? null,
+        server,
+        username
+      );
+    }
+  }
+
   const inventoryUrl = `${config.FRONTEND_URL.replace(/\/$/, '')}/super-admin-console/vm-inventory`;
   const brand = resolvePlatformEmailBrand();
+  const markedIds = new Set<string>();
+  let anySent = false;
 
-  const sent = await Promise.all(
-    recipients.map((to) =>
-      sendProviderExpiryWarningEmail({
-        to,
-        vmCount: ordered.length,
-        loginCount: rows.length,
-        soonestDays: daysUntil(soonestEnd, now),
-        soonestDateLabel: formatDateLabel(soonestEnd),
-        inventoryUrl,
-        attachment,
-        brand,
-      })
-        .then(() => true)
-        .catch((err: unknown) => {
-          logger.warn('[ProviderExpiry] Email send failed', {
-            to,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          return false;
+  for (const group of groups.values()) {
+    const sent = await Promise.all(
+      recipients.map((to) =>
+        sendProviderExpiryWarningEmail({
+          to,
+          projectName: group.projectName,
+          clientName: group.clientName,
+          resources: group.resources,
+          soonestDays: daysUntil(group.soonestEnd, now),
+          soonestDateLabel: formatDateLabel(group.soonestEnd),
+          inventoryUrl,
+          brand,
         })
-    )
-  );
+          .then(() => true)
+          .catch((err: unknown) => {
+            logger.warn('[ProviderExpiry] Email send failed', {
+              to,
+              project: group.projectName,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return false;
+          })
+      )
+    );
 
-  // Only remember the alert if someone actually received it, so a mail outage
-  // does not consume the one warning these contracts get.
-  if (!sent.some(Boolean)) return;
+    if (!sent.some(Boolean)) continue;
+    anySent = true;
+    for (const id of group.serverIds) markedIds.add(id);
+  }
 
+  if (!anySent) return;
+
+  const dueById = new Map(due.map((s) => [s._id.toString(), s]));
   await ServerModel.bulkWrite(
-    due.map((s) => ({
-      updateOne: {
-        filter: { _id: s._id },
-        update: { $set: { providerExpiryAlertSentFor: s.providerEndDate } },
-      },
-    }))
+    [...markedIds].flatMap((id) => {
+      const server = dueById.get(id);
+      if (!server?.providerEndDate) return [];
+      return [
+        {
+          updateOne: {
+            filter: { _id: server._id },
+            update: { $set: { providerExpiryAlertSentFor: server.providerEndDate } },
+          },
+        },
+      ];
+    })
   );
 
-  logger.info('[ProviderExpiry] Sent contract expiry alert', {
-    vms: ordered.length,
-    rows: rows.length,
+  settings.lastProviderExpiryAlertOn = todayYmd;
+  await settings.save();
+
+  logger.info('[ProviderExpiry] Sent contract expiry alerts', {
+    projects: groups.size,
+    vmsMarked: markedIds.size,
     recipients: recipients.length,
     warningDays,
+    today: todayYmd,
+    force,
   });
+}
+
+export function triggerProviderExpiryCheck(
+  reason: string,
+  options?: { force?: boolean }
+): void {
+  if (tickInProgress) {
+    logger.info('[ProviderExpiry] Check already running', { reason });
+    return;
+  }
+  tickInProgress = true;
+  void runProviderExpiryCheck(options)
+    .catch((err: unknown) => {
+      logger.error('[ProviderExpiry] Scheduler tick failed', {
+        reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    })
+    .finally(() => {
+      tickInProgress = false;
+    });
 }
 
 export function startProviderExpiryScheduler(): void {
   const intervalMs = config.INVENTORY_PROVIDER_EXPIRY_CHECK_INTERVAL_MS;
 
-  setInterval(() => {
-    if (tickInProgress) return;
-    tickInProgress = true;
-    void runProviderExpiryCheck()
-      .catch((err: unknown) => {
-        logger.error('[ProviderExpiry] Scheduler tick failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      })
-      .finally(() => {
-        tickInProgress = false;
-      });
-  }, intervalMs);
+  triggerProviderExpiryCheck('startup');
+  setInterval(() => triggerProviderExpiryCheck('interval'), intervalMs);
 
   logger.info('[ProviderExpiry] Scheduler started', {
     intervalMs,
-    warningDays: config.INVENTORY_PROVIDER_EXPIRY_WARNING_DAYS,
+    timezone: ALERT_TIMEZONE,
   });
 }

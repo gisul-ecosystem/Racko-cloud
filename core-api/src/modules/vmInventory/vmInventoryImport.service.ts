@@ -309,6 +309,9 @@ class VmInventoryImportService {
             : (current ?? null) !== (next ?? null);
           if (differs) changed[field] = next;
         }
+        if (changed['providerEndDate'] !== undefined) {
+          changed['providerExpiryAlertSentFor'] = null;
+        }
       }
 
       let credentialIsNew = false;

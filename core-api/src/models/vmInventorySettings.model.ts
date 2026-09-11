@@ -16,6 +16,12 @@ export interface IVmInventorySettings extends Document {
    * itself. Older rows omit this; callers fall back to env default.
    */
   warningDays?: number;
+  /**
+   * IST calendar day (YYYY-MM-DD) the daily batch last actually went out.
+   * The scheduler will not send again until the next day unless the operator
+   * changes the lead-time schedule.
+   */
+  lastProviderExpiryAlertOn?: string | null;
   updatedBy?: mongoose.Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
@@ -25,6 +31,7 @@ const vmInventorySettingsSchema = new Schema<IVmInventorySettings>(
   {
     providerExpiryRecipients: { type: [String], default: [] },
     warningDays: { type: Number, min: 0, max: 30, default: 2 },
+    lastProviderExpiryAlertOn: { type: String, default: null },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },
   { timestamps: true, collection: 'vm_inventory_settings' }
