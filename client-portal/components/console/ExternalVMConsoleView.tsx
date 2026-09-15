@@ -51,6 +51,13 @@ export interface ExternalVMConsoleViewProps {
     dimensions?: { width?: number; height?: number }
   ) => Promise<ExternalVMConsoleSession>;
   closeSession?: (id: string) => void;
+  /** Optional session tracking overrides — pass tenant API functions for tenant pages. */
+  sessionTracking?: {
+    start: (serverId: string) => Promise<string>;
+    heartbeat: (sessionId: string) => Promise<void>;
+    end: (sessionId: string) => Promise<void>;
+    endBeacon: (sessionId: string, gatewayBaseUrl: string) => void;
+  };
 }
 
 /**
@@ -67,6 +74,7 @@ export function ExternalVMConsoleView({
   fetchVm = fetchExternalVM,
   openConsole = getExternalVMConsole,
   closeSession = closeExternalVMConsole,
+  sessionTracking,
 }: ExternalVMConsoleViewProps) {
   const params = useParams<{ id?: string; serverId?: string }>();
   const id = params.id ?? params.serverId;
@@ -202,7 +210,8 @@ export function ExternalVMConsoleView({
         closeSession(id);
       }
       if (sessionIdRef.current) {
-        endConsoleSessionBeacon(sessionIdRef.current, getGatewayBaseUrl());
+        const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+        beaconFn(sessionIdRef.current, getGatewayBaseUrl());
         stopHeartbeat();
       }
     };
@@ -288,12 +297,14 @@ export function ExternalVMConsoleView({
 
     // ── Session tracking: start session when console is live ─────────────
     if (id && !sessionIdRef.current) {
-      void startConsoleSession(id).then((sId) => {
+      const startFn = sessionTracking?.start ?? startConsoleSession;
+      void startFn(id).then((sId) => {
         sessionIdRef.current = sId;
         // Start 60s heartbeat
         heartbeatIntervalRef.current = setInterval(() => {
           if (sessionIdRef.current) {
-            void heartbeatConsoleSession(sessionIdRef.current);
+            const hbFn = sessionTracking?.heartbeat ?? heartbeatConsoleSession;
+            void hbFn(sessionIdRef.current);
           }
         }, 60_000);
       }).catch(() => {
@@ -390,7 +401,8 @@ export function ExternalVMConsoleView({
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
               if (sessionIdRef.current) {
-                void endConsoleSession(sessionIdRef.current);
+                const endFn = sessionTracking?.end ?? endConsoleSession;
+                void endFn(sessionIdRef.current);
                 stopHeartbeat();
                 sessionIdRef.current = null;
               }
@@ -452,7 +464,8 @@ export function ExternalVMConsoleView({
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
               if (sessionIdRef.current) {
-                void endConsoleSession(sessionIdRef.current);
+                const endFn = sessionTracking?.end ?? endConsoleSession;
+                void endFn(sessionIdRef.current);
                 stopHeartbeat();
                 sessionIdRef.current = null;
               }

@@ -2,8 +2,9 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IConsoleSession extends Document {
   _id: mongoose.Types.ObjectId;
-  adminId: mongoose.Types.ObjectId;   // the admin who owns these users
-  userId: mongoose.Types.ObjectId;    // platform managed user
+  adminId?: mongoose.Types.ObjectId;   // set for platform admin servers
+  tenantId?: mongoose.Types.ObjectId;  // set for tenant servers
+  userId: mongoose.Types.ObjectId;    // platform managed user or tenant user
   userEmail: string;
   serverId: mongoose.Types.ObjectId;  // ExternalVM._id
   serverName: string;
@@ -17,7 +18,8 @@ export interface IConsoleSession extends Document {
 
 const consoleSessionSchema = new Schema<IConsoleSession>(
   {
-    adminId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    adminId: { type: Schema.Types.ObjectId, ref: 'User', required: false, index: true },
+    tenantId: { type: Schema.Types.ObjectId, ref: 'Tenant', required: false, index: true },
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     userEmail: { type: String, required: true, trim: true },
     serverId: { type: Schema.Types.ObjectId, ref: 'ExternalVM', required: true, index: true },
