@@ -10,6 +10,7 @@ import { VMStatusBadge } from '../../../components/dashboard/VMStatusBadge';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { Server, RefreshCw, ChevronRight } from 'lucide-react';
+import { openGuacamoleConsolePage } from '../../../lib/consoleLaunch';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -210,12 +211,17 @@ export default function UserDashboard() {
                               Console <ChevronRight className="w-3.5 h-3.5" />
                             </span>
                           ) : (
-                            <Link
-                              href={`/dashboard/user/servers/${s._id}/console`}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openGuacamoleConsolePage(
+                                  `/dashboard/user/servers/${s._id}/console`
+                                )
+                              }
                               className="inline-flex items-center gap-0.5 text-xs font-medium text-gray-500 hover:text-[#B91C1C]"
                             >
                               Console <ChevronRight className="w-3.5 h-3.5" />
-                            </Link>
+                            </button>
                           )}
                         </td>
                       </tr>

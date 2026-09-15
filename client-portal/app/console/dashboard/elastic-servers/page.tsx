@@ -35,7 +35,7 @@ import {
 import { externalVmProtocolBadgeClass } from '@/lib/externalVmApi';
 import { formatAssignmentHolders, formatAssignmentSchedule } from '@/lib/externalVmAssignmentFormat';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
-import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
+import { openGuacamoleConsolePage } from '@/lib/consoleLaunch';
 import { hexToRgba, tenantAccentButton } from '@/lib/tenantAccentStyles';
 import { CalendarClock, Server, Plus, Upload, RefreshCw, Monitor, Trash2, Shield } from 'lucide-react';
 
@@ -109,7 +109,7 @@ export default function TenantMyServersPage() {
       );
       return;
     }
-    openTenantUrlWithSession(`${tenantConsole.elastic}/${vm._id}/console`);
+    openGuacamoleConsolePage(`${tenantConsole.elastic}/${vm._id}/console`);
   };
 
   const handleDelete = async () => {

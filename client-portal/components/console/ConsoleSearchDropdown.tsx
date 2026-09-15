@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { isGuacamoleConsolePagePath, openGuacamoleConsolePage } from '../../lib/consoleLaunch';
 import { BookOpen, Cloud, Globe, Server, ArrowRight, Monitor } from 'lucide-react';
 import { useConsoleShell } from './ConsoleContext';
 import { useAuth } from '../../context/AuthContext';
@@ -131,6 +132,10 @@ export function ConsoleSearchDropdown() {
   function navigate(href: string) {
     setSearchQuery('');
     setSearchOpen(false);
+    if (isGuacamoleConsolePagePath(href)) {
+      openGuacamoleConsolePage(href);
+      return;
+    }
     router.push(href);
   }
 

@@ -11,7 +11,7 @@ import { ApiError } from '@/lib/apiClient';
 import { hexToRgba, tenantAccentSurface } from '@/lib/tenantAccentStyles';
 import { tenantVps } from '@/lib/tenantAdminRoutes';
 import { fetchTenantExternalVMs } from '@/lib/tenantExternalVmApi';
-import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
+import { openGuacamoleConsolePage } from '@/lib/consoleLaunch';
 import { fetchTenantVms } from '@/lib/tenantVmApi';
 import type { TenantVmSummary } from '@/types/tenantPortal';
 import type { IExternalVM } from '@/lib/externalVmApi';
@@ -174,7 +174,7 @@ export function TenantUserResourcesTabs() {
                           disabled={blocked}
                           onClick={() => {
                             if (blocked) return;
-                            openTenantUrlWithSession(tenantVps.assignedServerConsole(s._id));
+                            openGuacamoleConsolePage(tenantVps.assignedServerConsole(s._id));
                           }}
                           className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline disabled:cursor-not-allowed disabled:opacity-40 disabled:no-underline"
                           style={blocked ? undefined : accentLinkStyle}
