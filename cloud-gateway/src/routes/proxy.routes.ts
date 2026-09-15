@@ -13,6 +13,7 @@ import { config } from '../config';
 import { ForbiddenError } from '../utils/errors';
 import type { AuthenticatedRequest } from '../types';
 import { injectTenantHeader, requireTenantBearer } from '../middleware/tenantAuth.middleware';
+import { requireApiCredentialManagementAuth } from '../middleware/apiCredentialAuth.middleware';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -144,6 +145,14 @@ const tenantProjectsProxy = createMountedCoreApiProxy('/api/v1/tenant-projects')
 const tenantRbacProxy = createMountedCoreApiProxy('/api/v1/tenant-rbac');
 const tenantOverviewProxy = createMountedCoreApiProxy('/api/v1/tenant-overview');
 const tenantMyVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-my-vms');
+/** Public developer API — allow slow read paths; power actions return 202 quickly. */
+const PUBLIC_API_PROXY_TIMEOUT_MS = Math.max(config.REQUEST_TIMEOUT_MS, 120_000);
+const publicApiProxy = createProxyMiddleware({
+  ...sharedProxyOptions,
+  timeout: PUBLIC_API_PROXY_TIMEOUT_MS,
+  proxyTimeout: PUBLIC_API_PROXY_TIMEOUT_MS,
+  pathRewrite: (path) => `/api/v1/public${path === '/' ? '' : path}`,
+});
 
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
@@ -158,6 +167,12 @@ function requireRole(...roles: string[]) {
 
 // ─── PUBLIC ROUTES (no auth required) ────────────────────────────────────────
 router.get('/api/health', coreApiHealthProxy);
+// OAuth2 token (public — client_id + client_secret, no platform JWT)
+router.post('/api/v1/oauth/token', coreApiProxy);
+
+// Developer API (Bearer api_access token — verified in core-api, not session JWT)
+router.use('/api/v1/public', publicApiProxy);
+
 router.post('/api/v1/auth/register', registerRateLimiter, coreApiProxy);
 router.post('/api/v1/auth/login', loginFailedRateLimiter, loginSlowDown, coreApiProxy);
 router.post('/api/v1/auth/verify-email', verifyEmailRateLimiter, coreApiProxy);
@@ -760,6 +775,24 @@ router.use('/api/v1/tenant-my-vms', requireTenantBearer, tenantMyVmsProxy);
 
 // Platform admin My VM Dashboard — JWT + role enforced in core-api
 router.get('/api/v1/my-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
+// ─── OAuth developer API credentials (phase 1 — management only) ─────────────
+router.post(
+  '/api/v1/api-credentials',
+  requireApiCredentialManagementAuth,
+  coreApiProxy
+);
+router.get('/api/v1/api-credentials', requireApiCredentialManagementAuth, coreApiProxy);
+router.get(
+  '/api/v1/api-credentials/:id/usage',
+  requireApiCredentialManagementAuth,
+  coreApiProxy
+);
+router.post(
+  '/api/v1/api-credentials/:id/revoke',
+  requireApiCredentialManagementAuth,
+  coreApiProxy
+);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify

@@ -23,6 +23,7 @@ export const tenantVps = {
   assignVms: `${TENANT_VPS}/assign-vms`,
   bulkAssign: `${TENANT_VPS}/assign-vms/bulk`,
   billing: `${TENANT_VPS}/billing`,
+  developers: `${TENANT_VPS}/developers`,
 } as const;
 
 export const tenantConsole = {
