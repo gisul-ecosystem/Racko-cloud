@@ -87,6 +87,36 @@ router.get(
   (req, res, next) => externalVMController.getMyAssigned(req, res, next)
 );
 
+// ─── Console Session routes ───────────────────────────────────────────────────
+
+// POST /api/v1/external-vms/sessions/start
+router.post(
+  '/sessions/start',
+  requireRole('admin', 'super_admin', 'user'),
+  (req, res, next) => externalVMController.startConsoleSession(req, res, next)
+);
+
+// POST /api/v1/external-vms/sessions/:sessionId/heartbeat
+router.post(
+  '/sessions/:sessionId/heartbeat',
+  requireRole('admin', 'super_admin', 'user'),
+  (req, res, next) => externalVMController.heartbeatConsoleSession(req, res, next)
+);
+
+// POST /api/v1/external-vms/sessions/:sessionId/end
+router.post(
+  '/sessions/:sessionId/end',
+  requireRole('admin', 'super_admin', 'user'),
+  (req, res, next) => externalVMController.endConsoleSession(req, res, next)
+);
+
+// GET /api/v1/external-vms/sessions — admin analytics
+router.get(
+  '/sessions',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => externalVMController.listConsoleSessions(req, res, next)
+);
+
 // GET /api/v1/external-vms — list my external VMs (admin)
 router.get(
   '/',
