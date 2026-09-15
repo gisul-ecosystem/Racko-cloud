@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { ConsoleSessionModel } from './consoleSession.model';
 import { ExternalVMModel } from './external-vm.model';
 import { User } from '../../models/user.model';
-import { NotFoundError, ForbiddenError } from '../../utils/errors';
+import { NotFoundError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 
 export class ConsoleSessionService {
