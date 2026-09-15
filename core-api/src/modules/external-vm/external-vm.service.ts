@@ -935,19 +935,10 @@ class ExternalVMService {
     const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
     await migrateLegacyExternalVmAssignments(tenantId);
 
-    // Tenant admins manage only VMs they imported themselves. End users still
-    // need Server Assign mirrors (superadmin_bulk) on their personal My VMs
-    // view, which reuses this endpoint with an assignment filter.
-    const ownSources = ['admin_import', 'tenant_import'] as const;
-    const query: Record<string, unknown> = {
-      tenantId,
-      source: {
-        $in:
-          actor.role === 'tenant_user'
-            ? [...ownSources, 'superadmin_bulk']
-            : [...ownSources],
-      },
-    };
+    // Tenant admins manage VMs they imported themselves. End users see every
+    // server assigned to them, including super-admin Server Assign mirrors
+    // (source is not filtered — assignment membership is the access check).
+    const query: Record<string, unknown> = { tenantId };
     if (actor.role === 'tenant_user') {
       const assignedIds = await getExternalVmIdsForTenantUser(
         tenantId,
@@ -955,6 +946,8 @@ class ExternalVMService {
       );
       if (assignedIds.length === 0) return [];
       query['_id'] = { $in: assignedIds };
+    } else {
+      query['source'] = { $in: ['admin_import', 'tenant_import'] };
     }
 
     const docs = await ExternalVMModel.find(query).sort({ createdAt: -1 });

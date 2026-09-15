@@ -615,6 +615,7 @@ router.get('/api/v1/projects/name-preview', authMiddleware, verifyMiddleware, re
 router.get('/api/v1/projects/for-service/:serviceKey', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.get('/api/v1/projects', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.post('/api/v1/projects', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.get('/api/v1/projects/:id/resources/elastic-servers', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.get('/api/v1/projects/:id', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.patch('/api/v1/projects/:id', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.post('/api/v1/projects/:id/services', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);

@@ -29,7 +29,7 @@ import { useTenantRbac } from '@/context/TenantRbacContext';
 import { ApiError } from '@/lib/apiClient';
 import { tenantAccentButton, hexToRgba } from '@/lib/tenantAccentStyles';
 import { tenantVps } from '@/lib/tenantAdminRoutes';
-import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
+import { openGuacamoleConsolePage } from '@/lib/consoleLaunch';
 import {
   formatBillingPeriod,
   formatPlanPeriodEnd,
@@ -64,7 +64,7 @@ function formatDateTime(value: string): string {
 }
 
 function launchConsole(vmId: string, protocol?: 'rdp' | 'ssh' | 'vnc'): void {
-  openTenantUrlWithSession(tenantVps.vmConsole(vmId, protocol ?? 'rdp'));
+  openGuacamoleConsolePage(tenantVps.vmConsole(vmId, protocol ?? 'rdp'));
 }
 
 function PageNotice({

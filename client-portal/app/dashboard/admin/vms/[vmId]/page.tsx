@@ -12,6 +12,7 @@ import {
   type VMDetails, type VMLiveStatus, type VMEvent, type HyperVStatus, type SoftwareInstallEntry,
 } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
+import { openGuacamoleConsolePage } from '../../../../../lib/consoleLaunch';
 import { VMStatusBadge, CloneTypeBadge, UsageBar } from '../../../../../components/dashboard/VMStatusBadge';
 import { HyperVStatusBadge } from '../../../../../components/dashboard/HyperVStatusBadge';
 import { ConfirmModal } from '../../../../../components/ui/ConfirmModal';
@@ -580,14 +581,15 @@ export default function VMDetailPage() {
             const consoleHref = `/dashboard/admin/vms/${vmId}/console?protocol=${consoleProtocol}`;
             if (consoleReady) {
               return (
-                <Link
-                  href={consoleHref}
+                <button
+                  type="button"
+                  onClick={() => openGuacamoleConsolePage(consoleHref)}
                   className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-lg transition"
-                  title={`Open browser console (${consoleProtocol.toUpperCase()})`}
+                  title={`Open browser console (${consoleProtocol.toUpperCase()}) in a new tab`}
                 >
                   <Monitor className="w-3.5 h-3.5" />
                   Console
-                </Link>
+                </button>
               );
             }
             if (consolePreparing) {

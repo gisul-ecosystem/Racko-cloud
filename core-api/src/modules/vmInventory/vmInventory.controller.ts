@@ -81,6 +81,22 @@ class VmInventoryController {
     }
   }
 
+  /** GET /api/v1/super-admin/vm-inventory/series-preview */
+  async seriesPreview(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const data = await vmInventoryBulkAssignService.previewSeries({
+        emailPrefix: String(req.query['emailPrefix'] ?? ''),
+        count: Number(req.query['count']),
+        targetType: req.query['targetType'] as 'admin' | 'tenant',
+        targetId: String(req.query['targetId'] ?? ''),
+        projectId: String(req.query['projectId'] ?? ''),
+      });
+      success(res, 'Email series preview retrieved.', data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** POST /api/v1/super-admin/vm-inventory/bulk-assign */
   async bulkAssign(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -162,7 +178,8 @@ class VmInventoryController {
       const authReq = req as AuthenticatedRequest;
       const data = await vmInventoryService.updateNotificationSettings(
         req.body.providerExpiryRecipients,
-        new mongoose.Types.ObjectId(authReq.user.userId)
+        new mongoose.Types.ObjectId(authReq.user.userId),
+        req.body.warningDays
       );
       success(res, 'Notification settings saved.', data);
     } catch (err) {

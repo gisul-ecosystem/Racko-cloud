@@ -277,11 +277,19 @@ export async function pushInventoryAgent(
   return res.data;
 }
 
+export interface InventoryNotificationDispatch {
+  projectsSent: number;
+  vmsMarked: number;
+  vmsInWindow: number;
+  skipped: 'already_sent_today' | 'none_in_window' | 'already_alerted' | 'no_recipients' | 'send_failed' | null;
+}
+
 export interface InventoryNotificationSettings {
   /** Alerted before a provider contract lapses. Empty means nobody is told. */
   providerExpiryRecipients: string[];
-  /** How many days ahead the alert goes out, from server config. */
+  /** Days before expiry to send. `0` is the expiry day itself. */
   warningDays: number;
+  dispatch?: InventoryNotificationDispatch;
 }
 
 export async function fetchInventoryNotificationSettings(): Promise<InventoryNotificationSettings> {
@@ -292,13 +300,14 @@ export async function fetchInventoryNotificationSettings(): Promise<InventoryNot
 }
 
 export async function updateInventoryNotificationSettings(
-  providerExpiryRecipients: string[]
+  providerExpiryRecipients: string[],
+  warningDays: number
 ): Promise<InventoryNotificationSettings> {
   const res = await apiRequest<ApiEnvelope<InventoryNotificationSettings>>(
     `${BASE}/notification-settings`,
     {
       method: 'PUT',
-      body: JSON.stringify({ providerExpiryRecipients }),
+      body: JSON.stringify({ providerExpiryRecipients, warningDays }),
     }
   );
   return res.data;
@@ -602,6 +611,29 @@ export function buildSeriesEmail(base: string, index: number): string {
   const at = base.lastIndexOf('@');
   if (at <= 0) return '';
   return `${base.slice(0, at)}${index}${base.slice(at)}`;
+}
+
+export interface SeriesPreview {
+  startIndex: number;
+  emails: string[];
+}
+
+export async function fetchSeriesPreview(params: {
+  emailPrefix: string;
+  count: number;
+  targetType: 'admin' | 'tenant';
+  targetId: string;
+  projectId: string;
+}): Promise<SeriesPreview> {
+  const qs = new URLSearchParams({
+    emailPrefix: params.emailPrefix,
+    count: String(params.count),
+    targetType: params.targetType,
+    targetId: params.targetId,
+    projectId: params.projectId,
+  });
+  const res = await apiRequest<ApiEnvelope<SeriesPreview>>(`${BASE}/series-preview?${qs.toString()}`);
+  return res.data;
 }
 
 export interface InventoryAssigneeOption {

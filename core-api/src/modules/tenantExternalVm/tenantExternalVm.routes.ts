@@ -110,7 +110,12 @@ router.post(
   (req, res, next) => tenantExternalVmController.create(req, res, next)
 );
 
-router.get('/', (req, res, next) => tenantExternalVmController.list(req, res, next));
+router.get(
+  '/',
+  // List is assignment-based for end users. Super-admin Server Assign mirrors
+  // must appear on My VMs whether or not the Elastic Servers product is enabled.
+  (req, res, next) => tenantExternalVmController.list(req, res, next)
+);
 
 router.get(
   '/:id/console',

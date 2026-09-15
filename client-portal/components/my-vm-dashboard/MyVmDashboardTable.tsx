@@ -8,8 +8,7 @@ import { formatAssignmentHolders } from '@/lib/externalVmAssignmentFormat';
 import type { CatalogVmPowerAction, ICatalogVm } from '@/lib/vmCatalogApi';
 import { CatalogVmDashboardDetails } from '@/components/my-vm-dashboard/CatalogVmDashboardDetails';
 import { CatalogVmPowerControls } from '@/components/create-vm/CatalogVmPowerControls';
-import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
-import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
+import { openGuacamoleConsolePage } from '@/lib/consoleLaunch';
 import { ChevronDown, ChevronUp, Monitor } from 'lucide-react';
 
 const SOURCE_BADGE_STYLES: Record<MyVmOriginServiceLabel, string> = {
@@ -18,20 +17,6 @@ const SOURCE_BADGE_STYLES: Record<MyVmOriginServiceLabel, string> = {
   'Elastic Server Import': 'border-teal-200 bg-teal-50 text-teal-700',
   'External VM Import': 'border-slate-200 bg-slate-100 text-slate-700',
 };
-
-/**
- * Tenant auth lives in sessionStorage, so a plain new-tab navigation drops the
- * session and the auth gate bounces to login. Hand the session through `_s`
- * the same way the elastic-servers list does. Platform auth is shared across
- * tabs, so a normal window.open is enough there.
- */
-function openConsoleInNewTab(path: string): void {
-  if (path.startsWith(TENANT_CONSOLE)) {
-    openTenantUrlWithSession(path);
-    return;
-  }
-  window.open(path, '_blank', 'noopener,noreferrer');
-}
 
 export function rowKey(row: MyVmDashboardRow): string {
   return `${row.resourceType}:${row._id}:${row.instanceId ?? ''}`;
@@ -62,6 +47,34 @@ function SourceBadge({ label }: { label: MyVmOriginServiceLabel }) {
       {label}
     </span>
   );
+}
+
+/** Local part of an address: "aiuser1@gmail.com" → "aiuser1". */
+function emailLocalPart(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const trimmed = email.trim();
+  if (!trimmed) return null;
+  const at = trimmed.indexOf('@');
+  const local = at > 0 ? trimmed.slice(0, at) : trimmed;
+  return local || null;
+}
+
+/**
+ * Prefer the assigned end-user (aiuser1) over the VM login (Administrator@IP).
+ * Several holders on one box are listed, unique, in assignment order.
+ */
+function vmColumnTitle(row: MyVmDashboardRow): string {
+  const locals: string[] = [];
+  const seen = new Set<string>();
+  for (const assignment of row.assignments) {
+    const local = emailLocalPart(assignment.email);
+    if (!local) continue;
+    const key = local.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    locals.push(local);
+  }
+  return locals.length > 0 ? locals.join(', ') : row.name;
 }
 
 function ScheduleCell({ row }: { row: MyVmDashboardRow }) {
@@ -156,7 +169,7 @@ function ActionButtons({
       {row.canConsole && row.consolePath ? (
         <button
           type="button"
-          onClick={() => openConsoleInNewTab(row.consolePath!)}
+          onClick={() => openGuacamoleConsolePage(row.consolePath!)}
           className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717]"
         >
           <Monitor className="h-3.5 w-3.5" />
@@ -226,14 +239,8 @@ export function MyVmDashboardTable({
                 <Fragment key={key}>
                   <tr className="transition hover:bg-gray-50">
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-900">{row.name}</p>
+                      <p className="font-medium text-gray-900">{vmColumnTitle(row)}</p>
                       <p className="font-mono text-xs text-gray-500">{row.ipAddress || '—'}</p>
-                      {row.username ? (
-                        <p className="text-xs text-gray-400">
-                          {row.protocol ? `${row.protocol.toUpperCase()} · ` : ''}
-                          {row.username}
-                        </p>
-                      ) : null}
                     </td>
                     <td className="px-4 py-3">
                       <ProtocolBadge protocol={row.protocol} />

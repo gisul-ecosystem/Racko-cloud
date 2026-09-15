@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { ChevronLeft, Maximize, RefreshCw, LogOut } from 'lucide-react';
 import {
   closeConsoleSession,
@@ -11,6 +11,7 @@ import {
   type ConsoleSession,
 } from '../../lib/consoleApi';
 import { ApiError } from '../../lib/apiClient';
+import { exitGuacamoleConsolePage } from '../../lib/consoleLaunch';
 import {
   RESIZE_REFETCH_DEBOUNCE_MS,
   dimensionsDrifted,
@@ -66,7 +67,6 @@ export function VMConsoleView({
   closeSession = closeConsoleSession,
 }: VMConsoleViewProps) {
   const { vmId } = useParams<{ vmId: string }>();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const protocol = parseProtocol(searchParams.get('protocol'));
 
@@ -345,12 +345,12 @@ export function VMConsoleView({
 
   const handleDisconnect = () => {
     if (sessionRef.current && vmId) closeSession(vmId);
-    router.push(disconnectHref);
+    exitGuacamoleConsolePage(disconnectHref);
   };
 
   const handleBack = () => {
     if (sessionRef.current && vmId) closeSession(vmId);
-    router.push(backHref);
+    exitGuacamoleConsolePage(backHref);
   };
 
   const badge = protocolColors[protocol];

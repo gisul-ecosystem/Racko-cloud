@@ -410,9 +410,11 @@ async function listRequests(req: Request, res: Response, next: NextFunction): Pr
       const status =
       (req.query['status'] as VmCatalogStatus | 'all' | undefined) ?? 'provisioning';
     const adminIdRaw = req.query['adminId'] as string | undefined;
+    const tenantIdRaw = req.query['tenantId'] as string | undefined;
     const requests = await vmCatalogService.listRequestsForSuperAdmin({
       status,
       adminId: adminIdRaw ? new mongoose.Types.ObjectId(adminIdRaw) : undefined,
+      tenantId: tenantIdRaw ? new mongoose.Types.ObjectId(tenantIdRaw) : undefined,
     });
     success(res, 'Catalog VM requests retrieved.', { requests, total: requests.length });
   } catch (err) {

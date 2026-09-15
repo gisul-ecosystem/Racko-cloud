@@ -16,6 +16,7 @@ import {
   type IExternalVM,
 } from '../../../lib/externalVmApi';
 import { formatAssignmentHolders } from '../../../lib/externalVmAssignmentFormat';
+import { openGuacamoleConsolePage } from '../../../lib/consoleLaunch';
 import { Server, Plus, Upload, RefreshCw, Monitor, Trash2 } from 'lucide-react';
 
 function ProtocolBadge({ protocol }: { protocol: ExternalVMProtocol }) {
@@ -37,10 +38,7 @@ export default function MyServersPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const handleOpenConsole = (vm: IExternalVM) => {
-    // The console viewer page fetches the Guacamole session by id, so the
-    // session token never appears in the browser address bar / history.
-    // Opened in a new tab so the server list stays available in the original tab.
-    window.open(`/console/elastic-servers/${vm._id}/console`, '_blank', 'noopener,noreferrer');
+    openGuacamoleConsolePage(`/console/elastic-servers/${vm._id}/console`);
   };
 
   const handleDelete = async () => {
