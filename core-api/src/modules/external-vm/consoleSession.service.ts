@@ -19,16 +19,14 @@ export class ConsoleSessionService {
     // admin or an assigned end-user.
     const server = await ExternalVMModel.findById(serverId).lean();
     if (!server) throw new NotFoundError('Server not found.');
-    if (!server.adminId) throw new NotFoundError('Server has no admin owner.');
-
-    const adminId = server.adminId;
 
     // Get user email
     const user = await User.findById(userId).select('email').lean();
     if (!user) throw new NotFoundError('User not found.');
 
     const session = await ConsoleSessionModel.create({
-      adminId,
+      ...(server.adminId ? { adminId: server.adminId } : {}),
+      ...(server.tenantId ? { tenantId: server.tenantId } : {}),
       userId,
       userEmail: user.email,
       serverId,
@@ -89,7 +87,7 @@ export class ConsoleSessionService {
     });
   }
 
-  /** Analytics list for admin. */
+  /** Analytics list scoped to a specific adminId (platform admin). */
   async listSessions(
     adminId: mongoose.Types.ObjectId,
     filters: {
@@ -101,7 +99,36 @@ export class ConsoleSessionService {
       limit?: number;
     }
   ) {
-    const query: Record<string, unknown> = { adminId };
+    return this._listSessions({ adminId }, filters);
+  }
+
+  /** Analytics list scoped to a specific tenantId (tenant admin). */
+  async listSessionsByTenant(
+    tenantId: mongoose.Types.ObjectId,
+    filters: {
+      userId?: string;
+      serverId?: string;
+      from?: string;
+      to?: string;
+      page?: number;
+      limit?: number;
+    }
+  ) {
+    return this._listSessions({ tenantId }, filters);
+  }
+
+  private async _listSessions(
+    scope: { adminId?: mongoose.Types.ObjectId; tenantId?: mongoose.Types.ObjectId },
+    filters: {
+      userId?: string;
+      serverId?: string;
+      from?: string;
+      to?: string;
+      page?: number;
+      limit?: number;
+    }
+  ) {
+    const query: Record<string, unknown> = { ...scope };
 
     if (filters.userId && mongoose.Types.ObjectId.isValid(filters.userId)) {
       query['userId'] = new mongoose.Types.ObjectId(filters.userId);
@@ -131,7 +158,7 @@ export class ConsoleSessionService {
 
     const [todayStats, activeCount] = await Promise.all([
       ConsoleSessionModel.aggregate([
-        { $match: { adminId, loginAt: { $gte: startOfDay } } },
+        { $match: { ...scope, loginAt: { $gte: startOfDay } } },
         {
           $group: {
             _id: null,
@@ -142,7 +169,7 @@ export class ConsoleSessionService {
           },
         },
       ]),
-      ConsoleSessionModel.countDocuments({ adminId, logoutAt: null }),
+      ConsoleSessionModel.countDocuments({ ...scope, logoutAt: null }),
     ]);
 
     const stats = todayStats[0] ?? {

@@ -336,6 +336,71 @@ export class TenantExternalVmController {
       next(err);
     }
   }
+
+  /** POST /api/v1/tenant-external-vms/sessions/start */
+  async startConsoleSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const userId = new mongoose.Types.ObjectId(authReq.tenantUser.id);
+      const { serverId } = req.body as { serverId: string };
+      const { consoleSessionService } = await import('../external-vm/consoleSession.service');
+      const result = await consoleSessionService.startSession(
+        new mongoose.Types.ObjectId(serverId),
+        userId
+      );
+      success(res, 'Console session started.', result, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/tenant-external-vms/sessions/:sessionId/heartbeat */
+  async heartbeatConsoleSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const userId = new mongoose.Types.ObjectId(authReq.tenantUser.id);
+      const sessionId = new mongoose.Types.ObjectId(req.params['sessionId'] as string);
+      const { consoleSessionService } = await import('../external-vm/consoleSession.service');
+      await consoleSessionService.heartbeat(sessionId, userId);
+      success(res, 'Heartbeat received.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/tenant-external-vms/sessions/:sessionId/end */
+  async endConsoleSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const userId = new mongoose.Types.ObjectId(authReq.tenantUser.id);
+      const sessionId = new mongoose.Types.ObjectId(req.params['sessionId'] as string);
+      const { consoleSessionService } = await import('../external-vm/consoleSession.service');
+      await consoleSessionService.endSession(sessionId, userId);
+      success(res, 'Console session ended.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** GET /api/v1/tenant-external-vms/sessions — tenant admin analytics */
+  async listConsoleSessions(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
+      const { consoleSessionService } = await import('../external-vm/consoleSession.service');
+      const result = await consoleSessionService.listSessionsByTenant(tenantId, {
+        userId: req.query['userId'] as string | undefined,
+        serverId: req.query['serverId'] as string | undefined,
+        from: req.query['from'] as string | undefined,
+        to: req.query['to'] as string | undefined,
+        page: req.query['page'] ? parseInt(req.query['page'] as string, 10) : undefined,
+        limit: req.query['limit'] ? parseInt(req.query['limit'] as string, 10) : undefined,
+      });
+      success(res, 'Console sessions retrieved.', result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const tenantExternalVmController = new TenantExternalVmController();
