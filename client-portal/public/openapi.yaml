@@ -1,0 +1,1132 @@
+openapi: 3.1.0
+info:
+  title: Racko Public VPS API
+  version: '2026-03-11'
+  description: |
+    OAuth2 client-credentials access to VPS operations under `/api/v1/public/*`.
+    Create credentials in the Racko portal (platform or tenant admin → API Credentials),
+    obtain a bearer token, then call the public routes with scoped access.
+
+    **Rate limiting:** each credential is limited (default **120 requests/minute**; optional per-credential override).
+    When exceeded, the API returns **429** with a **Retry-After** header (seconds).
+
+    **Owner types:** tokens are issued for either a **platform** admin or a **tenant** admin pool.
+    VM list/detail responses use the same **`PublicVm`** contract for both owner types (no internal Mongo fields or stored console credentials).
+    **VM creation** (`POST /api/v1/public/vms`) is supported for **platform** credentials only.
+
+servers:
+  - url: '{gatewayBaseUrl}'
+    description: Racko API gateway (no trailing slash)
+    variables:
+      gatewayBaseUrl:
+        default: http://localhost:8000
+        description: Production/staging gateway URL
+
+tags:
+  - name: OAuth
+    description: Token issuance (no bearer required)
+  - name: Public VPS
+    description: Bearer access token (audience `racko-public-api`)
+
+paths:
+  /api/v1/oauth/token:
+    post:
+      tags: [OAuth]
+      operationId: oauthToken
+      summary: Obtain an access token (client credentials)
+      description: |
+        Accepts `grant_type=client_credentials` only.
+
+        **Client authentication** (either):
+        - HTTP **Basic** `Authorization: Basic base64(client_id:client_secret)` (preferred when present), or
+        - Form fields `client_id` and `client_secret` in the body together with `grant_type`.
+
+        Repeated invalid authentication may be throttled (same response as `invalid_client`).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OAuthTokenRequest'
+            examples:
+              formBody:
+                value:
+                  grant_type: client_credentials
+                  client_id: rk_live_example
+                  client_secret: your_secret
+      responses:
+        '200':
+          description: Access token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthTokenResponse'
+        '400':
+          description: OAuth error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+              examples:
+                invalid_request:
+                  value:
+                    error: invalid_request
+                    error_description: grant_type is required.
+                unsupported_grant_type:
+                  value:
+                    error: unsupported_grant_type
+                    error_description: Only grant_type client_credentials is supported.
+        '401':
+          description: OAuth error (invalid or throttled client)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+              examples:
+                invalid_client:
+                  value:
+                    error: invalid_client
+                    error_description: Client authentication failed.
+
+  /api/v1/public/templates:
+    get:
+      tags: [Public VPS]
+      operationId: listTemplates
+      summary: List VM templates
+      security:
+        - rackoPublicApi: [vms:read]
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          templates:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/PublicVmTemplate'
+                          total:
+                            type: integer
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/public/jobs/{id}:
+    get:
+      tags: [Public VPS]
+      operationId: getJob
+      summary: Bulk job status
+      security:
+        - rackoPublicApi: [vms:read]
+      parameters:
+        - $ref: '#/components/parameters/PublicResourceId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PublicJobStatus'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/public/vms/assign:
+    post:
+      tags: [Public VPS]
+      operationId: assignVms
+      summary: Assign VMs to user(s)
+      description: |
+        **Platform** credentials: body matches `PlatformAssignRequest` — provide **exactly one** of
+        `userId`, `userEmail`, or `username` (managed user in your admin pool) plus `vmIds`.
+
+        **Tenant** credentials: body matches `TenantOnboardRequest` (create/onboard tenant users 1:1 with VMs).
+      security:
+        - rackoPublicApi: [vms:assign]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/PlatformAssignRequest'
+                - $ref: '#/components/schemas/TenantOnboardRequest'
+      responses:
+        '200':
+          description: Platform assign success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicSuccessEnvelope'
+        '201':
+          description: Tenant onboard success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicSuccessEnvelope'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/public/vms:
+    get:
+      tags: [Public VPS]
+      operationId: listVms
+      summary: List VMs
+      security:
+        - rackoPublicApi: [vms:read]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum:
+              - creating
+              - running
+              - stopped
+              - paused
+              - suspended
+              - error
+              - deleting
+              - delete_failed
+        - name: cloneType
+          in: query
+          description: Platform credentials only (ignored for tenant list filtering semantics)
+          schema:
+            type: string
+            enum: [dedicated_storage, dynamic_storage]
+        - name: node
+          in: query
+          schema:
+            type: string
+            maxLength: 63
+            pattern: '^[a-zA-Z0-9-]+$'
+        - name: projectId
+          in: query
+          schema:
+            $ref: '#/components/schemas/MongoObjectId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          vms:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/PublicVm'
+                          total:
+                            type: integer
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    post:
+      tags: [Public VPS]
+      operationId: createVms
+      summary: Create VM(s) (async job)
+      description: Platform credentials only. Returns **202** with `jobId` in `data`.
+      security:
+        - rackoPublicApi: [vms:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVmRequest'
+      responses:
+        '202':
+          description: Creation job started
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [jobId]
+                        properties:
+                          jobId:
+                            type: string
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/public/vms/{id}:
+    get:
+      tags: [Public VPS]
+      operationId: getVm
+      summary: Get VM details
+      security:
+        - rackoPublicApi: [vms:read]
+      parameters:
+        - $ref: '#/components/parameters/PublicResourceId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PublicVmDetail'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    delete:
+      tags: [Public VPS]
+      operationId: deleteVm
+      summary: Delete VM
+      security:
+        - rackoPublicApi: [vms:write]
+      parameters:
+        - $ref: '#/components/parameters/PublicResourceId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted:
+                            type: boolean
+                            const: true
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/public/vms/{id}/start:
+    post:
+      tags: [Public VPS]
+      operationId: startVm
+      summary: Start VM
+      description: |
+        Validates the request and starts the power operation asynchronously.
+        Returns **202 Accepted** immediately; poll `GET /api/v1/public/vms/{id}/status` for completion.
+      security:
+        - rackoPublicApi: [vms:write]
+      parameters:
+        - $ref: '#/components/parameters/PublicResourceId'
+      responses:
+        '202':
+          description: Power operation accepted (in progress)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PublicPowerActionAccepted'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/public/vms/{id}/stop:
+    post:
+      tags: [Public VPS]
+      operationId: stopVm
+      summary: Stop VM
+      description: |
+        Validates the request and stops the VM asynchronously.
+        Returns **202 Accepted** immediately; poll `GET /api/v1/public/vms/{id}/status` for completion.
+      security:
+        - rackoPublicApi: [vms:write]
+      parameters:
+        - $ref: '#/components/parameters/PublicResourceId'
+      responses:
+        '202':
+          description: Power operation accepted (in progress)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PublicPowerActionAccepted'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/public/vms/{id}/restart:
+    post:
+      tags: [Public VPS]
+      operationId: restartVm
+      summary: Restart VM
+      description: |
+        Validates the request and restarts the VM asynchronously.
+        Returns **202 Accepted** immediately; poll `GET /api/v1/public/vms/{id}/status` for completion.
+      security:
+        - rackoPublicApi: [vms:write]
+      parameters:
+        - $ref: '#/components/parameters/PublicResourceId'
+      responses:
+        '202':
+          description: Power operation accepted (in progress)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PublicPowerActionAccepted'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/public/vms/{id}/status:
+    get:
+      tags: [Public VPS]
+      operationId: getVmStatus
+      summary: VM status
+      security:
+        - rackoPublicApi: [vms:read]
+      parameters:
+        - $ref: '#/components/parameters/PublicResourceId'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [status]
+                        properties:
+                          status:
+                            $ref: '#/components/schemas/PublicVmLiveStatus'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/public/vms/{id}/console:
+    get:
+      tags: [Public VPS]
+      operationId: getVmConsole
+      summary: Console / Guacamole session URL
+      security:
+        - rackoPublicApi: [vms:console]
+      parameters:
+        - $ref: '#/components/parameters/PublicResourceId'
+        - name: protocol
+          in: query
+          schema:
+            type: string
+            enum: [rdp, ssh, vnc]
+        - name: width
+          in: query
+          schema:
+            type: string
+          description: Optional viewport width (positive integer as string)
+        - name: height
+          in: query
+          schema:
+            type: string
+          description: Optional viewport height (positive integer as string)
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PublicSuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PublicVmConsoleSession'
+        '401':
+          $ref: '#/components/responses/InvalidToken'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+components:
+  securitySchemes:
+    rackoPublicApi:
+      type: oauth2
+      description: |
+        Use the access token from `POST /api/v1/oauth/token` as
+        `Authorization: Bearer <access_token>`. Token lifetime is **3600 seconds (1 hour)**.
+        JWT claims include `typ: api_access`, `aud: racko-public-api`, and a space-delimited `scope` string.
+      flows:
+        clientCredentials:
+          tokenUrl: /api/v1/oauth/token
+          scopes:
+            vms:read: Read VMs, templates, jobs, and status
+            vms:write: Create, delete, and power-manage VMs
+            vms:console: Open console / Guacamole URLs
+            vms:assign: Assign VMs to users (platform or tenant onboard)
+
+  parameters:
+    PublicResourceId:
+      name: id
+      in: path
+      required: true
+      description: MongoDB ObjectId (24 hex characters)
+      schema:
+        $ref: '#/components/schemas/MongoObjectId'
+
+  schemas:
+    MongoObjectId:
+      type: string
+      pattern: '^[a-fA-F0-9]{24}$'
+      example: 507f1f77bcf86cd799439011
+
+    PublicSuccessEnvelope:
+      type: object
+      required: [api_version, data]
+      properties:
+        api_version:
+          type: string
+          example: '2026-03-11'
+        data:
+          type: object
+          description: Endpoint-specific payload
+
+    PublicError:
+      type: object
+      required: [error, error_description]
+      properties:
+        error:
+          type: string
+          enum:
+            - invalid_token
+            - insufficient_scope
+            - not_found
+            - invalid_request
+            - rate_limited
+            - server_error
+        error_description:
+          type: string
+
+    OAuthError:
+      type: object
+      required: [error, error_description]
+      properties:
+        error:
+          type: string
+          enum: [invalid_request, invalid_client, unsupported_grant_type]
+        error_description:
+          type: string
+
+    OAuthTokenRequest:
+      type: object
+      required: [grant_type]
+      properties:
+        grant_type:
+          type: string
+          enum: [client_credentials]
+        client_id:
+          type: string
+          description: Required in body when not using HTTP Basic
+        client_secret:
+          type: string
+          description: Required in body when not using HTTP Basic
+
+    OAuthTokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in, scope]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          example: 3600
+        scope:
+          type: string
+          description: Space-separated granted scopes
+          example: vms:read vms:write
+
+    CreateVmRequest:
+      type: object
+      required: [templateId, name, count, cloneType, passwordMode]
+      properties:
+        templateId:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+          minLength: 3
+          maxLength: 50
+          pattern: '^[a-zA-Z0-9-]+$'
+        count:
+          type: integer
+          minimum: 1
+          maximum: 100
+        cloneType:
+          type: string
+          enum: [dedicated_storage, dynamic_storage]
+        cpuCores:
+          type: integer
+          minimum: 1
+          maximum: 128
+        memoryGb:
+          type: number
+          minimum: 0.5
+          maximum: 512
+        diskGb:
+          type: integer
+          minimum: 10
+          maximum: 10000
+        description:
+          type: string
+          maxLength: 500
+        passwordMode:
+          type: string
+          enum: [fixed, dynamic]
+        consolePassword:
+          type: string
+          maxLength: 256
+          description: Required when passwordMode is fixed
+        enableVirtualization:
+          type: boolean
+          default: false
+        softwareIds:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/MongoObjectId'
+        projectId:
+          $ref: '#/components/schemas/MongoObjectId'
+        networkType:
+          type: string
+          enum: [public, private]
+          default: public
+
+    PlatformAssignRequest:
+      type: object
+      required: [vmIds]
+      description: |
+        Provide **exactly one** assignee identifier (`userId`, `userEmail`, or `username`).
+        The user must belong to your platform admin pool (users you created).
+      properties:
+        userId:
+          $ref: '#/components/schemas/MongoObjectId'
+        userEmail:
+          type: string
+          format: email
+        username:
+          type: string
+          minLength: 1
+          maxLength: 128
+        vmIds:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/MongoObjectId'
+        accessSchedule:
+          $ref: '#/components/schemas/AccessScheduleInput'
+
+    PublicVmTemplate:
+      type: object
+      required:
+        - templateId
+        - name
+        - defaultCpuCores
+        - defaultMemoryGb
+        - defaultDiskGb
+        - isCustom
+      description: |
+        `templateId` is the Proxmox template vmid — pass it as `templateId` in `POST /api/v1/public/vms`.
+      properties:
+        templateId:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        defaultCpuCores:
+          type: number
+        defaultMemoryGb:
+          type: number
+        defaultDiskGb:
+          type: integer
+        isCustom:
+          type: boolean
+
+    TenantOnboardRequest:
+      type: object
+      required: [vmIds, passwordMode]
+      properties:
+        vmIds:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/MongoObjectId'
+        emailPrefix:
+          type: string
+          format: email
+        passwordMode:
+          type: string
+          enum: [auto, shared]
+        sharedPassword:
+          type: string
+          minLength: 8
+          maxLength: 128
+          description: Required when passwordMode is shared
+        email:
+          type: string
+          format: email
+          description: Allowed only when vmIds.length is 1
+        accessSchedule:
+          $ref: '#/components/schemas/AccessScheduleInput'
+
+    AccessScheduleInput:
+      type: object
+      properties:
+        startDate:
+          type: string
+          nullable: true
+        endDate:
+          type: string
+          nullable: true
+        startTime:
+          type: string
+          nullable: true
+        endTime:
+          type: string
+          nullable: true
+        weeklySchedule:
+          type: array
+          nullable: true
+          items: {}
+        timezone:
+          type: string
+          nullable: true
+
+    PublicVmAssignment:
+      type: object
+      required: [assigneeId]
+      properties:
+        assigneeId:
+          $ref: '#/components/schemas/MongoObjectId'
+        email:
+          type: string
+          format: email
+        isActive:
+          type: boolean
+
+    PublicVmAccessSchedule:
+      type: object
+      required: [override, timezone]
+      properties:
+        startDate:
+          type: string
+          format: date
+          nullable: true
+        endDate:
+          type: string
+          format: date
+          nullable: true
+        startTime:
+          type: string
+          nullable: true
+        endTime:
+          type: string
+          nullable: true
+        override:
+          type: boolean
+        overrideUntil:
+          type: string
+          format: date-time
+          nullable: true
+        timezone:
+          type: string
+        weeklySchedule:
+          type: array
+          nullable: true
+          items:
+            type: object
+            additionalProperties: true
+
+    PublicVm:
+      type: object
+      required:
+        - id
+        - name
+        - status
+        - allocatedCpu
+        - allocatedMemoryGb
+        - allocatedDiskGb
+        - consoleProtocol
+        - consoleReady
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/MongoObjectId'
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        proxmoxStatus:
+          type: string
+        ipAddress:
+          type: string
+        networkType:
+          type: string
+          enum: [public, private]
+        cloneType:
+          type: string
+          enum: [dedicated_storage, dynamic_storage]
+        allocatedCpu:
+          type: number
+        allocatedMemoryGb:
+          type: number
+        allocatedDiskGb:
+          type: number
+        consoleProtocol:
+          type: string
+          enum: [rdp, ssh]
+        consoleReady:
+          type: boolean
+        planStatus:
+          type: string
+          enum: [active, expired]
+          nullable: true
+        planPeriodEnd:
+          type: string
+          format: date-time
+          nullable: true
+        billingPeriod:
+          type: string
+          enum: [monthly, quarterly, yearly]
+          nullable: true
+        assignment:
+          oneOf:
+            - $ref: '#/components/schemas/PublicVmAssignment'
+            - type: 'null'
+        accessSchedule:
+          oneOf:
+            - $ref: '#/components/schemas/PublicVmAccessSchedule'
+            - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PublicVmLiveStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+        cpu:
+          type: object
+          properties:
+            usagePercent:
+              type: number
+            allocated:
+              type: number
+        memory:
+          type: object
+          properties:
+            usedGb:
+              type: number
+            allocatedGb:
+              type: number
+            usagePercent:
+              type: number
+        disk:
+          type: object
+          properties:
+            usedGb:
+              type: number
+            allocatedGb:
+              type: number
+        uptime:
+          type: object
+          properties:
+            seconds:
+              type: integer
+            formatted:
+              type: string
+        ipAddress:
+          type: string
+
+    PublicVmDetail:
+      type: object
+      required: [vm]
+      properties:
+        vm:
+          $ref: '#/components/schemas/PublicVm'
+        liveStatus:
+          $ref: '#/components/schemas/PublicVmLiveStatus'
+
+    PublicJobVmSummary:
+      type: object
+      required: [id, name, status, consoleProtocol]
+      properties:
+        id:
+          $ref: '#/components/schemas/MongoObjectId'
+        name:
+          type: string
+        status:
+          type: string
+        ipAddress:
+          type: string
+        consoleProtocol:
+          type: string
+          enum: [rdp, ssh]
+
+    PublicJobStatus:
+      type: object
+      required: [job, vms]
+      properties:
+        job:
+          type: object
+          required:
+            - id
+            - type
+            - status
+            - total
+            - completed
+            - failed
+            - pending
+            - vmIds
+            - failedVmids
+            - jobErrors
+            - startedAt
+            - createdAt
+            - updatedAt
+          properties:
+            id:
+              $ref: '#/components/schemas/MongoObjectId'
+            type:
+              type: string
+            status:
+              type: string
+            total:
+              type: integer
+            completed:
+              type: integer
+            failed:
+              type: integer
+            pending:
+              type: integer
+            vmIds:
+              type: array
+              items:
+                $ref: '#/components/schemas/MongoObjectId'
+            failedVmids:
+              type: array
+              items:
+                type: integer
+            jobErrors:
+              type: array
+              items:
+                type: object
+                required: [index, vmName, error]
+                properties:
+                  index:
+                    type: integer
+                  vmName:
+                    type: string
+                  error:
+                    type: string
+            startedAt:
+              type: string
+              format: date-time
+              nullable: true
+            completedAt:
+              type: string
+              format: date-time
+              nullable: true
+            cancelledAt:
+              type: string
+              format: date-time
+              nullable: true
+            createdAt:
+              type: string
+              format: date-time
+              nullable: true
+            updatedAt:
+              type: string
+              format: date-time
+              nullable: true
+        vms:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicJobVmSummary'
+
+    PublicVmConsoleSession:
+      type: object
+      required: [protocol, clientUrl, connectionId]
+      properties:
+        protocol:
+          type: string
+        clientUrl:
+          type: string
+          format: uri
+        connectionId:
+          type: string
+
+    PublicPowerActionAccepted:
+      type: object
+      required: [status, vmId, operation]
+      properties:
+        status:
+          type: string
+          const: accepted
+        vmId:
+          $ref: '#/components/schemas/MongoObjectId'
+        operation:
+          type: string
+          enum: [start, stop, restart]
+
+  responses:
+    InvalidToken:
+      description: Missing, malformed, or expired bearer token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PublicError'
+          example:
+            error: invalid_token
+            error_description: Invalid or expired access token.
+    InsufficientScope:
+      description: Token valid but missing required scope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PublicError'
+          example:
+            error: insufficient_scope
+            error_description: The request requires the vms:write scope.
+    NotFound:
+      description: Resource not found or not accessible in owner scope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PublicError'
+          example:
+            error: not_found
+            error_description: VM not found.
+    InvalidRequest:
+      description: Validation or business rule failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PublicError'
+          example:
+            error: invalid_request
+            error_description: Validation failed.
+    RateLimited:
+      description: Per-credential rate limit exceeded
+      headers:
+        Retry-After:
+          description: Seconds until the current window resets
+          schema:
+            type: integer
+            example: 42
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PublicError'
+          example:
+            error: rate_limited
+            error_description: Rate limit exceeded (120 requests per minute). Retry after 42 seconds.

@@ -75,6 +75,9 @@ import tenantOverviewRoutes from './modules/tenantOverview/tenantOverview.routes
 import otpRoutes from './modules/otp/otp.routes';
 import myVmDashboardRoutes from './modules/myVmDashboard/myVmDashboard.routes';
 import tenantMyVmDashboardRoutes from './modules/myVmDashboard/tenantMyVmDashboard.routes';
+import apiCredentialsRoutes from './modules/apiCredentials/apiCredentials.routes';
+import oauthRoutes from './modules/oauth/oauth.routes';
+import publicApiRoutes from './modules/publicApi/publicApi.routes';
 import healthRoutes from './routes/health.routes';
 
 const app = express();
@@ -200,6 +203,8 @@ app.use('/api/v1/tenant-overview', tenantOverviewRoutes);
 app.use('/api/v1/my-vms', myVmDashboardRoutes);
 app.use('/api/v1/tenant-my-vms', tenantMyVmDashboardRoutes);
 app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/oauth', oauthRoutes);
+app.use('/api/v1/public', publicApiRoutes);
 app.use('/api/v1/otp', otpRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
@@ -235,6 +240,7 @@ app.use('/api/v1/account-vm-pricing', accountVmPricingRoutes);
   app.use('/api/v1/platform-rbac', platformRbacRoutes);
   app.use('/api/v1/tenant-rbac', tenantRbacRoutes);
 app.use('/api/v1/customer-onboarding', customerOnboardingRoutes);
+app.use('/api/v1/api-credentials', apiCredentialsRoutes);
 
 // Start background services
 startNodeMonitoring();

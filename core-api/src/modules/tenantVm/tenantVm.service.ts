@@ -250,6 +250,60 @@ export class TenantVmService {
     return vmService.restartVM(vm._id, vm.adminId, buildPlatformVmRequest(req, vm.adminId));
   }
 
+  async acceptPublicStartVm(actor: TenantVmActor, vmId: string, req: Request) {
+    const vm = await this.loadTenantVmForActor(actor, vmId);
+    this.assertPlanActiveForOperations(vm);
+    return vmService.acceptPublicStartVM(
+      vm._id,
+      vm.adminId,
+      buildPlatformVmRequest(req, vm.adminId)
+    );
+  }
+
+  async acceptPublicStopVm(actor: TenantVmActor, vmId: string, req: Request) {
+    const vm = await this.loadTenantVmForActor(actor, vmId);
+    this.assertPlanActiveForOperations(vm);
+    return vmService.acceptPublicStopVM(
+      vm._id,
+      vm.adminId,
+      buildPlatformVmRequest(req, vm.adminId)
+    );
+  }
+
+  async acceptPublicRestartVm(actor: TenantVmActor, vmId: string, req: Request) {
+    const vm = await this.loadTenantVmForActor(actor, vmId);
+    this.assertPlanActiveForOperations(vm);
+    return vmService.acceptPublicRestartVM(
+      vm._id,
+      vm.adminId,
+      buildPlatformVmRequest(req, vm.adminId)
+    );
+  }
+
+  async deleteVm(actor: TenantVmActor, vmId: string, req: Request): Promise<void> {
+    const vm = await this.loadTenantVmForActor(actor, vmId);
+    await vmService.deleteVM(vm._id, vm.adminId, buildPlatformVmRequest(req, vm.adminId));
+  }
+
+  /**
+   * Platform admin that owns VMs in this tenant pool (for templates/jobs/create parity).
+   */
+  async resolveProvisioningAdminId(
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<mongoose.Types.ObjectId> {
+    const vm = await VM.findOne({
+      tenantId,
+      status: { $nin: ['deleted', 'deleting', 'delete_failed'] },
+    })
+      .select('adminId')
+      .lean();
+
+    if (!vm?.adminId) {
+      throw new NotFoundError('No VM pool found for this tenant.');
+    }
+    return vm.adminId;
+  }
+
   async openConsole(
     actor: TenantVmActor,
     vmId: string,
