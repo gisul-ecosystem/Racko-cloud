@@ -12,6 +12,8 @@ import {
 } from '../../lib/externalVmApi';
 import { ApiError } from '../../lib/apiClient';
 import { exitGuacamoleConsolePage } from '../../lib/consoleLaunch';
+import { startConsoleSession, heartbeatConsoleSession, endConsoleSession, endConsoleSessionBeacon } from '../../lib/consoleSessionApi';
+import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
 import {
   RESIZE_REFETCH_DEBOUNCE_MS,
   dimensionsDrifted,
@@ -93,6 +95,9 @@ export function ExternalVMConsoleView({
   /** Blocks resize refetch briefly after fullscreen enter/exit. */
   const fullscreenTransitionUntilRef = useRef(0);
 
+  const sessionIdRef = useRef<string | null>(null);
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   /**
    * Prefer the iframe's actual container box over window.innerWidth/innerHeight
    * so Guacamole renders at the real on-screen resolution. Fullscreen enter/exit
@@ -103,6 +108,13 @@ export function ExternalVMConsoleView({
     const width = container?.clientWidth ?? window.innerWidth;
     const height = container?.clientHeight ?? window.innerHeight;
     return { width, height };
+  }, []);
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
   }, []);
 
   const clearIframeTimeout = useCallback(() => {
@@ -174,6 +186,7 @@ export function ExternalVMConsoleView({
       if (sessionRef.current && id) {
         closeSession(id);
       }
+      stopHeartbeat();
     };
   }, [fetchSession, id, closeSession]);
 
@@ -187,6 +200,10 @@ export function ExternalVMConsoleView({
     const onPageHide = () => {
       if (sessionRef.current) {
         closeSession(id);
+      }
+      if (sessionIdRef.current) {
+        endConsoleSessionBeacon(sessionIdRef.current, getGatewayBaseUrl());
+        stopHeartbeat();
       }
     };
     window.addEventListener('pagehide', onPageHide);
@@ -268,6 +285,23 @@ export function ExternalVMConsoleView({
 
   const handleIframeLoad = () => {
     const elapsed = Date.now() - overlayStartedAtRef.current;
+
+    // ── Session tracking: start session when console is live ─────────────
+    if (id && !sessionIdRef.current) {
+      void startConsoleSession(id).then((sId) => {
+        sessionIdRef.current = sId;
+        // Start 60s heartbeat
+        heartbeatIntervalRef.current = setInterval(() => {
+          if (sessionIdRef.current) {
+            void heartbeatConsoleSession(sessionIdRef.current);
+          }
+        }, 60_000);
+      }).catch(() => {
+        // Non-fatal — tracking failure must never affect console
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     const remainingMin = Math.max(0, IFRAME_OVERLAY_MIN_MS - elapsed);
     const remainingMax = Math.max(0, IFRAME_OVERLAY_MAX_MS - elapsed);
     scheduleOverlayHide(Math.min(remainingMin, remainingMax));
@@ -355,6 +389,11 @@ export function ExternalVMConsoleView({
             type="button"
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
+              if (sessionIdRef.current) {
+                void endConsoleSession(sessionIdRef.current);
+                stopHeartbeat();
+                sessionIdRef.current = null;
+              }
               exitGuacamoleConsolePage(backHref);
             }}
             style={styles.iconButton}
@@ -412,6 +451,11 @@ export function ExternalVMConsoleView({
             type="button"
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
+              if (sessionIdRef.current) {
+                void endConsoleSession(sessionIdRef.current);
+                stopHeartbeat();
+                sessionIdRef.current = null;
+              }
               exitGuacamoleConsolePage(disconnectHref);
             }}
             style={styles.disconnectButton}
