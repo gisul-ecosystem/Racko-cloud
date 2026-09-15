@@ -133,9 +133,19 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
       }
     };
 
-    void tick();
+    // Delay the first access-check by 5 seconds so a console tab opened via
+    // window.open() (which restores session from _s on mount) has time to
+    // fully settle before the check fires. The immediate void tick() was
+    // causing a race: session restored from _s → check fires before API
+    // confirms the session → 401 → logout → /console/login → /login.
+    // The 5s delay is invisible to users and still catches schedule expiry
+    // within the first polling cycle.
+    const firstCheckTimer = window.setTimeout(() => void tick(), 5_000);
     const id = window.setInterval(() => void tick(), 60_000);
-    return () => window.clearInterval(id);
+    return () => {
+      window.clearTimeout(firstCheckTimer);
+      window.clearInterval(id);
+    };
   }, [
     state.isAuthenticated,
     state.tenantUser?.role,
