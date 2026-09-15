@@ -1,4 +1,5 @@
-import { TENANT_CONSOLE } from './tenantAdminRoutes';
+import { TENANT_CONSOLE, tenantConsole } from './tenantAdminRoutes';
+import { isTenantWorkspacePath } from './portalMode';
 import { openTenantUrlWithSession } from './tenantPortalApiClient';
 
 /** Message type sent from console tab to parent tab on disconnect. */
@@ -11,15 +12,57 @@ export function isGuacamoleConsolePagePath(path: string): boolean {
   return /\/console\/?(?:\?.*)?$/.test(path);
 }
 
+/** Map org-admin console URLs to tenant dashboard mirrors when opened from tenant workspace. */
+function resolveTenantConsolePath(path: string): string {
+  const [pathname, search = ''] = path.split('?');
+  const qs = search ? `?${search}` : '';
+
+  if (pathname.startsWith(TENANT_CONSOLE)) {
+    return path;
+  }
+
+  const elastic = pathname.match(/^\/console\/elastic-servers\/([^/]+)\/console\/?$/);
+  if (elastic) {
+    return `${tenantConsole.elastic}/${elastic[1]}/console${qs}`;
+  }
+
+  const dedicated = pathname.match(/^\/console\/dedicated-server\/my-servers\/([^/]+)\/console\/?$/);
+  if (dedicated) {
+    return `${tenantConsole.dedicatedServerConsole(dedicated[1])}${qs}`;
+  }
+
+  const catalog = pathname.match(/^\/console\/create-vm\/my-vms\/([^/]+)\/console\/?$/);
+  if (catalog) {
+    return `${tenantConsole.createVmConsole(catalog[1])}${qs}`;
+  }
+
+  const platformVm = pathname.match(/^\/dashboard\/admin\/vms\/([^/]+)\/console\/?$/);
+  if (platformVm) {
+    return `${TENANT_CONSOLE}/admin/vms/${platformVm[1]}/console${qs}`;
+  }
+
+  const platformVmConsole = pathname.match(/^\/dashboard\/user\/vms\/([^/]+)\/console\/?$/);
+  if (platformVmConsole) {
+    return `${TENANT_CONSOLE}/admin/vms/${platformVmConsole[1]}/console${qs}`;
+  }
+
+  return path;
+}
+
 /**
  * Open a Guacamole console route in a new browser tab.
- * Tenant routes carry session via `_s` (sessionStorage is not cloned reliably).
+ * Tenant routes carry session via `_h` / `_s` (sessionStorage is not cloned reliably).
  */
 export function openGuacamoleConsolePage(path: string): void {
   if (typeof window === 'undefined') return;
-  const normalized = path.startsWith('/') ? path : `/${path}`;
+  let normalized = path.startsWith('/') ? path : `/${path}`;
 
-  if (normalized.startsWith(TENANT_CONSOLE)) {
+  const openedFromTenant = isTenantWorkspacePath(window.location.pathname);
+  if (openedFromTenant) {
+    normalized = resolveTenantConsolePath(normalized);
+  }
+
+  if (normalized.startsWith(TENANT_CONSOLE) || (openedFromTenant && isTenantWorkspacePath(normalized))) {
     openTenantUrlWithSession(normalized);
     return;
   }
