@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChevronLeft, LayoutDashboard, Plus, Server, Upload, UserCheck, Users } from 'lucide-react';
+import { Activity, ChevronLeft, LayoutDashboard, Plus, Server, Upload, UserCheck, Users } from 'lucide-react';
 
 interface NavLink {
   href: string;
@@ -40,6 +40,11 @@ const navLinks: NavLink[] = [
     href: '/console/elastic-servers/assign-servers',
     label: 'Assign Servers',
     icon: <UserCheck className="h-4 w-4" />,
+  },
+  {
+    href: '/console/elastic-servers/analytics',
+    label: 'User Analytics',
+    icon: <Activity className="h-4 w-4" />,
   },
   {
     href: '/console/elastic-servers/assign-servers/bulk',

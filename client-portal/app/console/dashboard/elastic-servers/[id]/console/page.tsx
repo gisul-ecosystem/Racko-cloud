@@ -7,7 +7,12 @@ import {
   closeTenantExternalVMConsole,
   fetchTenantExternalVM,
   getTenantExternalVMConsole,
+  startTenantConsoleSession,
+  heartbeatTenantConsoleSession,
+  endTenantConsoleSession,
 } from '@/lib/tenantExternalVmApi';
+import { endConsoleSessionBeacon } from '@/lib/consoleSessionApi';
+import { getGatewayBaseUrl } from '@/lib/gatewayUrl';
 import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 
 export default function TenantExternalVMConsolePage() {
@@ -15,7 +20,6 @@ export default function TenantExternalVMConsolePage() {
   const { isConsoleStaff, hasPermission } = useTenantRbac();
   const canUseElasticAdmin =
     isConsoleStaff && hasPermission('elastic.manage', 'elastic.read');
-  // End users land from My VMs; staff from the elastic list.
   const listHref =
     tenantUser?.role === 'tenant_user' && !canUseElasticAdmin
       ? tenantVps.vms
@@ -28,6 +32,13 @@ export default function TenantExternalVMConsolePage() {
       fetchVm={fetchTenantExternalVM}
       openConsole={getTenantExternalVMConsole}
       closeSession={closeTenantExternalVMConsole}
+      sessionTracking={{
+        start: startTenantConsoleSession,
+        heartbeat: heartbeatTenantConsoleSession,
+        end: endTenantConsoleSession,
+        endBeacon: (sessionId, _gatewayBaseUrl) =>
+          endConsoleSessionBeacon(sessionId, getGatewayBaseUrl()),
+      }}
     />
   );
 }

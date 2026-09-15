@@ -248,3 +248,89 @@ export async function bulkUpdateTenantExternalVmOverride(
     })
   );
 }
+
+// ─── Console Session API (tenant) ────────────────────────────────────────────
+
+/** Start a console session when the Guacamole iframe loads. Returns sessionId. */
+export async function startTenantConsoleSession(serverId: string): Promise<string> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ sessionId: string }>>(
+      '/api/v1/tenant-external-vms/sessions/start',
+      { method: 'POST', body: JSON.stringify({ serverId }) }
+    )
+  );
+  return data.sessionId;
+}
+
+/** Fire-and-forget heartbeat every 60s. Never throws — must not affect console. */
+export async function heartbeatTenantConsoleSession(sessionId: string): Promise<void> {
+  try {
+    await tenantPortalRequest(
+      `/api/v1/tenant-external-vms/sessions/${sessionId}/heartbeat`,
+      { method: 'POST' }
+    );
+  } catch {
+    // Non-fatal
+  }
+}
+
+/** End session on disconnect (normal path). */
+export async function endTenantConsoleSession(sessionId: string): Promise<void> {
+  try {
+    await tenantPortalRequest(
+      `/api/v1/tenant-external-vms/sessions/${sessionId}/end`,
+      { method: 'POST' }
+    );
+  } catch {
+    // Non-fatal — stale sweeper will close it
+  }
+}
+
+export interface TenantConsoleSessionEntry {
+  _id: string;
+  userId: string;
+  userEmail: string;
+  serverId: string;
+  serverName: string;
+  loginAt: string;
+  logoutAt: string | null;
+  lastHeartbeatAt: string;
+  durationSeconds: number | null;
+  isActive: boolean;
+}
+
+export interface TenantConsoleSessionSummary {
+  sessionsToday: number;
+  uniqueUsersToday: number;
+  avgDurationSeconds: number;
+  activeSessions: number;
+}
+
+export interface TenantConsoleSessionsResponse {
+  sessions: TenantConsoleSessionEntry[];
+  pagination: { total: number; page: number; limit: number; pages: number };
+  summary: TenantConsoleSessionSummary;
+}
+
+export async function fetchTenantConsoleSessions(params?: {
+  userId?: string;
+  serverId?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+}): Promise<TenantConsoleSessionsResponse> {
+  const query = new URLSearchParams();
+  if (params?.userId) query.set('userId', params.userId);
+  if (params?.serverId) query.set('serverId', params.serverId);
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantConsoleSessionsResponse>>(
+      `/api/v1/tenant-external-vms/sessions${qs ? `?${qs}` : ''}`
+    )
+  );
+}

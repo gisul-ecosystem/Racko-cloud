@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Activity,
   LayoutDashboard,
   Plus,
   Server,
@@ -46,6 +47,11 @@ const adminLinks: ServiceNavLink[] = [
     href: tenantConsole.elasticAssign,
     label: 'Assign Servers',
     icon: <UserCheck className="h-4 w-4" />,
+  },
+  {
+    href: tenantConsole.elasticAnalytics,
+    label: 'User Analytics',
+    icon: <Activity className="h-4 w-4" />,
   },
   {
     href: tenantConsole.elasticBulkAssign,

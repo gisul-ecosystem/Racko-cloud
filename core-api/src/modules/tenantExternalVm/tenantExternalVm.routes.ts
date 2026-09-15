@@ -117,6 +117,33 @@ router.get(
   (req, res, next) => tenantExternalVmController.list(req, res, next)
 );
 
+// ─── Console Session routes ───────────────────────────────────────────────────
+
+// POST /api/v1/tenant-external-vms/sessions/start
+router.post(
+  '/sessions/start',
+  (req, res, next) => tenantExternalVmController.startConsoleSession(req, res, next)
+);
+
+// POST /api/v1/tenant-external-vms/sessions/:sessionId/heartbeat
+router.post(
+  '/sessions/:sessionId/heartbeat',
+  (req, res, next) => tenantExternalVmController.heartbeatConsoleSession(req, res, next)
+);
+
+// POST /api/v1/tenant-external-vms/sessions/:sessionId/end
+router.post(
+  '/sessions/:sessionId/end',
+  (req, res, next) => tenantExternalVmController.endConsoleSession(req, res, next)
+);
+
+// GET /api/v1/tenant-external-vms/sessions — tenant admin analytics
+router.get(
+  '/sessions',
+  requireTenantPermission('elastic.manage'),
+  (req, res, next) => tenantExternalVmController.listConsoleSessions(req, res, next)
+);
+
 router.get(
   '/:id/console',
   validateRequest(externalVMIdParamSchema),

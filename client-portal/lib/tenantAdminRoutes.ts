@@ -37,6 +37,7 @@ export const tenantConsole = {
   elasticUsersCreate: `${TENANT_CONSOLE}/elastic-servers/users/create`,
   elasticAssign: `${TENANT_CONSOLE}/elastic-servers/assign-servers`,
   elasticBulkAssign: `${TENANT_CONSOLE}/elastic-servers/assign-servers/bulk`,
+  elasticAnalytics: `${TENANT_CONSOLE}/elastic-servers/analytics`,
   elasticConsole: (id: string) => `${TENANT_CONSOLE}/elastic-servers/${id}/console`,
   machineManager: `${TENANT_CONSOLE}/machine-manager`,
   machineSetup: `${TENANT_CONSOLE}/machine-manager/setup`,
