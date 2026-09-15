@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { ChevronLeft, Maximize, RefreshCw, LogOut } from 'lucide-react';
 import {
   closeExternalVMConsole,
@@ -11,6 +11,7 @@ import {
   type ExternalVMProtocol,
 } from '../../lib/externalVmApi';
 import { ApiError } from '../../lib/apiClient';
+import { exitGuacamoleConsolePage } from '../../lib/consoleLaunch';
 import {
   RESIZE_REFETCH_DEBOUNCE_MS,
   dimensionsDrifted,
@@ -67,8 +68,6 @@ export function ExternalVMConsoleView({
 }: ExternalVMConsoleViewProps) {
   const params = useParams<{ id?: string; serverId?: string }>();
   const id = params.id ?? params.serverId;
-  const router = useRouter();
-
   const [session, setSession] = useState<ExternalVMConsoleSession | null>(null);
   const sessionRef = useRef<ExternalVMConsoleSession | null>(null);
   const hasSessionRef = useRef(false);
@@ -356,7 +355,7 @@ export function ExternalVMConsoleView({
             type="button"
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
-              router.push(backHref);
+              exitGuacamoleConsolePage(backHref);
             }}
             style={styles.iconButton}
             title="Back"
@@ -413,7 +412,7 @@ export function ExternalVMConsoleView({
             type="button"
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
-              router.push(disconnectHref);
+              exitGuacamoleConsolePage(disconnectHref);
             }}
             style={styles.disconnectButton}
             title="Disconnect and return"

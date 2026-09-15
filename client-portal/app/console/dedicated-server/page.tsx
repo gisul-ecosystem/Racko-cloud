@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { openGuacamoleConsolePage } from '@/lib/consoleLaunch';
 import {
   ArrowRight,
   CheckCircle2,
@@ -272,13 +273,14 @@ export default function DedicatedServerOverviewPage() {
                             </td>
                             <td className="px-4 py-3.5 text-right">
                               {s.status === 'active' ? (
-                                <Link
-                                  href={routes.console(s._id)}
+                                <button
+                                  type="button"
+                                  onClick={() => openGuacamoleConsolePage(routes.console(s._id))}
                                   className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white"
                                 >
                                   <Monitor className="h-3.5 w-3.5" />
                                   Console
-                                </Link>
+                                </button>
                               ) : (
                                 <span className="text-xs text-gray-400">—</span>
                               )}
