@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ChevronRight, RefreshCw, Server } from 'lucide-react';
 import { ErrorState } from '@/components/dashboard/ErrorState';
@@ -11,7 +12,7 @@ import { ApiError } from '@/lib/apiClient';
 import { hexToRgba, tenantAccentSurface } from '@/lib/tenantAccentStyles';
 import { tenantVps } from '@/lib/tenantAdminRoutes';
 import { fetchTenantExternalVMs } from '@/lib/tenantExternalVmApi';
-import { openGuacamoleConsolePage } from '@/lib/consoleLaunch';
+import { CONSOLE_DISCONNECTED_MSG, openGuacamoleConsolePage } from '@/lib/consoleLaunch';
 import { fetchTenantVms } from '@/lib/tenantVmApi';
 import type { TenantVmSummary } from '@/types/tenantPortal';
 import type { IExternalVM } from '@/lib/externalVmApi';
@@ -27,6 +28,7 @@ function ProtocolBadge({ protocol }: { protocol: string }) {
 
 export function TenantUserResourcesTabs() {
   const { accentColor } = useTenantBranding();
+  const router = useRouter();
 
   const [vms, setVms] = useState<TenantVmSummary[]>([]);
   const [servers, setServers] = useState<IExternalVM[]>([]);
@@ -34,6 +36,24 @@ export function TenantUserResourcesTabs() {
   const [error, setError] = useState<string | null>(null);
 
   const totalCount = vms.length + servers.length;
+
+  // Listen for CONSOLE_DISCONNECTED_MSG from the console tab.
+  // When the user clicks Disconnect in the console, the console tab sends this
+  // message to us (the opener / parent tab). We navigate here — where the
+  // tenant session is fully loaded — rather than letting the console tab
+  // navigate blindly to a URL without a tenant session token.
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      // Only accept messages from the same origin
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as { type?: string; href?: string };
+      if (data?.type !== CONSOLE_DISCONNECTED_MSG) return;
+      const target = data.href ?? tenantVps.vms;
+      router.push(target);
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [router]);
 
   const load = useCallback(async () => {
     setLoading(true);
