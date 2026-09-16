@@ -19,6 +19,13 @@ import { tenantExternalVmController } from './tenantExternalVm.controller';
 
 const router = Router();
 
+// POST /api/v1/tenant-external-vms/sessions/end-by-token — public (no auth)
+// sendBeacon cannot send auth headers; the endToken in the body IS the auth.
+router.post(
+  '/sessions/end-by-token',
+  (req, res, next) => tenantExternalVmController.endConsoleSessionByToken(req, res, next)
+);
+
 router.use(resolveTenantContext);
 router.use(requireTenantAuth);
 

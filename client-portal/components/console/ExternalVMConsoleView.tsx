@@ -13,7 +13,7 @@ import {
 import { ApiError } from '../../lib/apiClient';
 import { exitGuacamoleConsolePage } from '../../lib/consoleLaunch';
 import { useIsTenantPortal } from '../../lib/portalMode';
-import { startConsoleSession, heartbeatConsoleSession, endConsoleSession, endConsoleSessionBeacon } from '../../lib/consoleSessionApi';
+import { startConsoleSession, heartbeatConsoleSession, endConsoleSession, endConsoleSessionBeacon, endConsoleSessionByTokenBeacon } from '../../lib/consoleSessionApi';
 import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
 import {
   RESIZE_REFETCH_DEBOUNCE_MS,
@@ -54,10 +54,11 @@ export interface ExternalVMConsoleViewProps {
   closeSession?: (id: string) => void;
   /** Optional session tracking overrides — pass tenant API functions for tenant pages. */
   sessionTracking?: {
-    start: (serverId: string) => Promise<string>;
+    start: (serverId: string) => Promise<{ sessionId: string; endToken: string }>;
     heartbeat: (sessionId: string) => Promise<void>;
     end: (sessionId: string) => Promise<void>;
     endBeacon: (sessionId: string, gatewayBaseUrl: string) => void;
+    endTokenBeaconPath?: string; // API path for end-by-token beacon (tenant route)
   };
 }
 
@@ -106,6 +107,7 @@ export function ExternalVMConsoleView({
   const fullscreenTransitionUntilRef = useRef(0);
 
   const sessionIdRef = useRef<string | null>(null);
+  const endTokenRef = useRef<string | null>(null);
   const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /**
@@ -197,6 +199,7 @@ export function ExternalVMConsoleView({
         closeSession(id);
       }
       stopHeartbeat();
+      endTokenRef.current = null;
     };
   }, [fetchSession, id, closeSession]);
 
@@ -212,8 +215,16 @@ export function ExternalVMConsoleView({
         closeSession(id);
       }
       if (sessionIdRef.current) {
-        const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
-        beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+        if (endTokenRef.current) {
+          const apiPath = sessionTracking
+            ? '/api/v1/tenant-external-vms/sessions/end-by-token'
+            : '/api/v1/external-vms/sessions/end-by-token';
+          endConsoleSessionByTokenBeacon(endTokenRef.current, getGatewayBaseUrl(), apiPath);
+          endTokenRef.current = null;
+        } else {
+          const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+          beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+        }
         stopHeartbeat();
       }
     };
@@ -302,8 +313,9 @@ export function ExternalVMConsoleView({
       // Platform tracking APIs require org refresh cookies; tenant pages must pass
       // sessionTracking (see elastic / assigned consoles) or we skip tracking here.
       const startFn = sessionTracking?.start ?? startConsoleSession;
-      void startFn(id).then((sId) => {
+      void startFn(id).then(({ sessionId: sId, endToken }) => {
         sessionIdRef.current = sId;
+        endTokenRef.current = endToken;
         // Start 60s heartbeat
         heartbeatIntervalRef.current = setInterval(() => {
           if (sessionIdRef.current) {
@@ -405,11 +417,16 @@ export function ExternalVMConsoleView({
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
               if (sessionIdRef.current) {
-                // Use sendBeacon — guaranteed to fire even when page unloads.
-                // Regular fetch (void endFn) gets cancelled by the browser
-                // before it completes when exitGuacamoleConsolePage navigates away.
-                const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
-                beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+                if (endTokenRef.current) {
+                  const apiPath = sessionTracking
+                    ? '/api/v1/tenant-external-vms/sessions/end-by-token'
+                    : '/api/v1/external-vms/sessions/end-by-token';
+                  endConsoleSessionByTokenBeacon(endTokenRef.current, getGatewayBaseUrl(), apiPath);
+                  endTokenRef.current = null;
+                } else {
+                  const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+                  beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+                }
                 stopHeartbeat();
                 sessionIdRef.current = null;
               }
@@ -471,11 +488,16 @@ export function ExternalVMConsoleView({
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
               if (sessionIdRef.current) {
-                // Use sendBeacon — guaranteed to fire even when page unloads.
-                // Regular fetch (void endFn) gets cancelled by the browser
-                // before it completes when exitGuacamoleConsolePage navigates away.
-                const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
-                beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+                if (endTokenRef.current) {
+                  const apiPath = sessionTracking
+                    ? '/api/v1/tenant-external-vms/sessions/end-by-token'
+                    : '/api/v1/external-vms/sessions/end-by-token';
+                  endConsoleSessionByTokenBeacon(endTokenRef.current, getGatewayBaseUrl(), apiPath);
+                  endTokenRef.current = null;
+                } else {
+                  const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+                  beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+                }
                 stopHeartbeat();
                 sessionIdRef.current = null;
               }

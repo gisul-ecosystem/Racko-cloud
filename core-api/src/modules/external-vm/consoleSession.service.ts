@@ -12,7 +12,7 @@ export class ConsoleSessionService {
   async startSession(
     serverId: mongoose.Types.ObjectId,
     userId: mongoose.Types.ObjectId
-  ): Promise<{ sessionId: string }> {
+  ): Promise<{ sessionId: string; endToken: string }> {
     const server = await ExternalVMModel.findById(serverId).lean();
     if (!server) throw new NotFoundError('Server not found.');
 
@@ -41,13 +41,52 @@ export class ConsoleSessionService {
       lastHeartbeatAt: new Date(),
     });
 
+    // Issue a short-lived single-use end token so the frontend can close
+    // the session via sendBeacon without needing an auth header.
+    const { issueEndToken } = await import('./consoleSession.endToken');
+    const endToken = issueEndToken(session._id.toString());
+
     logger.info('[ConsoleSession] Session started', {
       sessionId: session._id.toString(),
       userId: userId.toString(),
       serverId: serverId.toString(),
     });
 
-    return { sessionId: session._id.toString() };
+    return { sessionId: session._id.toString(), endToken };
+  }
+
+  /**
+   * Called via sendBeacon on disconnect — no auth header available.
+   * The endToken was issued at session start and is single-use + short-lived.
+   */
+  async endSessionByToken(endToken: string): Promise<void> {
+    const { consumeEndToken } = await import('./consoleSession.endToken');
+    const sessionId = consumeEndToken(endToken);
+    if (!sessionId) {
+      // Token expired or already used — silently ignore (stale sweeper handles it)
+      logger.warn('[ConsoleSession] endSessionByToken: token invalid or expired');
+      return;
+    }
+
+    const session = await ConsoleSessionModel.findOne({
+      _id: new mongoose.Types.ObjectId(sessionId),
+      logoutAt: null,
+    });
+
+    if (!session) return; // already closed — idempotent
+
+    const logoutAt = new Date();
+    const durationSeconds = Math.round((logoutAt.getTime() - session.loginAt.getTime()) / 1000);
+
+    await ConsoleSessionModel.updateOne(
+      { _id: session._id },
+      { $set: { logoutAt, durationSeconds } }
+    );
+
+    logger.info('[ConsoleSession] Session ended via endToken', {
+      sessionId,
+      durationSeconds,
+    });
   }
 
   /** Called every 60s while console is open. */

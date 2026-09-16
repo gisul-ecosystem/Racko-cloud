@@ -251,15 +251,15 @@ export async function bulkUpdateTenantExternalVmOverride(
 
 // ─── Console Session API (tenant) ────────────────────────────────────────────
 
-/** Start a console session when the Guacamole iframe loads. Returns sessionId. */
-export async function startTenantConsoleSession(serverId: string): Promise<string> {
+/** Start a console session when the Guacamole iframe loads. Returns sessionId and endToken. */
+export async function startTenantConsoleSession(serverId: string): Promise<{ sessionId: string; endToken: string }> {
   const data = await unwrap(
-    tenantPortalRequest<ApiEnvelope<{ sessionId: string }>>(
+    tenantPortalRequest<ApiEnvelope<{ sessionId: string; endToken: string }>>(
       '/api/v1/tenant-external-vms/sessions/start',
       { method: 'POST', body: JSON.stringify({ serverId }) }
     )
   );
-  return data.sessionId;
+  return { sessionId: data.sessionId, endToken: data.endToken };
 }
 
 /** Fire-and-forget heartbeat every 60s. Never throws — must not affect console. */

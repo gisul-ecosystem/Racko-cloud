@@ -266,6 +266,22 @@ export class ExternalVMController {
     }
   }
 
+  /** POST /api/v1/external-vms/sessions/end-by-token — public, no auth needed */
+  async endConsoleSessionByToken(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { endToken } = req.body as { endToken?: string };
+      if (!endToken) {
+        res.status(400).json({ success: false, message: 'endToken required.' });
+        return;
+      }
+      const { consoleSessionService } = await import('./consoleSession.service');
+      await consoleSessionService.endSessionByToken(endToken);
+      success(res, 'Console session ended.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** POST /api/v1/external-vms/sessions/start */
   async startConsoleSession(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
