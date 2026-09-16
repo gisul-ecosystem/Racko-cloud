@@ -405,8 +405,11 @@ export function ExternalVMConsoleView({
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
               if (sessionIdRef.current) {
-                const endFn = sessionTracking?.end ?? endConsoleSession;
-                void endFn(sessionIdRef.current);
+                // Use sendBeacon — guaranteed to fire even when page unloads.
+                // Regular fetch (void endFn) gets cancelled by the browser
+                // before it completes when exitGuacamoleConsolePage navigates away.
+                const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+                beaconFn(sessionIdRef.current, getGatewayBaseUrl());
                 stopHeartbeat();
                 sessionIdRef.current = null;
               }
@@ -468,8 +471,11 @@ export function ExternalVMConsoleView({
             onClick={() => {
               if (sessionRef.current && id) closeSession(id);
               if (sessionIdRef.current) {
-                const endFn = sessionTracking?.end ?? endConsoleSession;
-                void endFn(sessionIdRef.current);
+                // Use sendBeacon — guaranteed to fire even when page unloads.
+                // Regular fetch (void endFn) gets cancelled by the browser
+                // before it completes when exitGuacamoleConsolePage navigates away.
+                const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+                beaconFn(sessionIdRef.current, getGatewayBaseUrl());
                 stopHeartbeat();
                 sessionIdRef.current = null;
               }
