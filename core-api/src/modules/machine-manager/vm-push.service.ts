@@ -266,16 +266,31 @@ class VMPushService {
       `$installDir = '${installDir}'`,
       `$binaryUrl = '${binaryUrl}'`,
       `$configContent = '${safeConfigJson}'`,
+      // ── Stop existing service and wait for it to fully stop ─────────────────
+      // sc.exe stop is asynchronous — sending the signal does not mean the
+      // service has stopped. We poll sc.exe query until STATE is STOPPED (up to
+      // 30s) before deleting, so delete never races a stopping service.
+      'sc.exe stop RackoAgent 2>$null',
+      '$maxWait = 30; $elapsed = 0',
+      'while ($elapsed -lt $maxWait) {',
+      '  $q = sc.exe query RackoAgent 2>$null | Out-String',
+      '  if ($q -match "STOPPED") { break }',
+      '  Start-Sleep -Seconds 1; $elapsed++',
+      '}',
+      // Force-kill the process if still alive after the wait (handles hung agents)
+      '$proc = Get-Process -Name "racko-agent" -ErrorAction SilentlyContinue',
+      'if ($proc) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2 }',
+      // Delete the service record
+      'sc.exe delete RackoAgent 2>$null',
+      'Start-Sleep -Seconds 1',
+      // ── Remove old binary before downloading (releases any file lock) ────────
+      'Remove-Item "$installDir\\racko-agent.exe" -Force -ErrorAction SilentlyContinue',
       // Create install directory
       'New-Item -ItemType Directory -Force -Path $installDir | Out-Null',
       // Write config UTF-8 without BOM (Go json.NewDecoder rejects BOM from Set-Content -Encoding UTF8)
       '[System.IO.File]::WriteAllText("$installDir\\config.json", $configContent, [System.Text.UTF8Encoding]::new($false))',
       // Download agent binary
       'Invoke-WebRequest -Uri $binaryUrl -OutFile "$installDir\\racko-agent.exe" -UseBasicParsing',
-      // Remove any existing service cleanly
-      'sc.exe stop RackoAgent 2>$null',
-      'sc.exe delete RackoAgent 2>$null',
-      'Start-Sleep -Seconds 1',
       // Register service — binpath must be quoted to handle future path changes
       'sc.exe create RackoAgent binpath= "\"$installDir\\racko-agent.exe\"" start= auto displayname= "Racko Agent" obj= LocalSystem',
       'sc.exe description RackoAgent "Racko software management agent"',

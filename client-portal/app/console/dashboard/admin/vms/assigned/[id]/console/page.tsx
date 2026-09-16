@@ -5,7 +5,12 @@ import {
   closeTenantExternalVMConsole,
   fetchTenantExternalVM,
   getTenantExternalVMConsole,
+  startTenantConsoleSession,
+  heartbeatTenantConsoleSession,
+  endTenantConsoleSession,
 } from '@/lib/tenantExternalVmApi';
+import { endConsoleSessionBeacon } from '@/lib/consoleSessionApi';
+import { getGatewayBaseUrl } from '@/lib/gatewayUrl';
 import { tenantVps } from '@/lib/tenantAdminRoutes';
 
 /**
@@ -20,6 +25,13 @@ export default function TenantAssignedServerConsolePage() {
       fetchVm={fetchTenantExternalVM}
       openConsole={getTenantExternalVMConsole}
       closeSession={closeTenantExternalVMConsole}
+      sessionTracking={{
+        start: startTenantConsoleSession,
+        heartbeat: heartbeatTenantConsoleSession,
+        end: endTenantConsoleSession,
+        endBeacon: (sessionId, _gatewayBaseUrl) =>
+          endConsoleSessionBeacon(sessionId, getGatewayBaseUrl()),
+      }}
     />
   );
 }
