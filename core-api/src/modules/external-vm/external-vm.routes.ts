@@ -14,6 +14,13 @@ import {
 
 const router = Router();
 
+// POST /api/v1/external-vms/sessions/end-by-token — public (no auth)
+// sendBeacon cannot send auth headers; the endToken in the body IS the auth.
+router.post(
+  '/sessions/end-by-token',
+  (req, res, next) => externalVMController.endConsoleSessionByToken(req, res, next)
+);
+
 router.use(requireAuth);
 
 // POST /api/v1/external-vms/bulk — bulk add (defined before /:id collisions)

@@ -6,12 +6,12 @@ interface ApiResponse<T> {
   data: T;
 }
 
-export async function startConsoleSession(serverId: string): Promise<string> {
-  const res = await apiRequest<ApiResponse<{ sessionId: string }>>(
+export async function startConsoleSession(serverId: string): Promise<{ sessionId: string; endToken: string }> {
+  const res = await apiRequest<ApiResponse<{ sessionId: string; endToken: string }>>(
     '/api/v1/external-vms/sessions/start',
     { method: 'POST', body: JSON.stringify({ serverId }) }
   );
-  return res.data.sessionId;
+  return { sessionId: res.data.sessionId, endToken: res.data.endToken };
 }
 
 /** Fire-and-forget heartbeat. Never throws — console must never break due to this. */
@@ -25,7 +25,7 @@ export async function heartbeatConsoleSession(sessionId: string): Promise<void> 
   }
 }
 
-/** End session via fetch (normal path). */
+/** End session via fetch (normal path — used when page is NOT unloading). */
 export async function endConsoleSession(sessionId: string): Promise<void> {
   try {
     await apiRequest('/api/v1/external-vms/sessions/' + sessionId + '/end', {
@@ -37,8 +37,28 @@ export async function endConsoleSession(sessionId: string): Promise<void> {
 }
 
 /**
- * End session via navigator.sendBeacon — the only reliable way to fire a
- * request on tab close (fetch is cancelled but sendBeacon is not).
+ * End session via sendBeacon using the pre-issued endToken.
+ * The token IS the auth — no auth header needed, so sendBeacon works reliably.
+ * Used on Disconnect/Back button clicks and pagehide (page unloading).
+ */
+export function endConsoleSessionByTokenBeacon(
+  endToken: string,
+  gatewayBaseUrl: string,
+  apiPath = '/api/v1/external-vms/sessions/end-by-token'
+): void {
+  const url = `${gatewayBaseUrl}${apiPath}`;
+  const payload = JSON.stringify({ endToken });
+  const blob = new Blob([payload], { type: 'application/json' });
+  if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+    navigator.sendBeacon(url, blob);
+  } else {
+    // Fallback for environments without sendBeacon
+    void fetch(url, { method: 'POST', body: payload, keepalive: true, headers: { 'Content-Type': 'application/json' } }).catch(() => {});
+  }
+}
+
+/**
+ * End session via navigator.sendBeacon (legacy — used when endToken is unavailable).
  * Falls back to a fire-and-forget fetch on browsers that don't support sendBeacon.
  */
 export function endConsoleSessionBeacon(sessionId: string, gatewayBaseUrl: string): void {
@@ -46,7 +66,6 @@ export function endConsoleSessionBeacon(sessionId: string, gatewayBaseUrl: strin
   if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
     navigator.sendBeacon(url);
   } else {
-    // Fallback
     void fetch(url, { method: 'POST', keepalive: true, credentials: 'include' }).catch(() => {});
   }
 }
