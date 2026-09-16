@@ -14,9 +14,16 @@ function Remove-FolderWithRetry {
         if (-not (Test-Path $Path)) { return }
         if ($i -lt $MaxAttempts) {
             $folderName = Split-Path $Path -Leaf
+            # Kill by folder name match (catches most processes)
             Get-Process | Where-Object {
                 try { $_.MainModule.FileName -like "*$folderName*" } catch { $false }
             } | Stop-Process -Force -ErrorAction SilentlyContinue
+            # Kill known container/orchestration tools by name that may hold locks
+            foreach ($procName in @('kubectl','kubelet','kubeadm','kube-apiserver','kube-proxy',
+                                    'kube-scheduler','kube-controller','helm','etcd','containerd',
+                                    'dockerd','docker','minikube')) {
+                Get-Process -Name $procName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            }
             Start-Sleep -Seconds $DelaySeconds
         }
     }
@@ -80,6 +87,10 @@ function Invoke-UninstallEntry {
             $qcmd = Split-UninstallCommand $quiet
             $qargs = $qcmd.Args -split '\s+' | Where-Object { $_ -ne '' }
             Invoke-UninstallerWithTimeout -FilePath $qcmd.Exe -Arguments $qargs -TimeoutSeconds 120
+        } elseif ($uninst -match 'OneDriveSetup') {
+            # OneDrive uses /uninstall flag — generic fallback would pass /S which silently fails
+            $cmd = Split-UninstallCommand $uninst
+            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('/uninstall') -TimeoutSeconds 120
         } elseif ($uninst -match 'msedgewebview|EdgeWebView') {
             $cmd = Split-UninstallCommand $uninst
             Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('--uninstall','--msedgewebview','--system-level','--force-uninstall') -TimeoutSeconds 90
@@ -131,9 +142,23 @@ function Invoke-UninstallEntry {
 }
 
 # ── PROTECTED: never uninstall these ────────────────────────
-$skipExact   = @('Microsoft Edge', 'RackoAgent', 'Racko Agent')
-$skipLike    = @('Cloudbase-Init*', 'Virtio-win*', 'QEMU*', 'VMware*')
-$skipPattern = '^(Microsoft Visual C\+\+|Python Launcher|Windows SDK|Windows Desktop|Windows App|Windows Mobile|Windows IoT|Windows Team|WinRT|SDK ARM|Universal CRT|Universal General|vs_|vcp|vcpp|Kits |MsiDev|DiagnosticsHub|Application Verifier|vs[_ ])'
+# Exact match — only these display names are kept from the template whitelist + agent
+$skipExact = @(
+    'Microsoft Edge',
+    'VMware Tools',
+    'Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.40.33816',
+    'Microsoft Visual C++ 2015-2022 Redistributable (x86) - 14.40.33816',
+    'Microsoft Visual C++ 2022 X64 Additional Runtime - 14.40.33816',
+    'Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.40.33816',
+    'Microsoft Visual C++ 2022 X86 Additional Runtime - 14.40.33816',
+    'Microsoft Visual C++ 2022 X86 Minimum Runtime - 14.40.33816',
+    'RackoAgent',
+    'Racko Agent'
+)
+# Prefix/wildcard match — VMware Tools only, not all VMware products
+$skipLike    = @('Cloudbase-Init*', 'Virtio-win*', 'QEMU*', 'VMware Tools*')
+# Pattern match — only VC++ prefix (all versions kept) and genuine Windows runtime noise
+$skipPattern = '^(Microsoft Visual C\+\+|Windows SDK|Windows Desktop|Windows App|Windows Mobile|Windows IoT|Windows Team|WinRT|SDK ARM|Universal CRT|Universal General|Kits |MsiDev|DiagnosticsHub)'
 
 function Test-ShouldUninstall {
     param($entry)
@@ -146,14 +171,20 @@ function Test-ShouldUninstall {
 }
 
 # ── Windows-owned Program Files folders (whitelist) ─────────
-$pfSystemFolders = @(
-    'Common Files','Internet Explorer','WindowsPowerShell','Reference Assemblies',
-    'dotnet','IIS Express','MSBuild','ModifiableWindowsApps','WindowsApps',
-    'Windows Defender','Windows Defender Advanced Threat Protection','Windows Mail',
-    'Windows Media Player','Windows NT','Windows Photo Viewer','Windows Security',
-    'Windows Sidebar','Windows Journal','Microsoft','Microsoft.NET',
-    'Microsoft Analysis Services','Microsoft Office','Microsoft SQL Server',
-    'Uninstall Information','Cloudbase Solutions','Qemu-ga','Virtio-Win','VMware','PackageManagement'
+# Matches template allowed_program_files — only these survive in C:\Program Files
+$pfAllowed = @(
+    'Common Files','Internet Explorer','ModifiableWindowsApps','PackageManagement',
+    'Uninstall Information','VMware','Windows Defender',
+    'Windows Defender Advanced Threat Protection','Windows Mail',
+    'Windows Media Player','Windows NT','Windows Photo Viewer',
+    'Windows Sidebar','WindowsApps','WindowsPowerShell','desktop.ini'
+)
+
+# Matches template allowed_program_files_x86 — only these survive in C:\Program Files (x86)
+$pfx86Allowed = @(
+    'Common Files','Internet Explorer','Microsoft','Microsoft.NET',
+    'Windows Defender','Windows Mail','Windows Media Player','Windows NT',
+    'Windows Photo Viewer','Windows Sidebar','WindowsPowerShell','desktop.ini'
 )
 
 # ── Windows-owned AppData folders (whitelist) ────────────────
@@ -275,6 +306,34 @@ if ($killed -gt 0) {
 } else {
     Write-Host "  No user processes found to kill." -ForegroundColor DarkGray
 }
+
+# ============================================================
+# PHASE 0.5 — C:\ root sweep (template allowed_root_names)
+# Removes any top-level folder/file on C:\ not in the template whitelist.
+# Catches user-created folders like C:\kubernetes, C:\work, C:\mahi etc.
+# ============================================================
+Write-Host "`n=== PHASE 0.5: C:\ ROOT SWEEP ===" -ForegroundColor Cyan
+
+$allowedRootNames = @(
+    '$Recycle.Bin','$WinREAgent','Config.Msi','Documents and Settings',
+    'inetpub','PerfLogs','Program Files','Program Files (x86)','ProgramData',
+    'Recovery','sysprep1009','System Volume Information','Users','Windows',
+    'bootTel.dat','DumpStack.log.tmp','pagefile.sys','swapfile.sys','hiberfil.sys'
+)
+
+foreach ($item in (Get-ChildItem 'C:\' -Force -ErrorAction SilentlyContinue)) {
+    $isAllowed = $false
+    foreach ($a in $allowedRootNames) {
+        if ($item.Name -eq $a) { $isAllowed = $true; break }
+    }
+    if ($isAllowed) { continue }
+    Write-Host "Removing from C:\ root: $($item.FullName)" -ForegroundColor Yellow
+    Remove-FolderWithRetry -Path $item.FullName
+    if (-not (Test-Path $item.FullName)) {
+        Write-Host "Removed: $($item.FullName)" -ForegroundColor Green
+    }
+}
+Write-Host "C:\ root sweep complete." -ForegroundColor Green
 
 # ============================================================
 # PHASE 1 — Registry-driven uninstall (HKLM + HKCU + all per-user hives)
@@ -536,8 +595,19 @@ try {
     foreach ($pkg in $provisioned) {
         if (Test-IsSystemMsixPackage $pkg.DisplayName) { continue }
         Write-Host "Removing provisioned MSIX: $($pkg.DisplayName)" -ForegroundColor Yellow
-        Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction SilentlyContinue | Out-Null
-        Write-Host "Removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
+        $result = Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction SilentlyContinue
+        if ($result -eq $null) {
+            # Fallback: try DISM when PowerShell cmdlet fails silently on Server 2022
+            Write-Host "  PowerShell cmdlet returned null — trying DISM fallback for $($pkg.DisplayName)" -ForegroundColor DarkYellow
+            $dismOut = & dism.exe /Online /Remove-ProvisionedAppxPackage /PackageName:$($pkg.PackageName) 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  DISM removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
+            } else {
+                Write-Host "  DISM also failed for $($pkg.DisplayName): $dismOut" -ForegroundColor Red
+            }
+        } else {
+            Write-Host "Removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
+        }
     }
 
     # Remove per-user packages for all users
@@ -545,8 +615,19 @@ try {
     foreach ($pkg in $allPackages) {
         if (Test-IsSystemMsixPackage $pkg.Name) { continue }
         Write-Host "Removing MSIX package: $($pkg.Name)" -ForegroundColor Yellow
-        Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction SilentlyContinue
-        Write-Host "Removed: $($pkg.Name)" -ForegroundColor Green
+        try {
+            Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop
+            Write-Host "Removed: $($pkg.Name)" -ForegroundColor Green
+        } catch {
+            Write-Host "  Remove-AppxPackage failed for $($pkg.Name): $_" -ForegroundColor Red
+            # DISM fallback for per-user package failures
+            $dismOut = & dism.exe /Online /Remove-ProvisionedAppxPackage /PackageName:$($pkg.PackageFullName) 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  DISM removed: $($pkg.Name)" -ForegroundColor Green
+            } else {
+                Write-Host "  DISM also failed for $($pkg.Name)" -ForegroundColor DarkYellow
+            }
+        }
     }
 } catch {
     Write-Host "  MSIX cleanup error (non-fatal): $_" -ForegroundColor DarkYellow
@@ -558,9 +639,11 @@ Write-Host "`n=== PHASE 2: PROGRAM FILES WHITELIST SWEEP ===" -ForegroundColor C
 
 foreach ($pf in @('C:\Program Files', 'C:\Program Files (x86)')) {
     if (-not (Test-Path $pf)) { continue }
+    # Use the correct whitelist per folder — template defines them separately
+    $whitelist = if ($pf -eq 'C:\Program Files') { $pfAllowed } else { $pfx86Allowed }
     foreach ($dir in (Get-ChildItem $pf -Directory -ErrorAction SilentlyContinue)) {
         $isSystem = $false
-        foreach ($s in $pfSystemFolders) {
+        foreach ($s in $whitelist) {
             if ($dir.Name -eq $s -or $dir.Name -like "$s*") { $isSystem = $true; break }
         }
         if ($isSystem) { continue }
@@ -1403,12 +1486,12 @@ Write-Host "`n=== PHASE 18: DRIVE ROOT SWEEP (user-created folders on all drives
 # directly on a drive root — these are not covered by any other phase.
 
 # System folders that must never be deleted — per drive letter
-# C:\ has many more protected folders than other drives
+# C:\ uses template's allowed_root_names (same as Phase 0.5)
 $cSystemFolders = @(
-    'Windows','Users','Program Files','Program Files (x86)','ProgramData',
-    'inetpub','PerfLogs','sysprep1007','$Recycle.Bin','$WinREAgent',
-    'Config.Msi','Recovery','System Volume Information','$SysReset',
-    'OneDriveTemp','MSOCache'
+    '$Recycle.Bin','$WinREAgent','Config.Msi','Documents and Settings',
+    'inetpub','PerfLogs','Program Files','Program Files (x86)','ProgramData',
+    'Recovery','sysprep1009','System Volume Information','Users','Windows',
+    'bootTel.dat','DumpStack.log.tmp','pagefile.sys','swapfile.sys','hiberfil.sys'
 )
 # For non-C drives, only Windows metadata folders are protected
 $otherDriveSystemFolders = @(

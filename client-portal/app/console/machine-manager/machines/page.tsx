@@ -17,7 +17,7 @@ import { useJobStream } from '../../../../hooks/useJobStream';
 import { useSoftwareCatalog } from '../../../../hooks/useSoftwareCatalog';
 import {
   Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp,
-  RotateCcw, CheckCircle2, XCircle, Loader2, X, Package, Terminal, Search,
+  RotateCcw, CheckCircle2, XCircle, Loader2, X, Package, Terminal, Search, WifiOff,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -148,86 +148,60 @@ function SoftwareProgress({ jobs, isAuthenticated }: { jobs: IJob[]; isAuthentic
 }
 
 // ─── Reset status types ───────────────────────────────────────────────────────
-type ResetStatus = 'pending' | 'resetting' | 'success' | 'failed' | 'offline';
+type ResetPhase = 'pending' | 'resetting' | 'success' | 'failed' | 'offline';
 
-interface ResetMachineState {
-  machineId: string;
-  machineName: string;
-  status: ResetStatus;
+interface ResetRowState {
+  phase: ResetPhase;
   error?: string;
+  /** timestamp (ms) when success was set — used to auto-clear after 8 s */
+  clearedAt?: number;
 }
 
-// ─── Reset Status Modal ───────────────────────────────────────────────────────
-function ResetStatusModal({
-  states,
-  onClose,
-}: {
-  states: ResetMachineState[];
-  onClose: () => void;
-}) {
-  const allDone = states.every((s) => s.status === 'success' || s.status === 'failed' || s.status === 'offline');
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl border border-gray-200 bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-          <div>
-            <p className="text-sm font-semibold text-gray-900">Reset VM Status</p>
-            <p className="mt-0.5 text-xs text-gray-400">
-              {allDone ? 'All resets completed' : 'Reset in progress — this may take a few minutes'}
-            </p>
-          </div>
-          {allDone && (
-            <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100">
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-        <div className="max-h-96 overflow-y-auto p-5 space-y-3">
-          {states.map((s) => (
-            <div key={s.machineId} className="flex items-center gap-3 rounded-lg border border-gray-100 p-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-50">
-                {s.status === 'resetting' || s.status === 'pending' ? (
-                  <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-                ) : s.status === 'success' ? (
-                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                ) : s.status === 'offline' ? (
-                  <XCircle className="h-4 w-4 text-gray-400" />
-                ) : (
-                  <XCircle className="h-4 w-4 text-red-500" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">{s.machineName}</p>
-                <p className={`text-xs mt-0.5 ${
-                  s.status === 'success' ? 'text-green-600'
-                  : s.status === 'failed' ? 'text-red-500'
-                  : s.status === 'offline' ? 'text-gray-400'
-                  : 'text-blue-500'
-                }`}>
-                  {s.status === 'pending'   ? 'Queued...'
-                  : s.status === 'resetting' ? 'Resetting VM...'
-                  : s.status === 'success'   ? 'Reset complete'
-                  : s.status === 'offline'   ? 'Agent offline — reset skipped'
-                  : `Failed: ${s.error ?? 'Unknown error'}`}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-        {allDone && (
-          <div className="border-t border-gray-100 px-5 py-3 text-right">
-            <button
-              onClick={onClose}
-              className="rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#a01717]"
-            >
-              Done
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+// ─── Reset Status Cell ────────────────────────────────────────────────────────
+function ResetStatusCell({ state }: { state: ResetRowState | undefined }) {
+  if (!state || state.phase === 'idle' as string) {
+    return <span className="text-xs text-gray-400">—</span>;
+  }
+  switch (state.phase) {
+    case 'pending':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-xs text-gray-500">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
+          Queued
+        </span>
+      );
+    case 'resetting':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-xs text-blue-600 font-medium">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Resetting…
+        </span>
+      );
+    case 'success':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-xs text-green-600 font-medium">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          Complete
+        </span>
+      );
+    case 'failed':
+      return (
+        <span
+          className="inline-flex items-center gap-1.5 text-xs text-red-600 font-medium cursor-help"
+          title={state.error ?? 'Reset failed'}
+        >
+          <XCircle className="h-3.5 w-3.5" />
+          Failed
+        </span>
+      );
+    case 'offline':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+          <WifiOff className="h-3.5 w-3.5" />
+          Agent offline
+        </span>
+      );
+  }
 }
 
 // ─── Bulk Install Modal ────────────────────────────────────────────────────────
@@ -627,7 +601,8 @@ export default function MyMachinesPage() {
   // Reset confirm + status
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [resetStates, setResetStates] = useState<ResetMachineState[] | null>(null);
+  // Per-machine inline reset status — replaces the old blocking modal
+  const [resetById, setResetById] = useState<Record<string, ResetRowState>>({});
   const sseRef = useRef<(() => void) | null>(null);
 
   // Jobs keyed by machineId
@@ -650,6 +625,25 @@ export default function MyMachinesPage() {
 
   // Cleanup SSE on unmount
   useEffect(() => () => { sseRef.current?.(); }, []);
+
+  // Auto-clear success states after 8 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setResetById((prev) => {
+        const now = Date.now();
+        const next = { ...prev };
+        let changed = false;
+        for (const [id, state] of Object.entries(next)) {
+          if (state.phase === 'success' && state.clearedAt && now - state.clearedAt > 8000) {
+            delete next[id];
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleRefresh = () => { refetch(); void loadJobs(); };
 
@@ -736,57 +730,66 @@ export default function MyMachinesPage() {
     setResetting(true);
     setShowResetConfirm(false);
 
-    // Initialize status panel
-    const initial: ResetMachineState[] = selectedMachines.map((m) => ({
-      machineId: m._id,
-      machineName: m.name,
-      status: 'pending',
-    }));
-    setResetStates(initial);
+    // Mark all selected machines as pending in the inline column
+    setResetById((prev) => {
+      const next = { ...prev };
+      for (const m of selectedMachines) {
+        next[m._id] = { phase: 'pending' };
+      }
+      return next;
+    });
 
     try {
       const sessionId = `reset-${Date.now()}`;
       const result = await resetMachines(selectedMachines.map((m) => m._id), sessionId);
 
-      // Mark offline machines immediately
-      setResetStates((prev) =>
-        prev!.map((s) =>
-          result.offline.includes(s.machineId) ? { ...s, status: 'offline' } : { ...s, status: 'resetting' }
-        )
-      );
+      // Immediately resolve offline/accepted states
+      setResetById((prev) => {
+        const next = { ...prev };
+        for (const m of selectedMachines) {
+          if (result.offline.includes(m._id)) {
+            next[m._id] = { phase: 'offline' };
+          } else {
+            next[m._id] = { phase: 'resetting' };
+          }
+        }
+        return next;
+      });
 
-      // Open SSE stream with automatic reconnect + exponential backoff.
-      // On reconnect, server delivers persisted result from MongoDB instantly.
       if (result.accepted.length > 0) {
         const ticket = await issueResetStreamTicket(sessionId);
 
         const stop = openResetStatusStreamWithReconnect(
           sessionId,
           ticket.streamToken,
-          // onEvent — called for every SSE event including reset_complete
           (event) => {
             if (event.type === 'reset_complete' && event.machineId) {
-              setResetStates((prev) =>
-                prev!.map((s) =>
-                  s.machineId === event.machineId
-                    ? { ...s, status: event.success ? 'success' : 'failed', error: event.error }
-                    : s
-                )
-              );
+              setResetById((prev) => ({
+                ...prev,
+                [event.machineId]: {
+                  phase: event.success ? 'success' : 'failed',
+                  error: event.error,
+                  clearedAt: event.success ? Date.now() : undefined,
+                },
+              }));
             }
           },
-          // onTerminal — all accepted machines done, stop cleanly
           () => { sseRef.current = null; },
-          // onGiveUp — all retries exhausted (>5 min), mark in-progress as failed
           () => {
             sseRef.current = null;
-            setResetStates((prev) =>
-              prev ? prev.map((s) =>
-                s.status === 'resetting' ? { ...s, status: 'failed', error: 'Connection lost — reset may have completed. Check the machine status.' } : s
-              ) : prev
-            );
+            setResetById((prev) => {
+              const next = { ...prev };
+              for (const [id, state] of Object.entries(next)) {
+                if (state.phase === 'resetting') {
+                  next[id] = {
+                    phase: 'failed',
+                    error: 'Connection lost — reset may have completed. Check the machine status.',
+                  };
+                }
+              }
+              return next;
+            });
           },
-          // expectedCount — number of accepted machines so stream knows when all are done
           result.accepted.length,
         );
 
@@ -794,11 +797,17 @@ export default function MyMachinesPage() {
       }
 
       setSelectedIds(new Set());
-      // Refresh machines list after a delay so job history is cleared
       setTimeout(() => { refetch(); void loadJobs(); }, 3000);
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to initiate reset.');
-      setResetStates(null);
+      // Clear the pending states on error
+      setResetById((prev) => {
+        const next = { ...prev };
+        for (const m of selectedMachines) {
+          delete next[m._id];
+        }
+        return next;
+      });
     } finally {
       setResetting(false);
     }
@@ -847,17 +856,6 @@ export default function MyMachinesPage() {
           loading={bulkDeleteLoading}
           onConfirm={() => void handleBulkDelete()}
           onCancel={() => setShowBulkDeleteConfirm(false)}
-        />
-      )}
-
-      {resetStates && (
-        <ResetStatusModal
-          states={resetStates}
-          onClose={() => {
-            sseRef.current?.();
-            sseRef.current = null;
-            setResetStates(null);
-          }}
         />
       )}
 
@@ -1004,7 +1002,7 @@ export default function MyMachinesPage() {
                         />
                       )}
                     </th>
-                    {['Name', 'IP Address', 'OS', 'Status', 'Software Progress', 'Last Seen', 'Actions'].map((h) => (
+                    {['Name', 'IP Address', 'OS', 'Status', 'Software Progress', 'Reset Status', 'Last Seen', 'Actions'].map((h) => (
                       <th key={h} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
                     ))}
                   </tr>
@@ -1013,6 +1011,7 @@ export default function MyMachinesPage() {
                   {filteredMachines.map((m, i) => {
                     const isSelected = selectedIds.has(m._id);
                     const isOnline = m.status === 'online';
+                    const resetState = resetById[m._id];
                     return (
                       <tr
                         key={m._id}
@@ -1039,6 +1038,9 @@ export default function MyMachinesPage() {
                         <td className="px-5 py-3"><MachineStatusBadge status={m.status} /></td>
                         <td className="px-5 py-3">
                           <SoftwareProgress jobs={jobsByMachine[m._id] ?? []} isAuthenticated={isAuthenticated} />
+                        </td>
+                        <td className="px-5 py-3">
+                          <ResetStatusCell state={resetState} />
                         </td>
                         <td className="px-5 py-3 text-xs text-gray-400">
                           {m.lastSeen ? new Date(m.lastSeen).toLocaleString() : '—'}

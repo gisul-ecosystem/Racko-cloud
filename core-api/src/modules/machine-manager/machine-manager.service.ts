@@ -780,14 +780,14 @@ class MachineManagerService {
         deleted: { $ne: true },
       }).sort({ createdAt: -1 });
 
-      // Retry path: if a prior push created a pending/offline row for same VM,
-      // reuse that row instead of creating another duplicate machine record.
-      if (existing && (!existing.agentId || existing.status !== 'online')) {
+      // Always reuse an existing machine record for the same IP — whether it is
+      // pending, offline, or currently online. The install script on the VM stops
+      // the running agent, overwrites config.json with the same accountToken, and
+      // reinstalls — so no duplicate record is created and the old agent is replaced.
+      if (existing) {
         existing.name = vm.name;
         existing.os = vm.os;
-        if (existing.status !== 'online') {
-          existing.status = 'pending';
-        }
+        existing.status = 'pending';
         await existing.save();
         machines.push(this.toMachineResponse(existing));
 
@@ -795,6 +795,7 @@ class MachineManagerService {
           machineId: existing._id.toString(),
           adminId: adminId.toString(),
           ipAddress: vm.ipAddress,
+          wasStatus: existing.status,
         });
         continue;
       }
