@@ -10,6 +10,7 @@ import {
   userIdParamSchema,
   assignExternalVMsSchema,
   bulkAssignExternalPairsSchema,
+  bulkDeleteSessionsSchema,
 } from './external-vm.validation';
 
 const router = Router();
@@ -122,6 +123,14 @@ router.get(
   '/sessions',
   requireRole('admin', 'super_admin'),
   (req, res, next) => externalVMController.listConsoleSessions(req, res, next)
+);
+
+// DELETE /api/v1/external-vms/sessions/bulk — bulk delete completed sessions
+router.delete(
+  '/sessions/bulk',
+  requireRole('admin', 'super_admin'),
+  validateRequest(bulkDeleteSessionsSchema),
+  (req, res, next) => externalVMController.bulkDeleteConsoleSessions(req, res, next)
 );
 
 // GET /api/v1/external-vms — list my external VMs (admin)

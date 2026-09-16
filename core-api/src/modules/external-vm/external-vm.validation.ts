@@ -161,5 +161,14 @@ export const bulkAssignExternalPairsSchema = z.object({
     }),
 });
 
+export const bulkDeleteSessionsSchema = z.object({
+  body: z.object({
+    ids: z
+      .array(mongoObjectId)
+      .min(1, 'At least one session must be specified')
+      .max(100, 'Cannot delete more than 100 sessions at once'),
+  }),
+});
+
 export type CreateExternalVMInput = z.infer<typeof createExternalVMSchema>['body'];
 export type BulkCreateExternalVMInput = z.infer<typeof bulkCreateExternalVMSchema>['body'];

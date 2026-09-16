@@ -334,3 +334,12 @@ export async function fetchTenantConsoleSessions(params?: {
     )
   );
 }
+
+export async function bulkDeleteTenantConsoleSessions(ids: string[]): Promise<{ deleted: number }> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<{ deleted: number }>>(
+      '/api/v1/tenant-external-vms/sessions/bulk',
+      { method: 'DELETE', body: JSON.stringify({ ids }) }
+    )
+  );
+}

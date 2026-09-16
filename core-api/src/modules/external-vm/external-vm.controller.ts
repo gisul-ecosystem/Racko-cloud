@@ -346,6 +346,20 @@ export class ExternalVMController {
       next(err);
     }
   }
+
+  /** DELETE /api/v1/external-vms/sessions/bulk */
+  async bulkDeleteConsoleSessions(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { ids } = req.body as { ids: string[] };
+      const { consoleSessionService } = await import('./consoleSession.service');
+      const result = await consoleSessionService.bulkDeleteSessions(adminId, ids);
+      success(res, `${result.deleted} session(s) deleted.`, result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const externalVMController = new ExternalVMController();

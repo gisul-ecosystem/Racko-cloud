@@ -36,6 +36,8 @@ const consoleSessionSchema = new Schema<IConsoleSession>(
 consoleSessionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
 // For admin analytics queries
 consoleSessionSchema.index({ adminId: 1, loginAt: -1 });
+// For tenant admin analytics queries
+consoleSessionSchema.index({ tenantId: 1, loginAt: -1 });
 // For stale session sweeper
 consoleSessionSchema.index({ logoutAt: 1, lastHeartbeatAt: 1 });
 

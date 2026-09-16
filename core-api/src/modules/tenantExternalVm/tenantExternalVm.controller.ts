@@ -417,6 +417,20 @@ export class TenantExternalVmController {
       next(err);
     }
   }
+
+  /** DELETE /api/v1/tenant-external-vms/sessions/bulk — bulk delete completed sessions */
+  async bulkDeleteConsoleSessions(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
+      const { ids } = req.body as { ids: string[] };
+      const { consoleSessionService } = await import('../external-vm/consoleSession.service');
+      const result = await consoleSessionService.bulkDeleteSessionsByTenant(tenantId, ids);
+      success(res, `${result.deleted} session(s) deleted.`, result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const tenantExternalVmController = new TenantExternalVmController();

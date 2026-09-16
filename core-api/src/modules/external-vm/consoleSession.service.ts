@@ -147,6 +147,34 @@ export class ConsoleSessionService {
     return this._listSessions({ adminId }, filters);
   }
 
+  /** Bulk delete completed sessions scoped to an adminId (platform admin). */
+  async bulkDeleteSessions(
+    adminId: mongoose.Types.ObjectId,
+    ids: string[]
+  ): Promise<{ deleted: number }> {
+    const objectIds = ids.map((id) => new mongoose.Types.ObjectId(id));
+    const result = await ConsoleSessionModel.deleteMany({
+      _id: { $in: objectIds },
+      adminId,
+      logoutAt: { $ne: null }, // never delete active sessions
+    });
+    return { deleted: result.deletedCount };
+  }
+
+  /** Bulk delete completed sessions scoped to a tenantId (tenant admin). */
+  async bulkDeleteSessionsByTenant(
+    tenantId: mongoose.Types.ObjectId,
+    ids: string[]
+  ): Promise<{ deleted: number }> {
+    const objectIds = ids.map((id) => new mongoose.Types.ObjectId(id));
+    const result = await ConsoleSessionModel.deleteMany({
+      _id: { $in: objectIds },
+      tenantId,
+      logoutAt: { $ne: null }, // never delete active sessions
+    });
+    return { deleted: result.deletedCount };
+  }
+
   /** Analytics list scoped to a specific tenantId (tenant admin). */
   async listSessionsByTenant(
     tenantId: mongoose.Types.ObjectId,
