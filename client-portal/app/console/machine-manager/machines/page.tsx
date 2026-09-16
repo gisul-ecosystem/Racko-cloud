@@ -764,9 +764,10 @@ export default function MyMachinesPage() {
           ticket.streamToken,
           (event) => {
             if (event.type === 'reset_complete' && event.machineId) {
+              const mid = event.machineId;
               setResetById((prev) => ({
                 ...prev,
-                [event.machineId]: {
+                [mid]: {
                   phase: event.success ? 'success' : 'failed',
                   error: event.error,
                   clearedAt: event.success ? Date.now() : undefined,
