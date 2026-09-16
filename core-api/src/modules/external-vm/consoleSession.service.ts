@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { ConsoleSessionModel } from './consoleSession.model';
 import { ExternalVMModel } from './external-vm.model';
 import { User } from '../../models/user.model';
+import { TenantUser } from '../../models/tenantUser.model';
 import { NotFoundError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 
@@ -12,23 +13,28 @@ export class ConsoleSessionService {
     serverId: mongoose.Types.ObjectId,
     userId: mongoose.Types.ObjectId
   ): Promise<{ sessionId: string }> {
-    // Load the server without admin constraint — ownership is enforced by the
-    // existing openConsole/assertPlatformAccess path before this is called.
-    // We derive adminId from the server record itself so the session is always
-    // attributed to the correct admin regardless of whether the caller is an
-    // admin or an assigned end-user.
     const server = await ExternalVMModel.findById(serverId).lean();
     if (!server) throw new NotFoundError('Server not found.');
 
-    // Get user email
-    const user = await User.findById(userId).select('email').lean();
-    if (!user) throw new NotFoundError('User not found.');
+    // Resolve user email from the correct collection.
+    // Platform admin servers: userId is a platform User._id → use User model.
+    // Tenant servers: userId is a TenantUser._id → use TenantUser model.
+    let userEmail: string;
+    if (server.tenantId) {
+      const tenantUser = await TenantUser.findById(userId).select('email').lean();
+      if (!tenantUser) throw new NotFoundError('Tenant user not found.');
+      userEmail = tenantUser.email;
+    } else {
+      const user = await User.findById(userId).select('email').lean();
+      if (!user) throw new NotFoundError('User not found.');
+      userEmail = user.email;
+    }
 
     const session = await ConsoleSessionModel.create({
       ...(server.adminId ? { adminId: server.adminId } : {}),
       ...(server.tenantId ? { tenantId: server.tenantId } : {}),
       userId,
-      userEmail: user.email,
+      userEmail,
       serverId,
       serverName: server.name,
       loginAt: new Date(),
