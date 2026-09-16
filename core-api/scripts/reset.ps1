@@ -97,7 +97,7 @@ function Invoke-UninstallEntry {
         } elseif ($uninst -match 'MsiExec') {
             $guid = [regex]::Match($uninst, '\{[A-F0-9\-]+\}', 'IgnoreCase').Value
             if ($guid) {
-                Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X$guid",'/quiet','/norestart') -TimeoutSeconds 180
+                Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X$guid",'/qn','/norestart') -TimeoutSeconds 180
             }
         } elseif ($uninst -match 'Docker Desktop Installer') {
             $cmd = Split-UninstallCommand $uninst
@@ -435,7 +435,7 @@ foreach ($entry in $pythonEntries) {
         continue
     }
     Write-Host "Uninstalling Python component: $name ($guid)" -ForegroundColor Yellow
-    Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X$guid", '/quiet', '/norestart') -TimeoutSeconds 300
+    Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X", $guid, '/qn', '/norestart') -TimeoutSeconds 300
     Write-Host "Done: $name" -ForegroundColor Green
 }
 
@@ -595,22 +595,21 @@ try {
     foreach ($pkg in $provisioned) {
         if (Test-IsSystemMsixPackage $pkg.DisplayName) { continue }
         Write-Host "Removing provisioned MSIX: $($pkg.DisplayName)" -ForegroundColor Yellow
-        $result = Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction SilentlyContinue
-        if ($result -eq $null) {
-            # Fallback: try DISM when PowerShell cmdlet fails silently on Server 2022
-            Write-Host "  PowerShell cmdlet returned null - trying DISM fallback for $($pkg.DisplayName)" -ForegroundColor DarkYellow
+        try {
+            Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction Stop | Out-Null
+            Write-Host "Removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
+        } catch {
+            Write-Host "  PowerShell failed for provisioned $($pkg.DisplayName): $_ -- trying DISM" -ForegroundColor DarkYellow
             $dismOut = & dism.exe /Online /Remove-ProvisionedAppxPackage /PackageName:$($pkg.PackageName) 2>&1
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "  DISM removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
             } else {
                 Write-Host "  DISM also failed for $($pkg.DisplayName): $dismOut" -ForegroundColor Red
             }
-        } else {
-            Write-Host "Removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
         }
     }
 
-    # Remove per-user packages for all users
+    # Remove per-user packages for all users (includes user-scoped installs not caught by provisioned removal)
     $allPackages = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue
     foreach ($pkg in $allPackages) {
         if (Test-IsSystemMsixPackage $pkg.Name) { continue }
@@ -620,7 +619,6 @@ try {
             Write-Host "Removed: $($pkg.Name)" -ForegroundColor Green
         } catch {
             Write-Host "  Remove-AppxPackage failed for $($pkg.Name): $_" -ForegroundColor Red
-            # DISM fallback for per-user package failures
             $dismOut = & dism.exe /Online /Remove-ProvisionedAppxPackage /PackageName:$($pkg.PackageFullName) 2>&1
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "  DISM removed: $($pkg.Name)" -ForegroundColor Green
@@ -634,6 +632,28 @@ try {
 }
 Write-Host "MSIX/AppX package cleanup complete." -ForegroundColor Green
 
+
+Write-Host "`n=== PHASE 1e: .NET SDK REMOVAL ===" -ForegroundColor Cyan
+
+$dotnetSdkEntries = @()
+foreach ($regPath in @(
+    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)) {
+    $dotnetSdkEntries += Get-ItemProperty $regPath -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like '*.NET SDK*' -or $_.DisplayName -like '*Microsoft .NET SDK*' }
+}
+$dotnetSdkEntries = $dotnetSdkEntries | Sort-Object DisplayName -Unique
+Write-Host "Found $($dotnetSdkEntries.Count) .NET SDK components to uninstall" -ForegroundColor Yellow
+foreach ($entry in $dotnetSdkEntries) {
+    $uninst = if ($entry.UninstallString) { $entry.UninstallString.Trim() } else { '' }
+    $guid = [regex]::Match($uninst, '\{[A-F0-9\-]+\}', 'IgnoreCase').Value
+    if ($guid) {
+        Write-Host "Uninstalling: $($entry.DisplayName)" -ForegroundColor Yellow
+        Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @('/X', $guid, '/qn', '/norestart') -TimeoutSeconds 300
+        Write-Host "Done: $($entry.DisplayName)" -ForegroundColor Green
+    }
+}
 
 Write-Host "`n=== PHASE 2: PROGRAM FILES WHITELIST SWEEP ===" -ForegroundColor Cyan
 
