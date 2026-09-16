@@ -389,6 +389,15 @@ router.post('/api/v1/external-vms/assign', authMiddleware, verifyMiddleware, req
 router.post('/api/v1/external-vms/assign/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/external-vms/assign/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/external-vms/my-assigned', authMiddleware, verifyMiddleware, requireRole('user'), coreApiProxy);
+
+// ─── Console Session routes (platform admin) ──────────────────────────────────
+// end-by-token is PUBLIC — sendBeacon cannot send auth headers, token IS the auth
+router.post('/api/v1/external-vms/sessions/end-by-token', coreApiProxy);
+router.post('/api/v1/external-vms/sessions/start', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/external-vms/sessions/:sessionId/heartbeat', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/external-vms/sessions/:sessionId/end', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/external-vms/sessions', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
 router.get('/api/v1/external-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/external-vms/:id/console', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
 router.post('/api/v1/external-vms/:id/console/close', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
@@ -766,6 +775,9 @@ router.use('/api/v1/tenant-notifications', requireTenantBearer, tenantNotificati
 router.use('/api/v1/tenant-users', requireTenantBearer, tenantUsersProxy);
 router.use('/api/v1/tenant-rbac', requireTenantBearer, tenantRbacProxy);
 router.use('/api/v1/tenant-vms', requireTenantBearer, tenantVmsProxy);
+// end-by-token is PUBLIC — sendBeacon cannot send auth headers, token IS the auth
+// Must be registered BEFORE the requireTenantBearer catch-all below
+router.post('/api/v1/tenant-external-vms/sessions/end-by-token', tenantExternalVmsProxy);
 router.use('/api/v1/tenant-external-vms', requireTenantBearer, tenantExternalVmsProxy);
 router.use('/api/v1/tenant-vm-catalog', requireTenantBearer, tenantVmCatalogProxy);
 router.use('/api/v1/tenant-dedicated-servers', requireTenantBearer, tenantDedicatedServersProxy);
