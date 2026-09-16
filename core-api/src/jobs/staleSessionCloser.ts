@@ -20,7 +20,11 @@ async function closeStaleSessionsOnce(): Promise<void> {
     if (staleSessions.length === 0) return;
 
     for (const session of staleSessions) {
-      const logoutAt = session.lastHeartbeatAt; // use last known heartbeat as logout
+      // Use current time as logoutAt — not lastHeartbeatAt.
+      // lastHeartbeatAt equals loginAt when no heartbeat has fired yet (first
+      // heartbeat fires after 60s, stale threshold is 2 min), which makes
+      // duration = 0. Using now() gives the accurate actual session duration.
+      const logoutAt = new Date();
       const durationSeconds = Math.round(
         (logoutAt.getTime() - session.loginAt.getTime()) / 1000
       );
