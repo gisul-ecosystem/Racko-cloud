@@ -776,8 +776,9 @@ router.use('/api/v1/tenant-users', requireTenantBearer, tenantUsersProxy);
 router.use('/api/v1/tenant-rbac', requireTenantBearer, tenantRbacProxy);
 router.use('/api/v1/tenant-vms', requireTenantBearer, tenantVmsProxy);
 // end-by-token is PUBLIC — sendBeacon cannot send auth headers, token IS the auth
-// Must be registered BEFORE the requireTenantBearer catch-all below
-router.post('/api/v1/tenant-external-vms/sessions/end-by-token', tenantExternalVmsProxy);
+// Must be registered BEFORE the requireTenantBearer catch-all below.
+// Uses coreApiProxy directly (not tenantExternalVmsProxy) to avoid double path prefix.
+router.post('/api/v1/tenant-external-vms/sessions/end-by-token', coreApiProxy);
 router.use('/api/v1/tenant-external-vms', requireTenantBearer, tenantExternalVmsProxy);
 router.use('/api/v1/tenant-vm-catalog', requireTenantBearer, tenantVmCatalogProxy);
 router.use('/api/v1/tenant-dedicated-servers', requireTenantBearer, tenantDedicatedServersProxy);
