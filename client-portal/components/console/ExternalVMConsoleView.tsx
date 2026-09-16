@@ -12,6 +12,7 @@ import {
 } from '../../lib/externalVmApi';
 import { ApiError } from '../../lib/apiClient';
 import { exitGuacamoleConsolePage } from '../../lib/consoleLaunch';
+import { useIsTenantPortal } from '../../lib/portalMode';
 import { startConsoleSession, heartbeatConsoleSession, endConsoleSession, endConsoleSessionBeacon } from '../../lib/consoleSessionApi';
 import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
 import {
@@ -76,6 +77,7 @@ export function ExternalVMConsoleView({
   closeSession = closeExternalVMConsole,
   sessionTracking,
 }: ExternalVMConsoleViewProps) {
+  const isTenantPortal = useIsTenantPortal();
   const params = useParams<{ id?: string; serverId?: string }>();
   const id = params.id ?? params.serverId;
   const [session, setSession] = useState<ExternalVMConsoleSession | null>(null);
@@ -296,7 +298,9 @@ export function ExternalVMConsoleView({
     const elapsed = Date.now() - overlayStartedAtRef.current;
 
     // ── Session tracking: start session when console is live ─────────────
-    if (id && !sessionIdRef.current) {
+    if (id && !sessionIdRef.current && !(isTenantPortal && !sessionTracking)) {
+      // Platform tracking APIs require org refresh cookies; tenant pages must pass
+      // sessionTracking (see elastic / assigned consoles) or we skip tracking here.
       const startFn = sessionTracking?.start ?? startConsoleSession;
       void startFn(id).then((sId) => {
         sessionIdRef.current = sId;

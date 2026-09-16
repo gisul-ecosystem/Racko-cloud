@@ -23,6 +23,7 @@ import {
   hasExecutiveHomeRole,
   SUPER_ADMIN_OVERVIEW_PATH,
 } from '../lib/rbacApi';
+import { isTenantWorkspacePath } from '../lib/portalMode';
 
 export type UserRole = 'super_admin' | 'staff' | 'admin' | 'support_agent' | 'user';
 export type AccountType = 'legacy' | 'b2c' | 'b2b';
@@ -187,6 +188,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearAccessToken();
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     setState({ user: null, isLoading: false, isAuthenticated: false });
+    // Tenant workspace uses its own JWT in sessionStorage — never hijack to platform login.
+    if (
+      typeof window !== 'undefined' &&
+      isTenantWorkspacePath(window.location.pathname)
+    ) {
+      return;
+    }
     // Full navigation so middleware sees the cleared refreshToken cookie
     window.location.replace('/login');
   }, []);
