@@ -14,6 +14,7 @@ import {
   updateExternalVmScheduleSchema,
   updateExternalVmOverrideSchema,
   bulkUpdateExternalVmOverrideSchema,
+  bulkDeleteSessionsSchema,
 } from '../external-vm/external-vm.validation';
 import { tenantExternalVmController } from './tenantExternalVm.controller';
 
@@ -149,6 +150,14 @@ router.get(
   '/sessions',
   requireTenantPermission('elastic.manage'),
   (req, res, next) => tenantExternalVmController.listConsoleSessions(req, res, next)
+);
+
+// DELETE /api/v1/tenant-external-vms/sessions/bulk — bulk delete completed sessions
+router.delete(
+  '/sessions/bulk',
+  requireTenantPermission('elastic.manage'),
+  validateRequest(bulkDeleteSessionsSchema),
+  (req, res, next) => tenantExternalVmController.bulkDeleteConsoleSessions(req, res, next)
 );
 
 router.get(

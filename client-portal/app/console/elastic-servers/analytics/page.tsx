@@ -4,9 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../../../context/AuthContext';
 import {
   fetchConsoleSessions,
+  bulkDeleteConsoleSessions,
   type ConsoleSessionEntry,
   type ConsoleSessionSummary,
 } from '../../../../lib/consoleSessionApi';
+import { ConfirmModal } from '../../../../components/ui/ConfirmModal';
+import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import {
   Activity,
   Users,
@@ -18,6 +21,7 @@ import {
   Calendar,
   ChevronLeft,
   ChevronRight,
+  Trash2,
 } from 'lucide-react';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -97,10 +101,28 @@ function SummaryCard({
   );
 }
 
+// ─── Live duration counter for active sessions ────────────────────────────────
+
+function LiveDuration({ loginAt }: { loginAt: string }) {
+  const [seconds, setSeconds] = useState(() =>
+    Math.round((Date.now() - new Date(loginAt).getTime()) / 1000)
+  );
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setSeconds(Math.round((Date.now() - new Date(loginAt).getTime()) / 1000));
+    }, 10_000);
+    return () => clearInterval(interval);
+  }, [loginAt]);
+
+  return <span className="text-green-600">{formatDuration(seconds)} (live)</span>;
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AnalyticsPage() {
   const { isAuthenticated } = useAuth();
+  const { toasts, addToast, dismiss } = useToast();
 
   const [sessions, setSessions] = useState<ConsoleSessionEntry[]>([]);
   const [summary, setSummary] = useState<ConsoleSessionSummary | null>(null);
@@ -119,6 +141,11 @@ export default function AnalyticsPage() {
   const [total, setTotal] = useState(0);
   const LIMIT = 20;
 
+  // Selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [pendingDelete, setPendingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   const load = useCallback(async () => {
     if (!isAuthenticated) return;
     setLoading(true);
@@ -134,6 +161,8 @@ export default function AnalyticsPage() {
       setSummary(result.summary);
       setTotalPages(result.pagination.pages);
       setTotal(result.pagination.total);
+      // Clear selection on data refresh
+      setSelectedIds(new Set());
     } catch {
       setError('Failed to load session data.');
     } finally {
@@ -159,8 +188,66 @@ export default function AnalyticsPage() {
     return matchSearch && matchStatus;
   });
 
+  // Only completed sessions are selectable
+  const selectableIds = filtered.filter((s) => !s.isActive).map((s) => s._id);
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+  const someSelected = selectableIds.some((id) => selectedIds.has(id)) && !allSelected;
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      setSelectedIds((prev) => new Set([...prev, ...selectableIds]));
+    }
+  }
+
+  function toggleOne(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  const selectedCount = selectedIds.size;
+
+  async function handleBulkDelete() {
+    if (selectedCount === 0) return;
+    setDeleting(true);
+    try {
+      const result = await bulkDeleteConsoleSessions(Array.from(selectedIds));
+      addToast('success', `${result.deleted} session${result.deleted === 1 ? '' : 's'} deleted.`);
+      setPendingDelete(false);
+      setSelectedIds(new Set());
+      await load();
+    } catch {
+      addToast('error', 'Failed to delete sessions.');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div className="max-w-screen-xl">
+      <ToastContainer toasts={toasts} onDismiss={dismiss} />
+
+      {pendingDelete && (
+        <ConfirmModal
+          open
+          title="Delete sessions"
+          description={`Permanently delete ${selectedCount} session record${selectedCount === 1 ? '' : 's'}? This cannot be undone.`}
+          confirmLabel={`Delete ${selectedCount}`}
+          confirmVariant="danger"
+          loading={deleting}
+          onConfirm={() => void handleBulkDelete()}
+          onCancel={() => setPendingDelete(false)}
+        />
+      )}
+
       {/* Header */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -268,6 +355,26 @@ export default function AnalyticsPage() {
         )}
       </div>
 
+      {/* Bulk action bar */}
+      {selectedCount > 0 && (
+        <div className="mb-3 flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-4 py-2.5 shadow-sm">
+          <span className="text-sm font-medium text-gray-700">{selectedCount} selected</span>
+          <button
+            onClick={() => setPendingDelete(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete selected
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-xs text-gray-400 hover:text-gray-600"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         {loading ? (
@@ -292,6 +399,17 @@ export default function AnalyticsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
+                    <th className="w-10 px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                        onChange={toggleAll}
+                        disabled={selectableIds.length === 0}
+                        className="h-4 w-4 cursor-pointer rounded border-gray-300 disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="Select all completed sessions"
+                      />
+                    </th>
                     {['User', 'Server', 'Login Time', 'Logout Time', 'Duration', 'Status'].map((h) => (
                       <th
                         key={h}
@@ -303,52 +421,72 @@ export default function AnalyticsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((s, i) => (
-                    <tr
-                      key={s._id}
-                      className={`border-b border-gray-50 transition-colors hover:bg-gray-50 ${
-                        i % 2 !== 0 ? 'bg-gray-50/40' : ''
-                      }`}
-                    >
-                      <td className="px-5 py-3.5">
-                        <div className="flex items-center gap-2.5">
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-700">
-                            {s.userEmail[0]?.toUpperCase() ?? '?'}
+                  {filtered.map((s, i) => {
+                    const isSelected = selectedIds.has(s._id);
+                    return (
+                      <tr
+                        key={s._id}
+                        className={`border-b border-gray-50 transition-colors hover:bg-gray-50 ${
+                          isSelected ? 'bg-blue-50/60' : i % 2 !== 0 ? 'bg-gray-50/40' : ''
+                        }`}
+                      >
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          {s.isActive ? (
+                            <span
+                              title="Active sessions cannot be deleted"
+                              className="inline-block h-4 w-4 cursor-not-allowed rounded border border-gray-200 bg-gray-100"
+                              aria-disabled="true"
+                            />
+                          ) : (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleOne(s._id)}
+                              className="h-4 w-4 cursor-pointer rounded border-gray-300"
+                              aria-label={`Select session for ${s.userEmail}`}
+                            />
+                          )}
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-700">
+                              {s.userEmail[0]?.toUpperCase() ?? '?'}
+                            </div>
+                            <span className="font-medium text-gray-900 truncate max-w-[180px]" title={s.userEmail}>
+                              {s.userEmail}
+                            </span>
                           </div>
-                          <span className="font-medium text-gray-900 truncate max-w-[180px]" title={s.userEmail}>
-                            {s.userEmail}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-5 py-3.5 text-gray-700 font-mono text-xs">{s.serverName}</td>
-                      <td className="px-5 py-3.5 text-xs text-gray-600">{formatDateTime(s.loginAt)}</td>
-                      <td className="px-5 py-3.5 text-xs text-gray-600">
-                        {s.logoutAt ? formatDateTime(s.logoutAt) : (
-                          <span className="text-gray-400">—</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-3.5 text-xs font-medium text-gray-700">
-                        {s.isActive ? (
-                          <LiveDuration loginAt={s.loginAt} />
-                        ) : (
-                          formatDuration(s.durationSeconds)
-                        )}
-                      </td>
-                      <td className="px-5 py-3.5">
-                        {s.isActive ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
-                            <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-                            Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-                            <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
-                            Completed
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-5 py-3.5 text-gray-700 font-mono text-xs">{s.serverName}</td>
+                        <td className="px-5 py-3.5 text-xs text-gray-600">{formatDateTime(s.loginAt)}</td>
+                        <td className="px-5 py-3.5 text-xs text-gray-600">
+                          {s.logoutAt ? formatDateTime(s.logoutAt) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3.5 text-xs font-medium text-gray-700">
+                          {s.isActive ? (
+                            <LiveDuration loginAt={s.loginAt} />
+                          ) : (
+                            formatDuration(s.durationSeconds)
+                          )}
+                        </td>
+                        <td className="px-5 py-3.5">
+                          {s.isActive ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
+                              <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+                              Active
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                              <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+                              Completed
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -385,21 +523,4 @@ export default function AnalyticsPage() {
       </div>
     </div>
   );
-}
-
-// ─── Live duration counter for active sessions ────────────────────────────────
-
-function LiveDuration({ loginAt }: { loginAt: string }) {
-  const [seconds, setSeconds] = useState(() =>
-    Math.round((Date.now() - new Date(loginAt).getTime()) / 1000)
-  );
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setSeconds(Math.round((Date.now() - new Date(loginAt).getTime()) / 1000));
-    }, 10_000); // update every 10s — no need to be tick-perfect
-    return () => clearInterval(interval);
-  }, [loginAt]);
-
-  return <span className="text-green-600">{formatDuration(seconds)} (live)</span>;
 }

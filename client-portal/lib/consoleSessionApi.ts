@@ -117,3 +117,11 @@ export async function fetchConsoleSessions(params?: {
   );
   return res.data;
 }
+
+export async function bulkDeleteConsoleSessions(ids: string[]): Promise<{ deleted: number }> {
+  const res = await apiRequest<ApiResponse<{ deleted: number }>>(
+    '/api/v1/external-vms/sessions/bulk',
+    { method: 'DELETE', body: JSON.stringify({ ids }) }
+  );
+  return res.data;
+}

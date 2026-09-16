@@ -397,6 +397,7 @@ router.post('/api/v1/external-vms/sessions/start', authMiddleware, verifyMiddlew
 router.post('/api/v1/external-vms/sessions/:sessionId/heartbeat', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/external-vms/sessions/:sessionId/end', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/external-vms/sessions', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.delete('/api/v1/external-vms/sessions/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
 router.get('/api/v1/external-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/external-vms/:id/console', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
@@ -779,6 +780,8 @@ router.use('/api/v1/tenant-vms', requireTenantBearer, tenantVmsProxy);
 // Must be registered BEFORE the requireTenantBearer catch-all below.
 // Uses coreApiProxy directly (not tenantExternalVmsProxy) to avoid double path prefix.
 router.post('/api/v1/tenant-external-vms/sessions/end-by-token', coreApiProxy);
+// Bulk delete sessions — must also be before the requireTenantBearer router.use catch-all.
+router.delete('/api/v1/tenant-external-vms/sessions/bulk', requireTenantBearer, coreApiProxy);
 router.use('/api/v1/tenant-external-vms', requireTenantBearer, tenantExternalVmsProxy);
 router.use('/api/v1/tenant-vm-catalog', requireTenantBearer, tenantVmCatalogProxy);
 router.use('/api/v1/tenant-dedicated-servers', requireTenantBearer, tenantDedicatedServersProxy);
