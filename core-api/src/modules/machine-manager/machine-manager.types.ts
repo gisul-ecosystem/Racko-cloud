@@ -33,9 +33,10 @@ export interface MachineResponse {
   agentVersion?: string;
   rackoAppVersion?: string;
   lastReset?: {
-    success: boolean;
+    status: 'pending' | 'success' | 'failed';
+    success?: boolean;
     error?: string;
-    completedAt: string;
+    completedAt?: string;
   } | null;
   createdAt: string;
   updatedAt: string;
