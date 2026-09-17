@@ -18,6 +18,7 @@ import {
 import { getTenantDefaultDashboardPath } from '../lib/tenantPortalRoutes';
 import { tenantLogin as apiTenantLogin, tenantAccessCheck } from '../lib/tenantPortalApi';
 import { ApiError } from '../lib/apiClient';
+import { broadcastConsoleLogout } from '../lib/consoleLogoutSync';
 import type { TenantPortalUser } from '../types/tenantPortal';
 
 interface TenantAuthState {
@@ -117,6 +118,7 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const logout = useCallback(() => {
+    broadcastConsoleLogout('tenant');
     clearTenantAccessToken();
     setState({ tenantUser: null, isLoading: false, isAuthenticated: false });
     router.replace('/console/login');

@@ -16,6 +16,7 @@ async function getTenantSession(
     clientUrl: session.clientUrl,
     connectionId: session.connectionId,
     protocol: (session.protocol as ConsoleProtocol) || protocol,
+    expiresInSec: session.expiresInSec,
   };
 }
 

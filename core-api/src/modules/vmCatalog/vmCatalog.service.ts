@@ -114,6 +114,7 @@ export interface CatalogVmConsoleSession {
   protocol: 'rdp' | 'ssh';
   clientUrl: string;
   connectionId: string;
+  expiresInSec: number;
 }
 
 const PENDING_STATUSES: VmCatalogStatus[] = [
@@ -1549,6 +1550,7 @@ class VmCatalogService {
       protocol,
       clientUrl: session.clientUrl,
       connectionId: session.connectionId,
+      expiresInSec: session.expiresInSec,
     };
   }
 
@@ -3303,6 +3305,7 @@ class VmCatalogService {
       protocol,
       clientUrl: session.clientUrl,
       connectionId: session.connectionId,
+      expiresInSec: session.expiresInSec,
     };
   }
 

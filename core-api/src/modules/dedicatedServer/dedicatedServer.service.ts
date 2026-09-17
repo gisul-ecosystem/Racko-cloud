@@ -505,6 +505,7 @@ class DedicatedServerService {
       protocol,
       clientUrl: session.clientUrl,
       connectionId: session.connectionId,
+      expiresInSec: session.expiresInSec,
     };
   }
 
@@ -867,6 +868,7 @@ class DedicatedServerService {
       protocol,
       clientUrl: session.clientUrl,
       connectionId: session.connectionId,
+      expiresInSec: session.expiresInSec,
     };
   }
 }

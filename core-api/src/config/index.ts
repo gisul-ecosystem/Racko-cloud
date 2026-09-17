@@ -226,6 +226,8 @@ const envSchema = z.object({
   GUACAMOLE_PUBLIC_URL: z.string().url('GUACAMOLE_PUBLIC_URL must be a valid URL'),
   GUACAMOLE_USERNAME: z.string().min(1, 'GUACAMOLE_USERNAME is required'),
   GUACAMOLE_PASSWORD: z.string().min(1, 'GUACAMOLE_PASSWORD is required'),
+  /** Must match Guacamole's api-session-timeout (seconds). */
+  GUACAMOLE_SESSION_TTL_SECONDS: z.coerce.number().int().min(300).default(3600),
 
   // Razorpay (wallet top-up)
   RAZORPAY_KEY_ID: z.string().optional().default(''),

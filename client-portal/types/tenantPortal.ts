@@ -236,6 +236,7 @@ export interface TenantVmConsoleResult {
   protocol: 'rdp' | 'ssh' | 'vnc' | string;
   clientUrl: string;
   connectionId: string;
+  expiresInSec?: number;
 }
 
 export interface TenantVmOperationResult {

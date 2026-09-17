@@ -3434,7 +3434,12 @@ export class VMService {
     req: Request,
     protocolOverride?: GuacamoleProtocol,
     dimensions?: { width?: number; height?: number }
-  ): Promise<{ protocol: GuacamoleProtocol; clientUrl: string; connectionId: string }> {
+  ): Promise<{
+    protocol: GuacamoleProtocol;
+    clientUrl: string;
+    connectionId: string;
+    expiresInSec: number;
+  }> {
     try {
       return await this.openConsoleInternal(vmId, adminId, req, protocolOverride, dimensions);
     } catch (err) {
@@ -3453,7 +3458,12 @@ export class VMService {
     req: Request,
     protocolOverride?: GuacamoleProtocol,
     dimensions?: { width?: number; height?: number }
-  ): Promise<{ protocol: GuacamoleProtocol; clientUrl: string; connectionId: string }> {
+  ): Promise<{
+    protocol: GuacamoleProtocol;
+    clientUrl: string;
+    connectionId: string;
+    expiresInSec: number;
+  }> {
     const authReq = req as AuthenticatedRequest;
 
     const vm = await VM.findById(vmId);
@@ -3574,6 +3584,7 @@ export class VMService {
       protocol: session.protocol,
       clientUrl: session.clientUrl,
       connectionId: session.connectionId,
+      expiresInSec: session.expiresInSec,
     };
   }
 

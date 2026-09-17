@@ -794,6 +794,7 @@ export interface CatalogVmConsoleSession {
   protocol: 'rdp' | 'ssh';
   clientUrl: string;
   connectionId: string;
+  expiresInSec?: number;
 }
 
 export async function getCatalogVmConsole(
