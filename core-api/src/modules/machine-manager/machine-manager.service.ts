@@ -51,7 +51,7 @@ setInterval(() => {
 class MachineManagerService {
   // ─── Mappers ───────────────────────────────────────────────────────────────
 
-  private toMachineResponse(doc: IMachine, lastReset?: { status: string; success?: boolean; error?: string; completedAt?: string } | null): MachineResponse {
+  private toMachineResponse(doc: IMachine, lastReset?: { status: 'pending' | 'success' | 'failed'; success?: boolean; error?: string; completedAt?: string } | null): MachineResponse {
     return {
       _id: doc._id.toString(),
       name: doc.name,
@@ -141,12 +141,12 @@ class MachineManagerService {
     }).sort({ completedAt: -1, createdAt: -1 }).lean();
 
     // Build machineId -> latest result map (already sorted desc so first wins)
-    const resetByMachineId = new Map<string, { status: string; success?: boolean; error?: string; completedAt?: string }>();
+    const resetByMachineId = new Map<string, { status: 'pending' | 'success' | 'failed'; success?: boolean; error?: string; completedAt?: string }>();
     for (const r of resetResults) {
       const key = r.machineId.toString();
       if (!resetByMachineId.has(key)) {
         resetByMachineId.set(key, {
-          status: r.status,
+          status: r.status as 'pending' | 'success' | 'failed',
           success: r.success,
           error: r.error,
           completedAt: r.completedAt?.toISOString(),
@@ -1334,7 +1334,7 @@ class MachineManagerService {
     return results.map(r => ({
       machineId:   r.machineId.toString(),
       machineName: r.machineName,
-      success:     r.success,
+      success:     r.success ?? false,
       error:       r.error,
     }));
   }
