@@ -646,35 +646,33 @@ export default function MyMachinesPage() {
   }, []);
 
   // Hydrate resetById from DB on every machines refresh — same pattern as jobs.
-  // Active SSE states (pending/resetting) take priority over the DB snapshot.
+  // DB snapshot only seeds entries that have NO existing in-memory state.
+  // If a machine already has any state in resetById (from SSE or user action),
+  // the in-memory state always wins — prevents DB from overwriting active resets.
   useEffect(() => {
     if (!machines.length) return;
     setResetById((prev) => {
-      const next: typeof prev = {};
-      // Seed from DB (lastReset comes from the server — pending/success/failed)
+      const additions: typeof prev = {};
       for (const m of machines) {
-        if (m.lastReset) {
+        // Only seed from DB if this machine has no in-memory state at all
+        if (m.lastReset && !prev[m._id]) {
           const phase = m.lastReset.status === 'pending'
             ? 'resetting'
             : m.lastReset.status === 'success'
               ? 'success'
               : 'failed';
-          next[m._id] = {
+          additions[m._id] = {
             phase,
             error: m.lastReset.error,
-            clearedAt: phase === 'success' && m.lastReset.completedAt
-              ? new Date(m.lastReset.completedAt).getTime()
-              : undefined,
+            // Use Date.now() (local time) as clearedAt so the 8s auto-clear
+            // starts from when the UI first sees it, not from the server timestamp.
+            // If server completedAt is >8s old it would otherwise clear immediately.
+            clearedAt: phase === 'success' ? Date.now() : undefined,
           };
         }
       }
-      // Active SSE states take priority — don't overwrite in-progress resets
-      for (const [id, state] of Object.entries(prev)) {
-        if (state.phase === 'pending' || state.phase === 'resetting') {
-          next[id] = state;
-        }
-      }
-      return next;
+      // Merge — existing in-memory states are never touched
+      return Object.keys(additions).length > 0 ? { ...additions, ...prev } : prev;
     });
   }, [machines]);
 
@@ -831,7 +829,8 @@ export default function MyMachinesPage() {
       }
 
       setSelectedIds(new Set());
-      setTimeout(() => { refetch(); void loadJobs(); }, 3000);
+      // Do NOT auto-refetch here — the 3s timeout was causing useEffect([machines])
+      // to fire mid-reset and overwrite active SSE states with the DB snapshot.
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to initiate reset.');
       // Clear the pending states on error
