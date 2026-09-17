@@ -1331,7 +1331,12 @@ class MachineManagerService {
     error?: string;
   }>> {
     const { ResetResultModel } = await import('../../models/resetResult.model');
-    const results = await ResetResultModel.find({ sessionId }).lean();
+    // Only return terminal (success/failed) records — pending records must never
+    // be sent as reset_complete events since they have no outcome yet
+    const results = await ResetResultModel.find({
+      sessionId,
+      status: { $in: ['success', 'failed'] },
+    }).lean();
     return results.map(r => ({
       machineId:   r.machineId.toString(),
       machineName: r.machineName,
