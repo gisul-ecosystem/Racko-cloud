@@ -120,6 +120,8 @@ export interface GcpRequest {
   customer_email?: string;
   projectName?: string;
   project_name?: string;
+  projectId?: string;
+  project_id?: string;
   accountCount?: number;
   account_count?: number;
   region?: string;
@@ -212,6 +214,10 @@ export async function getRequest(id: string): Promise<GcpRequest> {
 
 export async function startProvision(requestId: string) {
   return gcpRequest(`/provision/request/${requestId}/start`, { method: 'POST' });
+}
+
+export async function retryProvision(requestId: string) {
+  return gcpRequest(`/provision/request/${requestId}/retry`, { method: 'POST' });
 }
 
 export async function getProvisionStatus(requestId: string): Promise<GcpProvisionStatus> {

@@ -13,6 +13,25 @@ export interface CreateSoftwareCatalogDto {
   chocoName?: string;
   fileUrl?: string;
   fileName?: string;
+  zipInstallScript?: string;
+  postInstallScript?: string;
+  installArgs?: string;
+}
+
+export interface UpdateSoftwareCatalogDto {
+  name?: string;
+  version?: string;
+  iconUrl?: string;
+  supportedOS?: MachineOS[];
+  installMethod?: InstallMethod;
+  wingetId?: string;
+  aptName?: string;
+  brewName?: string;
+  chocoName?: string;
+  fileUrl?: string;
+  fileName?: string;
+  zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
 }
 
@@ -29,6 +48,8 @@ export interface SoftwareCatalogResponse {
   chocoName?: string;
   fileUrl?: string;
   fileName?: string;
+  zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
   uploadedBy: string;
   createdAt: string;

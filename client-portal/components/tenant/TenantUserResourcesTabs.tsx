@@ -1,18 +1,18 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ChevronRight, RefreshCw, Server } from 'lucide-react';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
-import { useTenantServices } from '@/context/TenantServicesContext';
 import { ApiError } from '@/lib/apiClient';
 import { hexToRgba, tenantAccentSurface } from '@/lib/tenantAccentStyles';
-import { tenantConsole } from '@/lib/tenantAdminRoutes';
+import { tenantVps } from '@/lib/tenantAdminRoutes';
 import { fetchTenantExternalVMs } from '@/lib/tenantExternalVmApi';
-import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
+import { CONSOLE_DISCONNECTED_MSG, openGuacamoleConsolePage } from '@/lib/consoleLaunch';
 import { fetchTenantVms } from '@/lib/tenantVmApi';
 import type { TenantVmSummary } from '@/types/tenantPortal';
 import type { IExternalVM } from '@/lib/externalVmApi';
@@ -28,8 +28,7 @@ function ProtocolBadge({ protocol }: { protocol: string }) {
 
 export function TenantUserResourcesTabs() {
   const { accentColor } = useTenantBranding();
-  const { hasActiveService } = useTenantServices();
-  const hasElastic = hasActiveService('elastic-servers');
+  const router = useRouter();
 
   const [vms, setVms] = useState<TenantVmSummary[]>([]);
   const [servers, setServers] = useState<IExternalVM[]>([]);
@@ -38,22 +37,57 @@ export function TenantUserResourcesTabs() {
 
   const totalCount = vms.length + servers.length;
 
+  // Listen for CONSOLE_DISCONNECTED_MSG from the console tab.
+  // When the user clicks Disconnect in the console, the console tab sends this
+  // message to us (the opener / parent tab). We navigate here — where the
+  // tenant session is fully loaded — rather than letting the console tab
+  // navigate blindly to a URL without a tenant session token.
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      // Only accept messages from the same origin
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as { type?: string; href?: string };
+      if (data?.type !== CONSOLE_DISCONNECTED_MSG) return;
+      const target = data.href ?? tenantVps.vms;
+      router.push(target);
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [router]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [vmResult, serverResult] = await Promise.all([
+      // Inventory grants from super-admin Server Assign. The Elastic Servers
+      // tenant product must not gate this list — that product is only for
+      // tenant-side import, not for assigned inventory visibility.
+      const [vmResult, serverResult] = await Promise.allSettled([
         fetchTenantVms(),
-        hasElastic ? fetchTenantExternalVMs() : Promise.resolve([]),
+        fetchTenantExternalVMs(),
       ]);
-      setVms(vmResult.vms);
-      setServers(serverResult);
+      if (vmResult.status === 'fulfilled') {
+        setVms(vmResult.value.vms);
+      } else {
+        setVms([]);
+      }
+      if (serverResult.status === 'fulfilled') {
+        setServers(serverResult.value);
+      } else {
+        setServers([]);
+      }
+      const vmErr = vmResult.status === 'rejected' ? vmResult.reason : null;
+      const srvErr = serverResult.status === 'rejected' ? serverResult.reason : null;
+      if (vmErr && srvErr) {
+        const err = vmErr instanceof ApiError ? vmErr : srvErr;
+        setError(err instanceof ApiError ? err.message : 'Failed to load resources.');
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load resources.');
     } finally {
       setLoading(false);
     }
-  }, [hasElastic]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -67,7 +101,7 @@ export function TenantUserResourcesTabs() {
         <div>
           <h1 className="text-lg font-semibold text-gray-900">My VMs</h1>
           <p className="text-sm text-gray-500">
-            Assigned virtual machines{hasElastic ? ' and imported servers' : ''}
+            Assigned virtual machines and servers
           </p>
         </div>
         <button
@@ -138,10 +172,18 @@ export function TenantUserResourcesTabs() {
                   ))}
                   {servers.map((s) => {
                     const blocked = Boolean(s.myAccess && !s.myAccess.allowedNow);
+                    const overrideActive = Boolean(s.myAccess?.overrideActive);
                     return (
                     <tr key={`srv-${s._id}`} className="border-b border-gray-50">
-                      <td className="px-4 py-3 font-medium">{s.name}</td>
-                      <td className="px-4 py-3 text-xs text-gray-500">Imported Server</td>
+                      <td className="px-4 py-3 font-medium">
+                        <div>{s.name}</div>
+                        {overrideActive ? (
+                          <p className="mt-0.5 text-[11px] font-medium text-emerald-700">
+                            Override active
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-500">Assigned Server</td>
                       <td className="px-4 py-3">
                         <ProtocolBadge protocol={s.protocol} />
                       </td>
@@ -152,7 +194,7 @@ export function TenantUserResourcesTabs() {
                           disabled={blocked}
                           onClick={() => {
                             if (blocked) return;
-                            openTenantUrlWithSession(`${tenantConsole.elastic}/${s._id}/console`);
+                            openGuacamoleConsolePage(tenantVps.assignedServerConsole(s._id));
                           }}
                           className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline disabled:cursor-not-allowed disabled:opacity-40 disabled:no-underline"
                           style={blocked ? undefined : accentLinkStyle}

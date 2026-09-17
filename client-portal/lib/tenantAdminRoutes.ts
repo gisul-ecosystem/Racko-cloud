@@ -11,6 +11,8 @@ export const tenantVps = {
     protocol
       ? `${TENANT_VPS}/vms/${id}/console?protocol=${encodeURIComponent(protocol)}`
       : `${TENANT_VPS}/vms/${id}/console`,
+  /** Super-admin Server Assign mirrors — not gated on the Elastic Servers product. */
+  assignedServerConsole: (id: string) => `${TENANT_VPS}/vms/assigned/${id}/console`,
   restricted: `${TENANT_VPS}/vms/restricted`,
   jobs: `${TENANT_VPS}/jobs`,
   job: (id: string) => `${TENANT_VPS}/jobs/${id}`,
@@ -21,6 +23,7 @@ export const tenantVps = {
   assignVms: `${TENANT_VPS}/assign-vms`,
   bulkAssign: `${TENANT_VPS}/assign-vms/bulk`,
   billing: `${TENANT_VPS}/billing`,
+  developers: `${TENANT_VPS}/developers`,
 } as const;
 
 export const tenantConsole = {
@@ -34,6 +37,7 @@ export const tenantConsole = {
   elasticUsersCreate: `${TENANT_CONSOLE}/elastic-servers/users/create`,
   elasticAssign: `${TENANT_CONSOLE}/elastic-servers/assign-servers`,
   elasticBulkAssign: `${TENANT_CONSOLE}/elastic-servers/assign-servers/bulk`,
+  elasticAnalytics: `${TENANT_CONSOLE}/elastic-servers/analytics`,
   elasticConsole: (id: string) => `${TENANT_CONSOLE}/elastic-servers/${id}/console`,
   machineManager: `${TENANT_CONSOLE}/machine-manager`,
   machineSetup: `${TENANT_CONSOLE}/machine-manager/setup`,
@@ -63,4 +67,8 @@ export const tenantConsole = {
   project: (id: string) => `${TENANT_CONSOLE}/projects/${id}`,
   accessControl: `${TENANT_CONSOLE}/access-control`,
   myVmDashboard: `${TENANT_CONSOLE}/my-vm-dashboard`,
+  supportTickets: `${TENANT_CONSOLE}/support/tickets`,
+  supportNew: `${TENANT_CONSOLE}/support/new`,
+  supportTicket: (id: string) => `${TENANT_CONSOLE}/support/tickets/${id}`,
+  notifications: `${TENANT_CONSOLE}/notifications`,
 } as const;

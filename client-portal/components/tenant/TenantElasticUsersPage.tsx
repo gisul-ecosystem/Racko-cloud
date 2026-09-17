@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { Loader2, Trash2, UserPlus, Users } from 'lucide-react';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
@@ -21,6 +22,7 @@ import { fetchTenantExternalVMAssignCounts } from '@/lib/tenantExternalVmApi';
 import type { TenantUserProfile } from '@/types/tenantPortal';
 
 export function TenantElasticUsersPage() {
+  const pathname = usePathname();
   const { accentColor } = useTenantBranding();
   const { toasts, addToast, dismiss } = useToast();
 
@@ -53,7 +55,7 @@ export function TenantElasticUsersPage() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, pathname]);
 
   useEffect(() => {
     setSelectedIds((prev) => {
@@ -254,6 +256,7 @@ export function TenantElasticUsersPage() {
                       />
                     </th>
                     <th className="px-4 py-3">Email</th>
+                    <th className="px-4 py-3">Username</th>
                     <th className="px-4 py-3">Status</th>
                     <th className="px-4 py-3">Assigned Servers</th>
                     <th className="px-4 py-3">Created</th>
@@ -281,6 +284,13 @@ export function TenantElasticUsersPage() {
                           />
                         </td>
                         <td className="px-4 py-3 font-medium text-gray-900">{user.email}</td>
+                        <td className="px-4 py-3 text-gray-600">
+                          {user.username ? (
+                            <span className="font-mono text-xs">{user.username}</span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3">
                           <span
                             className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -309,6 +319,7 @@ export function TenantElasticUsersPage() {
                               disabled={actionId === user.id || bulkDeleting}
                               onClick={() => void handleToggleActive(user)}
                               className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs disabled:opacity-40"
+                              title={user.isActive ? 'Deactivate this user' : 'Activate this user'}
                             >
                               {actionId === user.id ? (
                                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -323,6 +334,7 @@ export function TenantElasticUsersPage() {
                               disabled={actionId === user.id || bulkDeleting}
                               onClick={() => setDeleteTarget(user)}
                               className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-xs text-red-700 disabled:opacity-40"
+                              title="Delete user and clear server assignments"
                             >
                               <Trash2 className="h-3 w-3" /> Delete
                             </button>

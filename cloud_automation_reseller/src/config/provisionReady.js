@@ -13,7 +13,9 @@ export function isProvisionReady(provider) {
     case 'azure':
       return Boolean(
         process.env.AZURE_SUBSCRIPTION_ID &&
-          process.env.AZURE_RESOURCE_GROUP &&
+          (process.env.AZURE_VNET_RESOURCE_GROUP ||
+            process.env.AZURE_NETWORK_RESOURCE_GROUP ||
+            process.env.AZURE_RESOURCE_GROUP) &&
           process.env.AZURE_VNET_NAME &&
           process.env.AZURE_SUBNET_NAME
       );

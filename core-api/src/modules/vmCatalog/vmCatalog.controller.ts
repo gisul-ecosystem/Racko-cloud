@@ -1,8 +1,15 @@
 import type { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import type { AuthenticatedRequest } from '../../types';
-import { vmCatalogService } from './vmCatalog.service';
-import type { CreateCatalogVmRequestInput } from './vmCatalog.validation';
+import { vmCatalogService, type CatalogVmPowerAction } from './vmCatalog.service';
+import type {
+  CreateCatalogVmRequestInput,
+  RegisterManualAzureCatalogVmInput,
+  AttachManualAzureCatalogVmInput,
+  ListSuperAdminAzurePlacementOptionsInput,
+  ValidateSuperAdminAzureProvisionQuoteInput,
+  CreateSuperAdminAzureCatalogVmInput,
+} from './vmCatalog.validation';
 import type {
   CalculateVmPricingInput,
   ListVmPricingQuery,
@@ -117,6 +124,278 @@ async function createSuperAdminRequest(
   }
 }
 
+async function registerManualAzureCatalogVm(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const body = req.body as RegisterManualAzureCatalogVmInput;
+    const request = await vmCatalogService.registerManualAzureCatalogVm(body, superAdminId);
+    success(res, 'Manual Azure VM registered.', { request }, 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listReadyManualAzureCatalogVms(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const vms = await vmCatalogService.listReadyManualAzureCatalogVms();
+    success(res, 'Ready manual Azure VMs retrieved.', { vms, total: vms.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSuperAdminAzureCatalogVms(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const vms = await vmCatalogService.listSuperAdminAzureCatalogVms();
+    success(res, 'Azure catalog VMs retrieved.', { vms, total: vms.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function powerSuperAdminAzureCatalogVm(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = req.body as { action: CatalogVmPowerAction; instanceId?: string };
+    const result = await vmCatalogService.powerAction(id, body.action, body.instanceId);
+    success(res, powerActionSuccessMessage(body.action), result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function attachManualAzureCatalogVm(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const reviewerId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = req.body as AttachManualAzureCatalogVmInput;
+    const request = await vmCatalogService.attachManualAzureCatalogVm(id, reviewerId, body);
+    success(res, 'Manual Azure VM attached to customer.', { request });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getAzureProvisionReady(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const status = await vmCatalogService.getAzureProvisionReadyStatus();
+    success(res, 'Azure provision readiness retrieved.', status);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSuperAdminAzureLocations(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = _req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const rows = await vmCatalogService.listSuperAdminAzureLocations(superAdminId);
+    success(res, 'Azure subscription locations retrieved.', { rows, total: rows.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function searchSuperAdminAzureMarketplaceImages(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const query = typeof req.query.q === 'string' ? req.query.q : '';
+    const osTypeRaw = typeof req.query.osType === 'string' ? req.query.osType : undefined;
+    const osTypeNormalized = osTypeRaw?.toLowerCase();
+    const osType =
+      osTypeNormalized === 'linux' || osTypeNormalized === 'windows' || osTypeNormalized === 'all'
+        ? (osTypeNormalized as 'linux' | 'windows' | 'all')
+        : ('all' as const);
+    const skip = req.query.skip ? Number(req.query.skip) : 0;
+    const take = req.query.take ? Number(req.query.take) : req.query.limit ? Number(req.query.limit) : 24;
+    const result = await vmCatalogService.searchSuperAdminAzureMarketplaceImages(superAdminId, {
+      query,
+      osType,
+      skip,
+      take,
+    });
+    success(res, 'Azure marketplace images retrieved.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSuperAdminAzureImageSkuPlans(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const region = typeof req.query.region === 'string' ? req.query.region.trim() : '';
+    const publisher = typeof req.query.publisher === 'string' ? req.query.publisher.trim() : '';
+    const offer = typeof req.query.offer === 'string' ? req.query.offer.trim() : '';
+    if (!region || !publisher || !offer) {
+      res.status(400).json({
+        success: false,
+        message: 'region, publisher, and offer query parameters are required.',
+      });
+      return;
+    }
+    const productDisplayName =
+      typeof req.query.productDisplayName === 'string'
+        ? req.query.productDisplayName
+        : typeof req.query.displayName === 'string'
+          ? req.query.displayName
+          : undefined;
+    const rows = await vmCatalogService.listSuperAdminAzureImageSkuPlans(superAdminId, {
+      region,
+      publisher,
+      offer,
+      productDisplayName,
+    });
+    success(res, 'Azure image SKU plans retrieved.', { rows, total: rows.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function validateSuperAdminAzureVmImage(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const result = await vmCatalogService.validateSuperAdminAzureVmImage(superAdminId, req.body);
+    success(res, 'Azure VM image validated.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSuperAdminAzureCustomImages(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const query = typeof req.query.q === 'string' ? req.query.q : '';
+    const resourceGroup =
+      typeof req.query.resourceGroup === 'string' ? req.query.resourceGroup : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : 50;
+    const rows = await vmCatalogService.listSuperAdminAzureCustomImages(
+      superAdminId,
+      query,
+      limit,
+      resourceGroup
+    );
+    success(res, 'Azure custom templates retrieved.', { rows, total: rows.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function validateSuperAdminAzureCustomImage(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const result = await vmCatalogService.validateSuperAdminAzureCustomImage(
+      superAdminId,
+      req.body
+    );
+    success(res, 'Azure custom template validated.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSuperAdminAzurePlacementOptions(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const body = req.body as ListSuperAdminAzurePlacementOptionsInput;
+    const result = await vmCatalogService.listSuperAdminAzurePlacementOptions(body, superAdminId);
+    success(res, 'Azure placement options retrieved.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function validateSuperAdminAzureProvisionQuote(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const body = req.body as ValidateSuperAdminAzureProvisionQuoteInput;
+    const result = await vmCatalogService.validateSuperAdminAzureProvisionQuote(body, superAdminId);
+    success(res, result.valid ? 'Azure provision quote is ready.' : 'Azure provision quote failed.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function createSuperAdminAzureCatalogVm(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const body = req.body as CreateSuperAdminAzureCatalogVmInput;
+    const request = await vmCatalogService.createSuperAdminAzureCatalogVm(body, superAdminId);
+    success(res, 'Azure VM provisioning started.', { request }, 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function listRequesters(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const requesters = await vmCatalogService.listRequesterGroups();
@@ -131,9 +410,11 @@ async function listRequests(req: Request, res: Response, next: NextFunction): Pr
       const status =
       (req.query['status'] as VmCatalogStatus | 'all' | undefined) ?? 'provisioning';
     const adminIdRaw = req.query['adminId'] as string | undefined;
+    const tenantIdRaw = req.query['tenantId'] as string | undefined;
     const requests = await vmCatalogService.listRequestsForSuperAdmin({
       status,
       adminId: adminIdRaw ? new mongoose.Types.ObjectId(adminIdRaw) : undefined,
+      tenantId: tenantIdRaw ? new mongoose.Types.ObjectId(tenantIdRaw) : undefined,
     });
     success(res, 'Catalog VM requests retrieved.', { requests, total: requests.length });
   } catch (err) {
@@ -164,6 +445,20 @@ async function attach(req: Request, res: Response, next: NextFunction): Promise<
     const reviewerId = new mongoose.Types.ObjectId(authReq.user.userId);
     const request = await vmCatalogService.attachRequest(id, reviewerId);
     success(res, 'VM attached and visible to the requesting admin.', { request });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function retryPostReady(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const reviewerId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const request = await vmCatalogService.retryPostReadySetup(id, reviewerId);
+    success(res, 'Post-ready install retried. Agent push and software installation resumed.', {
+      request,
+    });
   } catch (err) {
     next(err);
   }
@@ -217,13 +512,77 @@ async function powerAction(req: Request, res: Response, next: NextFunction): Pro
   try {
     const id = new mongoose.Types.ObjectId(req.params['id'] as string);
     const body = (req.body || {}) as {
-      action: 'virtualizor' | 'start' | 'stop' | 'reboot';
+      action: 'virtualizor' | 'start' | 'stop' | 'reboot' | 'terminate';
       instanceId?: string;
     };
     const result = await vmCatalogService.powerAction(id, body.action, body.instanceId);
-    success(res, `Webyne ${body.action} completed.`, result);
+    success(res, powerActionSuccessMessage(body.action), result);
   } catch (err) {
     next(err);
+  }
+}
+
+async function powerOwnedVm(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = (req.body || {}) as {
+      action: 'virtualizor' | 'start' | 'stop' | 'reboot' | 'terminate';
+      instanceId?: string;
+    };
+    const result = await vmCatalogService.powerActionForAdmin(
+      id,
+      adminId,
+      body.action,
+      body.instanceId
+    );
+    success(res, powerActionSuccessMessage(body.action), result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function extendExpiry(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = (req.body || {}) as { expiresAt: string | Date };
+    const vm = await vmCatalogService.extendCatalogVmExpiry(id, new Date(body.expiresAt));
+    success(res, 'Provider term extended.', { vm });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteCatalogVm(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = (req.body || {}) as { confirmTerminatedAtProvider?: boolean };
+    const result = await vmCatalogService.deleteCatalogVmForSuperAdmin(id, {
+      confirmTerminatedAtProvider: Boolean(body.confirmTerminatedAtProvider),
+    });
+    success(res, `${result.planName} removed from Racko.`, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+function powerActionSuccessMessage(
+  action: 'virtualizor' | 'start' | 'stop' | 'reboot' | 'terminate'
+): string {
+  switch (action) {
+    case 'virtualizor':
+      return 'Virtualization control opened.';
+    case 'start':
+      return 'VM start requested.';
+    case 'stop':
+      return 'VM stop requested.';
+    case 'reboot':
+      return 'VM restart requested.';
+    case 'terminate':
+      return 'VM terminated.';
+    default:
+      return 'Power action completed.';
   }
 }
 
@@ -340,11 +699,30 @@ export const vmCatalogController = {
   approve,
   fetchDetails,
   attach,
+  retryPostReady,
   changeTemplate,
   powerAction,
+  powerOwnedVm,
+  extendExpiry,
+  deleteCatalogVm,
   reject,
   calculatePricing,
   listPricing,
   listSoftwareOptions,
   createSuperAdminRequest,
+  registerManualAzureCatalogVm,
+  listReadyManualAzureCatalogVms,
+  listSuperAdminAzureCatalogVms,
+  powerSuperAdminAzureCatalogVm,
+  attachManualAzureCatalogVm,
+  getAzureProvisionReady,
+  listSuperAdminAzureLocations,
+  searchSuperAdminAzureMarketplaceImages,
+  listSuperAdminAzureImageSkuPlans,
+  validateSuperAdminAzureVmImage,
+  listSuperAdminAzureCustomImages,
+  validateSuperAdminAzureCustomImage,
+  listSuperAdminAzurePlacementOptions,
+  validateSuperAdminAzureProvisionQuote,
+  createSuperAdminAzureCatalogVm,
 };

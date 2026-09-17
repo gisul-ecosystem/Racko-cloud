@@ -1,10 +1,10 @@
 'use client';
 
-import { LayoutGrid } from 'lucide-react';
+import { LayoutGrid, Plus } from 'lucide-react';
 import { RequireTenantService } from '@/components/tenant/RequireTenantService';
 import { TenantServiceShell } from '@/components/tenant/TenantServiceShell';
-import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import type { ServiceNavLink } from '@/components/console/ServiceNavSidebar';
+import { tenantConsole } from '@/lib/tenantAdminRoutes';
 
 const links: ServiceNavLink[] = [
   {
@@ -12,6 +12,11 @@ const links: ServiceNavLink[] = [
     label: 'Overview',
     icon: <LayoutGrid className="h-4 w-4" />,
     exact: true,
+  },
+  {
+    href: `${tenantConsole.gcp}/requests/new`,
+    label: 'Create request',
+    icon: <Plus className="h-4 w-4" />,
   },
 ];
 

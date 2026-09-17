@@ -34,8 +34,9 @@ export function getTenantServiceManageHref(
   const wl = `/super-admin-console/white-labelling/tenants/${encodeURIComponent(tenantId)}`;
   const ownerId = encodeURIComponent(tenantCloudOwnerId(tenantId));
   switch (serviceKey) {
-    case 'vm-management':
     case 'create-vm':
+      return `/super-admin-console/webyne-vm-requests/${encodeURIComponent(tenantId)}?scope=tenant`;
+    case 'vm-management':
     case 'dedicated-server':
     case 'elastic-servers':
     case 'cloud-labs':

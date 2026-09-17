@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Loader2, Pencil, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
@@ -10,9 +10,13 @@ import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   addTenantProjectServices,
   archiveTenantProject,
+  unarchiveTenantProject,
   fetchTenantEligibleProjectServices,
   fetchTenantProject,
+  fetchTenantProjectClientNames,
+  fetchTenantProjects,
   fetchTenantServiceCostReport,
+  fetchTenantProjectElasticResources,
   PROJECT_SERVICE_LABELS,
   removeTenantProjectService,
   updateTenantProject,
@@ -20,6 +24,12 @@ import {
   type ProjectReportByServiceRow,
 } from '@/lib/tenantProjectsApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
+import { useTenantRbac } from '@/context/TenantRbacContext';
+import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
+import { ProjectDetailNav } from '@/components/console/ProjectDetailNav';
+import { ProjectTicketList } from '@/components/console/ProjectTicketList';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { ProjectElasticResourcesModal } from '@/components/console/ProjectElasticResourcesModal';
 import {
   getServiceLaunchHref,
   getServiceTransactionsHref,
@@ -30,6 +40,23 @@ function formatInr(n: number): string {
   return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
+function daysUntilEndDate(endDateIso: string | null | undefined): number | null {
+  if (!endDateIso) return null;
+  const end = new Date(endDateIso);
+  if (Number.isNaN(end.getTime())) return null;
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const endUtc = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  return Math.round((endUtc - todayUtc) / 86_400_000);
+}
+
+function formatProjectDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 function ServiceCard({
   serviceKey,
   projectId,
@@ -38,6 +65,7 @@ function ServiceCard({
   archived,
   saving,
   onRemove,
+  onViewResources,
 }: {
   serviceKey: AdminServiceKey;
   projectId: string;
@@ -46,6 +74,7 @@ function ServiceCard({
   archived: boolean;
   saving: boolean;
   onRemove: (key: AdminServiceKey) => void;
+  onViewResources?: () => void;
 }) {
   const meta = PROJECT_SERVICE_META[serviceKey];
   const totalCost = costRow?.totalDebit ?? 0;
@@ -119,6 +148,14 @@ function ServiceCard({
               <ArrowRight className="h-3.5 w-3.5" />
             </Link>
           )}
+          {serviceKey === 'create-vm' && resourceCount > 0 && (
+            <Link
+              href={`${tenantConsole.createVm}/my-vms?projectId=${projectId}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
+            >
+              View Catalog VMs
+            </Link>
+          )}
           {transactionsHref ? (
             <Link
               href={transactionsHref}
@@ -127,6 +164,15 @@ function ServiceCard({
               View transactions
             </Link>
           ) : null}
+          {serviceKey === 'elastic-servers' && resourceCount > 0 && onViewResources && (
+            <button
+              type="button"
+              onClick={onViewResources}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
+            >
+              View resources
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -136,32 +182,45 @@ function ServiceCard({
 export default function TenantProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const id = String(params?.id || '');
+  const { isTenantAdmin } = useTenantRbac();
 
   const [project, setProject] = useState<OrgProject | null>(null);
   const [available, setAvailable] = useState<AdminServiceKey[]>([]);
   const [costRows, setCostRows] = useState<ProjectReportByServiceRow[]>([]);
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
+  const [clientNames, setClientNames] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [clientEmail, setClientEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [pendingService, setPendingService] = useState<AdminServiceKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'archive' | 'restore' | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
+
+  const loadElasticResources = useCallback(
+    () => fetchTenantProjectElasticResources(id),
+    [id]
+  );
 
   const load = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     setError(null);
     try {
-      const [p, services, costs] = await Promise.all([
+      const [p, services, costs, names] = await Promise.all([
         fetchTenantProject(id),
         fetchTenantEligibleProjectServices(),
         fetchTenantServiceCostReport(id),
+        fetchTenantProjectClientNames().catch(() => []),
       ]);
       setProject(p);
       setName(p.name);
@@ -169,8 +228,12 @@ export default function TenantProjectDetailPage() {
       setDescription(p.description || '');
       setStartDate(p.startDate ? p.startDate.slice(0, 10) : '');
       setEndDate(p.endDate ? p.endDate.slice(0, 10) : '');
+      setClientEmail(p.clientEmail || '');
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
       setCostRows(costs);
+      // Always include the current project's clientName so it appears as a selection not create
+      const merged = [...new Set([p.clientName, ...names].filter(Boolean))].sort();
+      setClientNames(merged);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load project.');
     } finally {
@@ -181,6 +244,21 @@ export default function TenantProjectDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (loading || !project || project.status === 'archived') return;
+    if (searchParams.get('edit') !== '1') return;
+    openEditModal();
+    router.replace(`/console/dashboard/projects/${id}`, { scroll: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, project, searchParams, id, router]);
+
+  useEffect(() => {
+    if (loading || !project || project.status === 'archived') return;
+    if (searchParams.get('action') !== 'archive') return;
+    setConfirmAction('archive');
+    router.replace(`/console/dashboard/projects/${id}`, { scroll: false });
+  }, [loading, project, searchParams, id, router]);
 
   const addable = useMemo(() => {
     if (!project) return [];
@@ -205,8 +283,10 @@ export default function TenantProjectDetailPage() {
         description: description.trim() || null,
         startDate: startDate || null,
         endDate: endDate || null,
+        clientEmail: clientEmail.trim() || null,
       });
       setProject(updated);
+      setClientEmail(updated.clientEmail || '');
       setFlash('Project updated.');
       setEditOpen(false);
     } catch (err) {
@@ -214,6 +294,18 @@ export default function TenantProjectDetailPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function openEditModal() {
+    if (!project) return;
+    setName(project.name);
+    setClientName(project.clientName);
+    setDescription(project.description || '');
+    setStartDate(project.startDate ? project.startDate.slice(0, 10) : '');
+    setEndDate(project.endDate ? project.endDate.slice(0, 10) : '');
+    setClientEmail(project.clientEmail || '');
+    setError(null);
+    setEditOpen(true);
   }
 
   async function handleAddService(key: AdminServiceKey) {
@@ -246,19 +338,27 @@ export default function TenantProjectDetailPage() {
     }
   }
 
-  async function handleArchive() {
-    if (!project) return;
-    if (!window.confirm('Archive this project? New resources cannot be added afterward.')) return;
-    setSaving(true);
+  async function handleConfirmAction() {
+    if (!project || !confirmAction) return;
+    setConfirmLoading(true);
     setError(null);
     try {
-      const updated = await archiveTenantProject(project.id);
+      if (confirmAction === 'archive') {
+        const updated = await archiveTenantProject(project.id);
+        setProject(updated);
+        setEditOpen(false);
+        setFlash('Project archived.');
+        setConfirmAction(null);
+        return;
+      }
+      const updated = await unarchiveTenantProject(project.id);
       setProject(updated);
-      setFlash('Project archived.');
+      setFlash('Project restored to active.');
+      setConfirmAction(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to archive project.');
+      setError(err instanceof ApiError ? err.message : 'Action failed.');
     } finally {
-      setSaving(false);
+      setConfirmLoading(false);
     }
   }
 
@@ -286,6 +386,16 @@ export default function TenantProjectDetailPage() {
   }
 
   const archived = project.status === 'archived';
+  const daysRemaining = daysUntilEndDate(project.endDate);
+  const showExpiryBanner =
+    !archived && daysRemaining != null && daysRemaining >= 0 && daysRemaining <= 7;
+  const inGracePeriod =
+    !archived &&
+    Boolean(project.gracePeriodEndsAt) &&
+    new Date(project.gracePeriodEndsAt!).getTime() > Date.now();
+  const supportTab = searchParams.get('tab') === 'support';
+  const projectBasePath = tenantConsole.project(project.id);
+  const transactionsPath = `${projectBasePath}/transactions`;
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-8 pb-10">
@@ -316,15 +426,58 @@ export default function TenantProjectDetailPage() {
             {project.description && (
               <p className="mt-1 text-sm text-gray-500">{project.description}</p>
             )}
+            {(project.startDate || project.endDate) && (
+              <p className="mt-2 text-xs text-gray-500">
+                {formatProjectDate(project.startDate)} → {formatProjectDate(project.endDate)}
+              </p>
+            )}
+            {project.clientEmail && (
+              <p className="mt-2 text-xs text-gray-500">
+                Client email:{' '}
+                <span className="text-gray-700">{project.clientEmail}</span>
+              </p>
+            )}
+            {project.supportAgent && (
+              <p className="mt-2 text-xs text-gray-500">
+                Support agent:{' '}
+                <span className="text-gray-700">
+                  {project.supportAgent.name} ({project.supportAgent.email})
+                </span>
+              </p>
+            )}
+            {archived && project.archivedReason && (
+              <p className="mt-1 text-xs text-gray-500">
+                Archived{' '}
+                {project.archivedReason === 'end_date_reached'
+                  ? 'automatically when the end date was reached'
+                  : 'manually'}
+                {project.archivedAt ? ` · ${formatProjectDate(project.archivedAt)}` : ''}
+              </p>
+            )}
+            {archived && (
+              <p className="mt-2 text-xs text-gray-400">
+                Permanent delete is available to platform Super Admin only.
+              </p>
+            )}
           </div>
-          {!archived && (
+          {!archived ? (
             <button
               type="button"
-              onClick={() => setEditOpen(true)}
+              onClick={openEditModal}
               className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:border-gray-300 hover:bg-gray-50"
             >
               <Pencil className="h-4 w-4" />
               Edit
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmAction('restore')}
+              disabled={saving || confirmLoading}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#991B1B] disabled:opacity-50"
+            >
+              {(saving || confirmLoading) ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Restore project
             </button>
           )}
         </div>
@@ -341,6 +494,60 @@ export default function TenantProjectDetailPage() {
         </div>
       )}
 
+      {inGracePeriod && !supportTab && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          <p className="font-medium">This project is in its grace period.</p>
+          <p className="mt-1 text-xs text-red-800">
+            Assigned VMs will be released and the project archived on{' '}
+            {formatProjectDate(project.gracePeriodEndsAt)}. Extend the end date now if the client
+            needs more time.
+          </p>
+        </div>
+      )}
+
+      {showExpiryBanner && !inGracePeriod && !supportTab && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-medium">
+            {daysRemaining === 0
+              ? 'This project ends today.'
+              : daysRemaining === 1
+                ? 'This project ends tomorrow.'
+                : `This project ends in ${daysRemaining} days.`}
+          </p>
+          <p className="mt-1 text-xs text-amber-800">
+            Extend the end date in Edit if the engagement continues. The support agent and client
+            email receive a notice 24 hours before expiry.
+          </p>
+        </div>
+      )}
+
+      <ProjectDetailNav basePath={projectBasePath} transactionsPath={transactionsPath} />
+
+      {supportTab ? (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-gray-900">Support Tickets</h3>
+              <p className="text-sm text-gray-500">Tickets raised for this project</p>
+            </div>
+            {!archived && (
+              <Link
+                href={`${tenantConsole.supportNew}?projectId=${encodeURIComponent(project.id)}`}
+                className="inline-flex items-center rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#991B1B]"
+              >
+                + Raise a Ticket
+              </Link>
+            )}
+          </div>
+          <ProjectTicketList
+            projectId={project.id}
+            mode="tenant"
+            isTenantAdmin={isTenantAdmin}
+            ticketHref={(ticketId) => tenantConsole.supportTicket(ticketId)}
+          />
+        </div>
+      ) : (
+        <>
       <section>
         <div className="mb-4 flex items-center justify-between">
           <div>
@@ -376,6 +583,9 @@ export default function TenantProjectDetailPage() {
                 archived={archived}
                 saving={pendingService !== null}
                 onRemove={handleRemoveService}
+                onViewResources={
+                  key === 'elastic-servers' ? () => setResourcesOpen(true) : undefined
+                }
               />
             ))}
           </div>
@@ -426,9 +636,11 @@ export default function TenantProjectDetailPage() {
           </div>
         )}
       </section>
+        </>
+      )}
 
       {/* Edit project modal */}
-      {editOpen && (
+      {editOpen && !archived && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1px]"
           role="dialog"
@@ -470,11 +682,13 @@ export default function TenantProjectDetailPage() {
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-gray-700">Client name</label>
-                    <input
+                    <ClientNameCombobox
                       value={clientName}
-                      onChange={(e) => setClientName(e.target.value)}
+                      onChange={setClientName}
+                      clientNames={clientNames}
                       required
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                      disabled={saving}
+                      showCreate={false}
                     />
                   </div>
                 </div>
@@ -511,13 +725,30 @@ export default function TenantProjectDetailPage() {
                     />
                   </div>
                 </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                    Client email <span className="font-normal text-gray-400">(optional)</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={clientEmail}
+                    onChange={(e) => setClientEmail(e.target.value)}
+                    placeholder="client@example.com"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                  />
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    The client receives a project expiry notice with resource details 24 hours
+                    before the end date.
+                  </p>
+                </div>
               </div>
 
               <div className="flex items-center justify-between border-t border-gray-100 px-6 py-4">
                 <button
                   type="button"
-                  onClick={() => void handleArchive()}
-                  disabled={saving}
+                  onClick={() => setConfirmAction('archive')}
+                  disabled={saving || confirmLoading}
                   className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition hover:border-red-300 hover:text-red-600 disabled:opacity-50"
                 >
                   Archive project
@@ -545,6 +776,38 @@ export default function TenantProjectDetailPage() {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        open={confirmAction === 'archive'}
+        title="Archive this project?"
+        description={`Archive "${project?.name ?? ''}"? It will stay visible but cannot accept new resources.`}
+        confirmLabel="Archive project"
+        confirmVariant="warning"
+        loading={confirmLoading}
+        onConfirm={() => void handleConfirmAction()}
+        onCancel={() => {
+          if (!confirmLoading) setConfirmAction(null);
+        }}
+      />
+
+      <ConfirmModal
+        open={confirmAction === 'restore'}
+        title="Restore this project?"
+        description={`Restore "${project?.name ?? ''}" to active? You can assign new resources again.`}
+        confirmLabel="Restore project"
+        confirmVariant="warning"
+        loading={confirmLoading}
+        onConfirm={() => void handleConfirmAction()}
+        onCancel={() => {
+          if (!confirmLoading) setConfirmAction(null);
+        }}
+      />
+
+      <ProjectElasticResourcesModal
+        open={resourcesOpen}
+        onClose={() => setResourcesOpen(false)}
+        load={loadElasticResources}
+      />
     </div>
   );
 }

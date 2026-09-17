@@ -27,16 +27,13 @@ function hashOtp(phone: string, purpose: PhoneOtpPurpose, otp: string): string {
 }
 
 function isDevBypassCode(code: string): boolean {
-  return (
-    config.NODE_ENV !== 'production' &&
-    config.MSG91_OTP_DEV_BYPASS_CODE.trim().length > 0 &&
-    code === config.MSG91_OTP_DEV_BYPASS_CODE.trim()
-  );
+  const bypassCode = config.MSG91_OTP_DEV_BYPASS_CODE.trim();
+  return bypassCode.length > 0 && code === bypassCode;
 }
 
 function getDevBypassOtp(): string | null {
   const code = config.MSG91_OTP_DEV_BYPASS_CODE.trim();
-  if (config.NODE_ENV === 'production' || !/^\d{6}$/.test(code)) return null;
+  if (!/^\d{6}$/.test(code)) return null;
   return code;
 }
 

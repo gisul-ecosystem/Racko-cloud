@@ -10,6 +10,7 @@ import {
   FlaskConical,
   FolderKanban,
   HardDrive,
+  LifeBuoy,
   Loader2,
   Monitor,
   PlusCircle,
@@ -29,7 +30,7 @@ import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 
 type HubTile = {
-  serviceKey: TenantServiceKey | 'billing' | 'projects' | 'access-control' | 'docs';
+  serviceKey: TenantServiceKey | 'billing' | 'projects' | 'access-control' | 'docs' | 'support';
   name: string;
   href: string;
   description: string;
@@ -133,6 +134,13 @@ const TOOL_TILES: HubTile[] = [
     icon: Shield,
     description: 'Manage roles, operators, and permissions for this workspace',
   },
+  {
+    serviceKey: 'support',
+    name: 'Support',
+    href: tenantConsole.supportTickets,
+    icon: LifeBuoy,
+    description: 'Submit a request, report a bug, or ask for help',
+  },
 ];
 
 function TileGrid({
@@ -194,8 +202,8 @@ export default function TenantConsolePage() {
 
   const filterTile = (tile: HubTile): boolean => {
     if (isServiceHiddenFromUi(tile.serviceKey)) return false;
-    // Docs is always available; topics inside filter to enabled products.
-    if (tile.serviceKey === 'docs') return true;
+    // Docs and Support are always available to authenticated tenant console users.
+    if (tile.serviceKey === 'docs' || tile.serviceKey === 'support') return true;
     if (
       tile.serviceKey !== 'billing' &&
       tile.serviceKey !== 'projects' &&
@@ -250,7 +258,7 @@ export default function TenantConsolePage() {
         <section>
           <h2 className="mb-1 text-lg font-semibold text-gray-900">Tools &amp; workspace</h2>
           <p className="mb-5 text-sm text-gray-500">
-            Billing, projects, documentation, machine manager, and access control.
+            Billing, projects, documentation, support, machine manager, and access control.
           </p>
           <TileGrid tiles={toolTiles} accentColor={accentColor} />
         </section>

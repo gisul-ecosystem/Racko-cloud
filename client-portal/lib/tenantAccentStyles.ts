@@ -1,5 +1,8 @@
 import type { CSSProperties } from 'react';
 
+/** Racko platform brand accent (matches ServiceNavSidebar / console CTAs). */
+export const RACKO_BRAND_ACCENT = '#B91C1C';
+
 /** Convert #RGB or #RRGGBB to rgba(); falls back to neutral gray if invalid. */
 export function hexToRgba(hex: string, alpha: number): string {
   const normalized = hex.replace('#', '').trim();

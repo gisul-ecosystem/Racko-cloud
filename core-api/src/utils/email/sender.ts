@@ -10,6 +10,22 @@ import { buildPasswordResetTemplate } from './templates/passwordReset';
 import { buildStaffInviteTemplate } from './templates/staffInvite';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
 import { buildOrgAdminInviteTemplate } from './templates/orgAdminInvite';
+import { buildProjectExpiryWarningTemplate } from './templates/projectExpiryWarning';
+import { buildProjectExpiryClientWarningTemplate } from './templates/projectExpiryClientWarning';
+import type {
+  ProjectExpiryAgentSummary,
+  ProjectExpiryClientSummary,
+} from '../../modules/projects/projectExpiryResources';
+import { buildProjectExpiryAgentAttachment } from '../../modules/projects/projectExpiryAgentWorkbook';
+import { buildProjectExpiryClientAttachment } from '../../modules/projects/projectExpiryClientWorkbook';
+import {
+  buildProviderExpiryWarningTemplate,
+  type ProviderExpiryResourceRow,
+} from './templates/providerExpiryWarning';
+import {
+  buildCatalogVmExpiryWarningTemplate,
+  type CatalogVmExpiryAudience,
+} from './templates/catalogVmExpiryWarning';
 import type { EmailBrand } from './templates/brandedLayout';
 import {
   resolveTenantEmailBrand,
@@ -53,6 +69,14 @@ function getInlineImagesForHtml(html: string) {
   return getInlineEmailImages().filter((image) => used.has(image.cid));
 }
 
+/** A real file on the message, as opposed to the inline images the layout uses. */
+export interface EmailAttachment {
+  filename: string;
+  /** Base64, because both providers take the payload that way. */
+  content: string;
+  mimeType: string;
+}
+
 interface EmailOptions {
   to: string;
   subject: string;
@@ -60,6 +84,7 @@ interface EmailOptions {
   text: string;
   /** Overrides EMAIL_FROM_NAME (e.g. tenant portal name). */
   fromName?: string;
+  attachments?: EmailAttachment[];
 }
 
 function formatResendError(error: unknown): string {
@@ -89,12 +114,20 @@ async function sendViaResend(options: EmailOptions): Promise<string | null> {
     subject: options.subject,
     html: options.html,
     text: options.text,
-    attachments: getInlineImagesForHtml(options.html).map((image) => ({
-      filename: image.filename,
-      content: image.content,
-      contentId: image.cid,
-      contentType: image.mimeType,
-    })),
+    attachments: [
+      ...getInlineImagesForHtml(options.html).map((image) => ({
+        filename: image.filename,
+        content: image.content,
+        contentId: image.cid,
+        contentType: image.mimeType,
+      })),
+      // No contentId: that is what makes it a download rather than an inline image.
+      ...(options.attachments ?? []).map((file) => ({
+        filename: file.filename,
+        content: file.content,
+        contentType: file.mimeType,
+      })),
+    ],
   });
 
   // Resend returns { data, error } and does not throw for API failures.
@@ -140,6 +173,15 @@ async function sendViaZoho(options: EmailOptions): Promise<string | null> {
         name: image.filename,
         cid: image.cid,
       })),
+      ...(options.attachments?.length
+        ? {
+            attachments: options.attachments.map((file) => ({
+              content: file.content,
+              mime_type: file.mimeType,
+              name: file.filename,
+            })),
+          }
+        : {}),
     }),
   });
 
@@ -162,7 +204,7 @@ async function sendViaZoho(options: EmailOptions): Promise<string | null> {
   }
 }
 
-async function sendEmail(options: EmailOptions): Promise<void> {
+async function sendEmail(options: EmailOptions): Promise<boolean> {
   const provider = config.ZOHO_EMAIL_ENABLED ? 'zoho_zeptomail' : 'resend';
 
   try {
@@ -176,6 +218,7 @@ async function sendEmail(options: EmailOptions): Promise<void> {
       subject: options.subject,
       messageId,
     });
+    return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     logger.error('Failed to send email', {
@@ -185,6 +228,7 @@ async function sendEmail(options: EmailOptions): Promise<void> {
       from: config.EMAIL_FROM_ADDRESS,
       error: message,
     });
+    return false;
   }
 }
 
@@ -328,4 +372,136 @@ export async function sendTenantVerificationEmail(input: {
     verifyUrl,
   });
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
+}
+
+export async function sendProjectExpiryWarningEmail(input: {
+  to: string;
+  projectName: string;
+  clientName: string;
+  endDateLabel: string;
+  daysRemaining: number;
+  graceHours: number;
+  manageUrl: string;
+  archiveUrl?: string;
+  agentSummary?: ProjectExpiryAgentSummary;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const attachment = input.agentSummary
+    ? buildProjectExpiryAgentAttachment(input.clientName, input.agentSummary.resources)
+    : null;
+  const template = buildProjectExpiryWarningTemplate({
+    projectName: input.projectName,
+    clientName: input.clientName,
+    endDateLabel: input.endDateLabel,
+    daysRemaining: input.daysRemaining,
+    graceHours: input.graceHours,
+    manageUrl: input.manageUrl,
+    archiveUrl: input.archiveUrl,
+    agentSummary: input.agentSummary,
+    attachmentFilename: attachment?.filename,
+    brand: input.brand,
+  });
+  await sendEmail({
+    to: input.to,
+    ...template,
+    fromName: input.brand?.name,
+    ...(attachment ? { attachments: [attachment] } : {}),
+  });
+}
+
+export async function sendProjectExpiryClientWarningEmail(input: {
+  to: string;
+  projectName: string;
+  clientName: string;
+  endDateLabel: string;
+  daysRemaining: number;
+  graceHours: number;
+  clientSummary: ProjectExpiryClientSummary;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const attachment = buildProjectExpiryClientAttachment(
+    input.clientName,
+    input.clientSummary.accessRows
+  );
+  const template = buildProjectExpiryClientWarningTemplate({
+    projectName: input.projectName,
+    clientName: input.clientName,
+    endDateLabel: input.endDateLabel,
+    daysRemaining: input.daysRemaining,
+    graceHours: input.graceHours,
+    clientSummary: input.clientSummary,
+    attachmentFilename: attachment?.filename,
+    brand: input.brand,
+  });
+  await sendEmail({
+    to: input.to,
+    ...template,
+    fromName: input.brand?.name,
+    ...(attachment ? { attachments: [attachment] } : {}),
+  });
+}
+
+/**
+ * A single catalog VM whose paid provider term is about to end. Owners get a
+ * heads-up; super admins get the copy that explains renew-or-terminate.
+ */
+export async function sendCatalogVmExpiryWarningEmail(input: {
+  to: string;
+  audience: CatalogVmExpiryAudience;
+  planName: string;
+  providerLabel: string;
+  billingLabel: string;
+  ipAddress: string | null;
+  hostname: string | null;
+  ownerLabel: string | null;
+  expiresAtLabel: string;
+  daysRemaining: number;
+  canTerminateInRacko: boolean;
+  manageUrl: string;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const template = buildCatalogVmExpiryWarningTemplate({
+    audience: input.audience,
+    planName: input.planName,
+    providerLabel: input.providerLabel,
+    billingLabel: input.billingLabel,
+    ipAddress: input.ipAddress,
+    hostname: input.hostname,
+    ownerLabel: input.ownerLabel,
+    expiresAtLabel: input.expiresAtLabel,
+    daysRemaining: input.daysRemaining,
+    canTerminateInRacko: input.canTerminateInRacko,
+    manageUrl: input.manageUrl,
+    brand: input.brand,
+  });
+  await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });
+}
+
+/**
+ * Inventory provider-contract alert: IP addresses and their provider end dates.
+ * Project VM-ending mail is a separate template.
+ */
+export async function sendProviderExpiryWarningEmail(input: {
+  to: string;
+  resources: ProviderExpiryResourceRow[];
+  soonestDays: number;
+  soonestDateLabel: string;
+  inventoryUrl: string;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const template = buildProviderExpiryWarningTemplate({
+    resources: input.resources,
+    soonestDays: input.soonestDays,
+    soonestDateLabel: input.soonestDateLabel,
+    inventoryUrl: input.inventoryUrl,
+    brand: input.brand,
+  });
+  const ok = await sendEmail({
+    to: input.to,
+    ...template,
+    fromName: input.brand?.name,
+  });
+  if (!ok) {
+    throw new Error(`Failed to send provider expiry warning to ${input.to}`);
+  }
 }

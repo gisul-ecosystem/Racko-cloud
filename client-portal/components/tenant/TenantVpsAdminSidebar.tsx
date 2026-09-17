@@ -4,6 +4,8 @@ import {
   Briefcase,
   LayoutDashboard,
   Layers,
+  KeyRound,
+  LifeBuoy,
   Plus,
   Server,
   Shield,
@@ -12,8 +14,9 @@ import {
 } from 'lucide-react';
 import { ServiceNavSidebar, type ServiceNavLink } from '@/components/console/ServiceNavSidebar';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
-import { TENANT_CONSOLE, tenantVps } from '@/lib/tenantAdminRoutes';
+import { TENANT_CONSOLE, tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 
 interface TenantVpsAdminSidebarProps {
   sidebarOpen: boolean;
@@ -26,6 +29,7 @@ export function TenantVpsAdminSidebar({
   onCloseSidebar,
 }: TenantVpsAdminSidebarProps) {
   const { accentColor, portalName } = useTenantBranding();
+  const { tenantUser } = useTenantAuth();
   const { isConsoleStaff, hasPermission } = useTenantRbac();
   const canManageVms = hasPermission('vms.manage', 'vms.assign', 'vms.read');
   const showAdminNav = isConsoleStaff && canManageVms;
@@ -55,6 +59,12 @@ export function TenantVpsAdminSidebar({
           label: 'My VMs',
           icon: <Server className="h-4 w-4" />,
           exact: true,
+        },
+        {
+          href: tenantConsole.supportTickets,
+          label: 'Support',
+          icon: <LifeBuoy className="h-4 w-4" />,
+          isActive: (p) => p.startsWith(`${TENANT_CONSOLE}/support`),
         },
       ];
 
@@ -106,6 +116,13 @@ export function TenantVpsAdminSidebar({
       label: 'Restricted VMs',
       icon: <Shield className="h-4 w-4" />,
     });
+    if (tenantUser?.role === 'tenant_admin') {
+      links.push({
+        href: tenantVps.developers,
+        label: 'API Credentials',
+        icon: <KeyRound className="h-4 w-4" />,
+      });
+    }
   }
 
   return (

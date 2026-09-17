@@ -1,6 +1,6 @@
 import type { Request } from 'express';
 
-export type UserRole = 'super_admin' | 'staff' | 'admin' | 'user';
+export type UserRole = 'super_admin' | 'staff' | 'admin' | 'support_agent' | 'user';
 export type AccountType = 'legacy' | 'b2c' | 'b2b';
 export type OnboardingStatus =
   | 'active'

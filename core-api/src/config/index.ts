@@ -92,6 +92,9 @@ const envSchema = z.object({
   VM_BULK_DELETE_BATCH_SIZE: z.string().regex(/^\d+$/).transform(Number).default('5'),
   VM_TASK_POLL_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('2000'),
   VM_TASK_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
+  /** Default per-credential rate limit for /api/v1/public/* (requests per minute). */
+  PUBLIC_API_RATE_LIMIT_PER_MIN: z.string().regex(/^\d+$/).transform(Number).default('120'),
+
   VM_MAX_BULK_COUNT: z.string().regex(/^\d+$/).transform(Number).default('100'),
   VM_CPU_OVERCOMMIT_RATIO: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).default('4'),
   VM_RAM_OVERCOMMIT_RATIO: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).default('1.5'),
@@ -137,6 +140,27 @@ const envSchema = z.object({
   PLAN_EXPIRY_CHECK_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
   PLAN_EXPIRY_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('7'),
   PLAN_EXPIRY_WARNING_CHECK_INTERVAL_MS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .default('3600000'),
+
+  PROJECT_EXPIRY_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('1'),
+  PROJECT_GRACE_PERIOD_HOURS: z.string().regex(/^\d+$/).transform(Number).default('24'),
+  PROJECT_EXPIRY_CHECK_INTERVAL_MS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .default('3600000'),
+
+  // VM inventory — alert the configured recipients this many days before a
+  // provider contract (providerEndDate) lapses.
+  INVENTORY_PROVIDER_EXPIRY_WARNING_DAYS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .default('2'),
+  INVENTORY_PROVIDER_EXPIRY_CHECK_INTERVAL_MS: z
     .string()
     .regex(/^\d+$/)
     .transform(Number)
@@ -245,8 +269,17 @@ const envSchema = z.object({
     .transform(Number)
     .default('300000'),
 
+  // Catalog VM — warn the owner and super admins this many days before a paid
+  // provider term ends. Manual Webyne VMs cannot be torn down automatically,
+  // so a super admin has to renew or terminate by hand before this date.
+  CATALOG_VM_EXPIRY_WARNING_DAYS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .default('2'),
+
   // SeaweedFS S3-compatible object storage (used for VM activity file tracking + clone replay)
-  SEAWEEDFS_ENDPOINT:   z.string().url('SEAWEEDFS_ENDPOINT must be a valid URL').default('https://storage.gisul.co.in'),
+  SEAWEEDFS_ENDPOINT:   z.string().url('SEAWEEDFS_ENDPOINT must be a valid URL').default('https://s3api.gisul.co.in'),
   SEAWEEDFS_ACCESS_KEY: z.string().min(1, 'SEAWEEDFS_ACCESS_KEY is required'),
   SEAWEEDFS_SECRET_KEY: z.string().min(1, 'SEAWEEDFS_SECRET_KEY is required'),
   SEAWEEDFS_BUCKET:     z.string().min(1, 'SEAWEEDFS_BUCKET is required').default('racko-vm-activity'),

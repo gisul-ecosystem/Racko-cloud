@@ -1,11 +1,14 @@
 import mongoose from 'mongoose';
 import { ProjectModel, type IProject, type ProjectOwnerType, type ProjectStatus } from '../../models/project.model';
 import { OrganizationAccessRequestModel } from '../../models/organizationAccessRequest.model';
-import { User } from '../../models/user.model';
+import { User, type IUser } from '../../models/user.model';
+import { TenantUser } from '../../models/tenantUser.model';
 import { Tenant } from '../../models/tenant.model';
 import { CatalogVmModel } from '../../models/catalogVm.model';
 import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
 import { ExternalVMModel } from '../external-vm/external-vm.model';
+import { ExternalVmUserAssignmentModel } from '../../models/externalVmUserAssignment.model';
+import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
 import { VM } from '../vm/vm.model';
 import { AdminWalletTransaction } from '../../models/adminWalletTransaction.model';
 import { WalletTransaction } from '../../models/walletTransaction.model';
@@ -17,7 +20,10 @@ import { adminServicesService } from '../adminServices/adminServices.service';
 import { tenantServiceConfigService } from '../tenant/tenantServiceConfig.service';
 import { serviceCatalogService } from '../serviceCatalog/serviceCatalog.service';
 import { resolvePlatformOrgOwnerId } from '../platformRbac/platformRbac.service';
+import { assignProjectSupportAgent } from '../support/support.service';
+import { Ticket } from '../support/support.model';
 import {
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   ValidationError,
@@ -27,6 +33,21 @@ import type {
   CreateProjectInput,
   UpdateProjectInput,
 } from './projects.validation';
+
+export interface ProjectSupportAgentPublic {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export interface ProjectSupportTicketRow {
+  id: string;
+  ticketNumber: string;
+  subject: string;
+  status: string;
+  platformAssigneeName: string | null;
+  createdAt: string;
+}
 
 export interface ProjectPublic {
   id: string;
@@ -38,12 +59,21 @@ export interface ProjectPublic {
   year: number;
   sequenceNumber: number;
   clientName: string;
+  clientEmail: string | null;
   description: string | null;
   startDate: string | null;
   endDate: string | null;
+  reminderEmails: string[];
+  autoArchiveEnabled: boolean;
+  gracePeriodEndsAt: string | null;
+  expiryCleanupCompletedAt: string | null;
+  archivedAt: string | null;
+  archivedReason: 'manual' | 'end_date_reached' | null;
   enabledServices: AdminServiceKey[];
   status: ProjectStatus;
   createdBy: string;
+  supportAgentId: string | null;
+  supportAgent: ProjectSupportAgentPublic | null;
   createdAt: string;
   updatedAt: string;
   resourceCounts?: Record<string, number>;
@@ -63,6 +93,211 @@ export interface ProjectReportByServiceRow {
   transactionCount: number;
 }
 
+export interface ProjectElasticResource {
+  id: string;
+  name: string;
+  ipAddress: string;
+  username: string;
+  protocol: string;
+  assignedUsers: Array<{ email: string | null; username: string | null }>;
+}
+
+async function listElasticResourcesForOwner(
+  projectId: mongoose.Types.ObjectId,
+  owner: { tenantId: string } | { adminId: string }
+): Promise<ProjectElasticResource[]> {
+  // Match the project resource count (projectId only). Ownership was already
+  // checked on the Project document before this helper is called.
+  const docs = await ExternalVMModel.find({ projectId })
+    .select('_id name ipAddress username protocol assignedTo assignedTenantUserId')
+    .sort({ ipAddress: 1, username: 1 })
+    .lean();
+  if (docs.length === 0) return [];
+
+  const vmIds = docs.map((d) => d._id);
+  const assignedByVm = new Map<string, Array<{ email: string | null; username: string | null }>>();
+
+  if ('tenantId' in owner) {
+    const tenantOid = new mongoose.Types.ObjectId(owner.tenantId);
+    const rows = await ExternalVmTenantAssignmentModel.find({
+      tenantId: tenantOid,
+      externalVmId: { $in: vmIds },
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    })
+      .select('externalVmId tenantUserId')
+      .lean();
+    const userIds = [...new Set(rows.map((r) => r.tenantUserId.toString()))].map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+    const users = userIds.length
+      ? await TenantUser.find({ _id: { $in: userIds } }).select('email username').lean()
+      : [];
+    const userById = new Map(users.map((u) => [u._id.toString(), u]));
+    for (const row of rows) {
+      const u = userById.get(row.tenantUserId.toString());
+      const key = row.externalVmId.toString();
+      const list = assignedByVm.get(key) ?? [];
+      list.push({ email: u?.email ?? null, username: u?.username ?? null });
+      assignedByVm.set(key, list);
+    }
+    const missing = docs.filter(
+      (d) => !assignedByVm.has(d._id.toString()) && d.assignedTenantUserId
+    );
+    if (missing.length > 0) {
+      const legacyIds = missing.map((d) => d.assignedTenantUserId!);
+      const legacyUsers = await TenantUser.find({ _id: { $in: legacyIds } })
+        .select('email username')
+        .lean();
+      const legacyById = new Map(legacyUsers.map((u) => [u._id.toString(), u]));
+      for (const d of missing) {
+        const u = legacyById.get(d.assignedTenantUserId!.toString());
+        assignedByVm.set(d._id.toString(), [
+          { email: u?.email ?? null, username: u?.username ?? null },
+        ]);
+      }
+    }
+  } else {
+    const rows = await ExternalVmUserAssignmentModel.find({
+      externalVmId: { $in: vmIds },
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    })
+      .select('externalVmId userId')
+      .lean();
+    const userIds = [...new Set(rows.map((r) => r.userId.toString()))].map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+    const users = userIds.length
+      ? await User.find({ _id: { $in: userIds } }).select('email username').lean()
+      : [];
+    const userById = new Map(users.map((u) => [u._id.toString(), u]));
+    for (const row of rows) {
+      const u = userById.get(row.userId.toString());
+      const key = row.externalVmId.toString();
+      const list = assignedByVm.get(key) ?? [];
+      list.push({ email: u?.email ?? null, username: u?.username ?? null });
+      assignedByVm.set(key, list);
+    }
+    const missing = docs.filter((d) => !assignedByVm.has(d._id.toString()) && d.assignedTo);
+    if (missing.length > 0) {
+      const legacyIds = missing.map((d) => d.assignedTo!);
+      const legacyUsers = await User.find({ _id: { $in: legacyIds } })
+        .select('email username')
+        .lean();
+      const legacyById = new Map(legacyUsers.map((u) => [u._id.toString(), u]));
+      for (const d of missing) {
+        const u = legacyById.get(d.assignedTo!.toString());
+        assignedByVm.set(d._id.toString(), [
+          { email: u?.email ?? null, username: u?.username ?? null },
+        ]);
+      }
+    }
+  }
+
+  return docs.map((d) => ({
+    id: d._id.toString(),
+    name: d.name,
+    ipAddress: d.ipAddress,
+    username: d.username,
+    protocol: d.protocol,
+    assignedUsers: assignedByVm.get(d._id.toString()) ?? [],
+  }));
+}
+
+function normalizeClientEmail(email?: string | null): string | undefined {
+  const trimmed = email?.trim().toLowerCase();
+  return trimmed || undefined;
+}
+
+function markProjectArchived(
+  doc: IProject,
+  reason: 'manual' | 'end_date_reached'
+): void {
+  doc.status = 'archived';
+  doc.archivedReason = reason;
+  doc.archivedAt = new Date();
+}
+
+function markProjectUnarchived(doc: IProject): void {
+  doc.status = 'active';
+  doc.archivedAt = undefined;
+  doc.archivedReason = undefined;
+  doc.gracePeriodEndsAt = undefined;
+  doc.expiryCleanupCompletedAt = undefined;
+}
+
+function supportAgentFromDoc(doc: IProject): ProjectSupportAgentPublic | null {
+  const raw = doc.supportAgentId as IUser | mongoose.Types.ObjectId | null | undefined;
+  if (!raw || raw instanceof mongoose.Types.ObjectId) return null;
+  return {
+    id: raw._id.toString(),
+    name: raw.name?.trim() || raw.email,
+    email: raw.email,
+  };
+}
+
+async function enrichWithSupportAgent(doc: IProject): Promise<IProject> {
+  if (!doc.populated('supportAgentId')) {
+    await doc.populate({ path: 'supportAgentId', select: 'name email isActive role' });
+  }
+  return doc;
+}
+
+async function applySupportAgentUpdate(
+  doc: IProject,
+  supportAgentId: string | null | undefined
+): Promise<void> {
+  if (supportAgentId === undefined) return;
+  if (supportAgentId === null || supportAgentId === '') {
+    doc.supportAgentId = undefined;
+    return;
+  }
+  if (!mongoose.Types.ObjectId.isValid(supportAgentId)) {
+    throw new ValidationError('Invalid support agent id.');
+  }
+  const agent = await User.findOne({
+    _id: new mongoose.Types.ObjectId(supportAgentId),
+    role: 'support_agent',
+    isActive: true,
+  }).select('_id');
+  if (!agent) {
+    throw new ValidationError('Support agent not found or inactive.');
+  }
+  doc.supportAgentId = agent._id;
+}
+
+async function toPublicWithAgent(
+  doc: IProject,
+  resourceCounts?: Record<string, number>
+): Promise<ProjectPublic> {
+  await enrichWithSupportAgent(doc);
+  return toPublic(doc, resourceCounts);
+}
+
+function applyProjectUpdateFields(doc: IProject, input: UpdateProjectInput): void {
+  if (input.name !== undefined) doc.name = input.name.trim();
+  if (input.clientName !== undefined) doc.clientName = input.clientName.trim();
+  if (input.description !== undefined) {
+    doc.description = input.description?.trim() || undefined;
+  }
+  if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
+  if (input.clientEmail !== undefined) {
+    doc.clientEmail = normalizeClientEmail(input.clientEmail);
+  }
+  if (input.endDate !== undefined) {
+    const next = input.endDate ?? undefined;
+    const prevMs = doc.endDate?.getTime();
+    doc.endDate = next;
+    if (next?.getTime() !== prevMs) {
+      doc.expiryWarningSentFor = undefined;
+      doc.gracePeriodEndsAt = undefined;
+      doc.expiryCleanupCompletedAt = undefined;
+    }
+  }
+  if (input.autoArchiveEnabled !== undefined) {
+    doc.autoArchiveEnabled = input.autoArchiveEnabled;
+  }
+}
+
 function toPublic(doc: IProject, resourceCounts?: Record<string, number>): ProjectPublic {
   return {
     id: doc._id.toString(),
@@ -74,12 +309,23 @@ function toPublic(doc: IProject, resourceCounts?: Record<string, number>): Proje
     year: doc.year,
     sequenceNumber: doc.sequenceNumber,
     clientName: doc.clientName,
+    clientEmail: doc.clientEmail ?? null,
     description: doc.description ?? null,
     startDate: doc.startDate ? doc.startDate.toISOString() : null,
     endDate: doc.endDate ? doc.endDate.toISOString() : null,
+    reminderEmails: [...(doc.reminderEmails ?? [])],
+    autoArchiveEnabled: doc.autoArchiveEnabled !== false,
+    gracePeriodEndsAt: doc.gracePeriodEndsAt ? doc.gracePeriodEndsAt.toISOString() : null,
+    expiryCleanupCompletedAt: doc.expiryCleanupCompletedAt
+      ? doc.expiryCleanupCompletedAt.toISOString()
+      : null,
+    archivedAt: doc.archivedAt ? doc.archivedAt.toISOString() : null,
+    archivedReason: doc.archivedReason ?? null,
     enabledServices: [...doc.enabledServices],
     status: doc.status,
     createdBy: doc.createdBy.toString(),
+    supportAgentId: supportAgentFromDoc(doc)?.id ?? doc.supportAgentId?.toString() ?? null,
+    supportAgent: supportAgentFromDoc(doc),
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
     ...(resourceCounts ? { resourceCounts } : {}),
@@ -140,7 +386,12 @@ async function nextSequenceForOwner(params: {
   const filter =
     params.ownerType === 'tenant'
       ? { ownerType: 'tenant' as const, tenantId: params.tenantId, year: params.year }
-      : { ownerType: 'org' as const, orgId: params.orgId, year: params.year };
+      : {
+          ownerType: 'org' as const,
+          // Explicitly require orgId to be the exact string — never match null/missing orgId.
+          orgId: { $eq: params.orgId },
+          year: params.year,
+        };
   const latest = await ProjectModel.findOne(filter)
     .sort({ sequenceNumber: -1 })
     .select('sequenceNumber')
@@ -192,13 +443,59 @@ async function resolveTargetOrgOwnerId(adminId: string): Promise<string> {
   return orgId;
 }
 
+async function resolveSupportAgentOverride(
+  overrideSupportAgentId: string
+): Promise<mongoose.Types.ObjectId> {
+  if (!mongoose.Types.ObjectId.isValid(overrideSupportAgentId)) {
+    throw new ValidationError('Invalid support agent id.');
+  }
+  const agent = await User.findOne({
+    _id: new mongoose.Types.ObjectId(overrideSupportAgentId),
+    role: 'support_agent',
+    isActive: true,
+  }).select('_id');
+  if (!agent) {
+    throw new ValidationError('Support agent not found or inactive.');
+  }
+  return agent._id;
+}
+
+async function finalizeNewProject(
+  doc: IProject,
+  enabledServices: AdminServiceKey[],
+  overrideSupportAgentId?: string
+): Promise<ProjectPublic> {
+  if (overrideSupportAgentId) {
+    doc.supportAgentId = await resolveSupportAgentOverride(overrideSupportAgentId);
+    await doc.save();
+    await User.findByIdAndUpdate(doc.supportAgentId, { $inc: { assignedProjectCount: 1 } });
+  } else {
+    const agent = await assignProjectSupportAgent(doc._id.toString());
+    if (agent) {
+      doc.supportAgentId = agent._id;
+      await doc.save();
+    }
+  }
+  return toPublicWithAgent(doc, Object.fromEntries(enabledServices.map((k) => [k, 0])));
+}
+
 async function createForOrg(
   orgId: string,
   createdByUserId: string,
-  input: CreateProjectInput
+  input: CreateProjectInput,
+  options?: { bypassServiceCheck?: boolean; supportAgentId?: string }
 ): Promise<ProjectPublic> {
-  const allowed = await getActiveOrgServiceKeys(orgId);
-  const enabledServices = assertServicesSubset(input.enabledServices, allowed);
+  if (!orgId || typeof orgId !== 'string') {
+    throw new ValidationError('Organization ID is required to create a project.');
+  }
+  let enabledServices: AdminServiceKey[];
+  if (options?.bypassServiceCheck) {
+    // Super-admin path: trust the requested services without checking org's active service list.
+    enabledServices = input.enabledServices.filter(isAdminServiceKey) as AdminServiceKey[];
+  } else {
+    const allowed = await getActiveOrgServiceKeys(orgId);
+    enabledServices = assertServicesSubset(input.enabledServices, allowed);
+  }
 
   const year = new Date().getUTCFullYear();
   const sequenceNumber = await nextSequenceForOwner({ ownerType: 'org', orgId, year });
@@ -214,21 +511,24 @@ async function createForOrg(
     year,
     sequenceNumber,
     clientName: input.clientName.trim(),
+    clientEmail: normalizeClientEmail(input.clientEmail),
     description: input.description?.trim() || undefined,
     startDate: input.startDate ?? undefined,
     endDate: input.endDate ?? undefined,
+    autoArchiveEnabled: input.autoArchiveEnabled !== false,
     enabledServices,
     status: 'active',
     createdBy: new mongoose.Types.ObjectId(createdByUserId),
   });
 
-  return toPublic(doc, Object.fromEntries(enabledServices.map((k) => [k, 0])));
+  return finalizeNewProject(doc, enabledServices, options?.supportAgentId);
 }
 
 async function createForTenant(
   tenantId: string,
   createdByUserId: string,
-  input: CreateProjectInput
+  input: CreateProjectInput,
+  options?: { supportAgentId?: string }
 ): Promise<ProjectPublic> {
   const allowed = await getActiveTenantServiceKeys(tenantId);
   const enabledServices = assertServicesSubset(input.enabledServices, allowed);
@@ -247,15 +547,17 @@ async function createForTenant(
     year,
     sequenceNumber,
     clientName: input.clientName.trim(),
+    clientEmail: normalizeClientEmail(input.clientEmail),
     description: input.description?.trim() || undefined,
     startDate: input.startDate ?? undefined,
     endDate: input.endDate ?? undefined,
+    autoArchiveEnabled: input.autoArchiveEnabled !== false,
     enabledServices,
     status: 'active',
     createdBy: new mongoose.Types.ObjectId(createdByUserId),
   });
 
-  return toPublic(doc, Object.fromEntries(enabledServices.map((k) => [k, 0])));
+  return finalizeNewProject(doc, enabledServices, options?.supportAgentId);
 }
 
 async function getActiveOrgServiceKeys(orgId: string): Promise<Set<AdminServiceKey>> {
@@ -305,6 +607,50 @@ function assertServicesSubset(
     if (!out.includes(key)) out.push(key);
   }
   return out;
+}
+
+async function cascadeDeleteProjectResources(projectId: mongoose.Types.ObjectId): Promise<{
+  catalogVms: number;
+  dedicatedServers: number;
+  managedVms: number;
+  externalVms: number;
+  externalAssignments: number;
+}> {
+  const externalVms = await ExternalVMModel.find({ projectId }).select('_id inventoryLocked').lean();
+  const locked = externalVms.filter((vm) => vm.inventoryLocked);
+  if (locked.length > 0) {
+    throw new ConflictError(
+      `Cannot delete project: ${locked.length} inventory-locked elastic server(s) are still assigned. Unlock them first.`
+    );
+  }
+
+  const externalVmIds = externalVms.map((vm) => vm._id);
+  const [platformAssignResult, tenantAssignResult] = await Promise.all([
+    externalVmIds.length
+      ? ExternalVmUserAssignmentModel.deleteMany({ externalVmId: { $in: externalVmIds } })
+      : Promise.resolve({ deletedCount: 0 }),
+    externalVmIds.length
+      ? ExternalVmTenantAssignmentModel.deleteMany({ externalVmId: { $in: externalVmIds } })
+      : Promise.resolve({ deletedCount: 0 }),
+  ]);
+
+  const [catalogResult, dedicatedResult, managedResult, externalResult] = await Promise.all([
+    CatalogVmModel.deleteMany({ projectId }),
+    DedicatedServerRequestModel.deleteMany({ projectId }),
+    VM.deleteMany({ projectId }),
+    externalVmIds.length
+      ? ExternalVMModel.deleteMany({ _id: { $in: externalVmIds } })
+      : Promise.resolve({ deletedCount: 0 }),
+  ]);
+
+  return {
+    catalogVms: catalogResult.deletedCount ?? 0,
+    dedicatedServers: dedicatedResult.deletedCount ?? 0,
+    managedVms: managedResult.deletedCount ?? 0,
+    externalVms: externalResult.deletedCount ?? 0,
+    externalAssignments:
+      (platformAssignResult.deletedCount ?? 0) + (tenantAssignResult.deletedCount ?? 0),
+  };
 }
 
 async function countResourcesForService(
@@ -401,7 +747,7 @@ export class ProjectsService {
     });
     if (!doc) throw new NotFoundError('Project not found.');
     const resourceCounts = await resourceCountsByService(doc);
-    return toPublic(doc, resourceCounts);
+    return toPublicWithAgent(doc, resourceCounts);
   }
 
   async create(userId: string, input: CreateProjectInput): Promise<ProjectPublic> {
@@ -431,7 +777,11 @@ export class ProjectsService {
     input: CreateProjectInput
   ): Promise<ProjectPublic> {
     const orgId = await resolveTargetOrgOwnerId(targetAdminId);
-    return createForOrg(orgId, createdByUserId, input);
+    // Bypass service check — super-admin is trusted to assign any service.
+    return createForOrg(orgId, createdByUserId, input, {
+      bypassServiceCheck: true,
+      supportAgentId: input.supportAgentId,
+    });
   }
 
   /** Super-admin: active project-eligible services for an org. */
@@ -477,7 +827,7 @@ export class ProjectsService {
       $or: [{ ownerType: 'org' }, { ownerType: { $exists: false } }, { ownerType: null }],
     });
     if (!doc) throw new NotFoundError('Project not found.');
-    return toPublic(doc, await resourceCountsByService(doc));
+    return toPublicWithAgent(doc, await resourceCountsByService(doc));
   }
 
   /** Super-admin: service-wise wallet usage for one org project. */
@@ -554,7 +904,9 @@ export class ProjectsService {
     input: CreateProjectInput
   ): Promise<ProjectPublic> {
     await assertTenantExists(tenantId);
-    return createForTenant(tenantId, createdByUserId, input);
+    return createForTenant(tenantId, createdByUserId, input, {
+      supportAgentId: input.supportAgentId,
+    });
   }
 
   async listEligibleServicesForTenantBySuperAdmin(tenantId: string): Promise<AdminServiceKey[]> {
@@ -567,6 +919,17 @@ export class ProjectsService {
       createdAt: -1,
     });
     return docs.map((d) => toPublic(d));
+  }
+
+  /** Returns distinct client names used in projects for this tenant. */
+  async distinctClientNamesForTenant(tenantId: string): Promise<string[]> {
+    const names: string[] = await ProjectModel.distinct('clientName', {
+      ownerType: 'tenant',
+      tenantId,
+    });
+    return names
+      .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+      .sort((a, b) => a.localeCompare(b));
   }
 
   async previewNameForTenant(
@@ -599,7 +962,30 @@ export class ProjectsService {
     });
     if (!doc) throw new NotFoundError('Project not found.');
     const resourceCounts = await resourceCountsByService(doc);
-    return toPublic(doc, resourceCounts);
+    return toPublicWithAgent(doc, resourceCounts);
+  }
+
+  async listElasticResourcesForTenant(
+    tenantId: string,
+    projectId: string
+  ): Promise<ProjectElasticResource[]> {
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      ownerType: 'tenant',
+      tenantId,
+    }).select('_id');
+    if (!doc) throw new NotFoundError('Project not found.');
+    return listElasticResourcesForOwner(doc._id, { tenantId });
+  }
+
+  async listElasticResources(userId: string, projectId: string): Promise<ProjectElasticResource[]> {
+    const { orgId } = await assertOrgOwner(userId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+    }).select('_id');
+    if (!doc) throw new NotFoundError('Project not found.');
+    return listElasticResourcesForOwner(doc._id, { adminId: orgId });
   }
 
   async updateForTenant(
@@ -616,15 +1002,10 @@ export class ProjectsService {
     if (doc.status === 'archived') {
       throw new ValidationError('Archived projects cannot be edited.');
     }
-    if (input.name !== undefined) doc.name = input.name.trim();
-    if (input.clientName !== undefined) doc.clientName = input.clientName.trim();
-    if (input.description !== undefined) {
-      doc.description = input.description?.trim() || undefined;
-    }
-    if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
-    if (input.endDate !== undefined) doc.endDate = input.endDate ?? undefined;
+    applyProjectUpdateFields(doc, input);
+    await applySupportAgentUpdate(doc, input.supportAgentId);
     await doc.save();
-    return toPublic(doc, await resourceCountsByService(doc));
+    return toPublicWithAgent(doc, await resourceCountsByService(doc));
   }
 
   async addServicesForTenant(
@@ -686,9 +1067,102 @@ export class ProjectsService {
       tenantId,
     });
     if (!doc) throw new NotFoundError('Project not found.');
-    doc.status = 'archived';
+    if (doc.status === 'archived') {
+      throw new ValidationError('Project is already archived.');
+    }
+    markProjectArchived(doc, 'manual');
     await doc.save();
     return toPublic(doc, await resourceCountsByService(doc));
+  }
+
+  async unarchiveForTenant(tenantId: string, projectId: string): Promise<ProjectPublic> {
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      ownerType: 'tenant',
+      tenantId,
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status !== 'archived') {
+      throw new ValidationError('Project is not archived.');
+    }
+    markProjectUnarchived(doc);
+    await doc.save();
+    return toPublic(doc, await resourceCountsByService(doc));
+  }
+
+  /** Super-admin: permanently delete a tenant project and all resources under it. */
+  async deleteForTenant(
+    tenantId: string,
+    projectId: string
+  ): Promise<{
+    projectId: string;
+    deleted: Awaited<ReturnType<typeof cascadeDeleteProjectResources>>;
+  }> {
+    await assertTenantExists(tenantId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      ownerType: 'tenant',
+      tenantId,
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+
+    const deleted = await cascadeDeleteProjectResources(doc._id);
+    await ProjectModel.deleteOne({ _id: doc._id });
+    return { projectId: doc._id.toString(), deleted };
+  }
+
+  /** Super-admin: archive an organization project. */
+  async archiveForAdmin(targetAdminId: string, projectId: string): Promise<ProjectPublic> {
+    const orgId = await resolveTargetOrgOwnerId(targetAdminId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+      $or: [{ ownerType: 'org' }, { ownerType: { $exists: false } }, { ownerType: null }],
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status === 'archived') {
+      throw new ValidationError('Project is already archived.');
+    }
+    markProjectArchived(doc, 'manual');
+    await doc.save();
+    return toPublic(doc, await resourceCountsByService(doc));
+  }
+
+  async unarchiveForAdmin(targetAdminId: string, projectId: string): Promise<ProjectPublic> {
+    const orgId = await resolveTargetOrgOwnerId(targetAdminId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+      $or: [{ ownerType: 'org' }, { ownerType: { $exists: false } }, { ownerType: null }],
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status !== 'archived') {
+      throw new ValidationError('Project is not archived.');
+    }
+    markProjectUnarchived(doc);
+    await doc.save();
+    return toPublic(doc, await resourceCountsByService(doc));
+  }
+
+  /** Super-admin: permanently delete an org project and all resources under it. */
+  async deleteForAdmin(
+    targetAdminId: string,
+    projectId: string
+  ): Promise<{
+    projectId: string;
+    deleted: Awaited<ReturnType<typeof cascadeDeleteProjectResources>>;
+  }> {
+    const orgId = await resolveTargetOrgOwnerId(targetAdminId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+      $or: [{ ownerType: 'org' }, { ownerType: { $exists: false } }, { ownerType: null }],
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+
+    const deleted = await cascadeDeleteProjectResources(doc._id);
+    await ProjectModel.deleteOne({ _id: doc._id });
+    return { projectId: doc._id.toString(), deleted };
   }
 
   async assertUsableForTenantService(params: {
@@ -820,16 +1294,11 @@ export class ProjectsService {
       throw new ValidationError('Archived projects cannot be edited.');
     }
 
-    if (input.name !== undefined) doc.name = input.name.trim();
-    if (input.clientName !== undefined) doc.clientName = input.clientName.trim();
-    if (input.description !== undefined) {
-      doc.description = input.description?.trim() || undefined;
-    }
-    if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
-    if (input.endDate !== undefined) doc.endDate = input.endDate ?? undefined;
+    applyProjectUpdateFields(doc, input);
+    await applySupportAgentUpdate(doc, input.supportAgentId);
     await doc.save();
     const resourceCounts = await resourceCountsByService(doc);
-    return toPublic(doc, resourceCounts);
+    return toPublicWithAgent(doc, resourceCounts);
   }
 
   async addServices(
@@ -898,7 +1367,23 @@ export class ProjectsService {
       orgId,
     });
     if (!doc) throw new NotFoundError('Project not found.');
-    doc.status = 'archived';
+    markProjectArchived(doc, 'manual');
+    await doc.save();
+    const resourceCounts = await resourceCountsByService(doc);
+    return toPublic(doc, resourceCounts);
+  }
+
+  async unarchive(userId: string, projectId: string): Promise<ProjectPublic> {
+    const { orgId } = await assertOrgOwner(userId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status !== 'archived') {
+      throw new ValidationError('Project is not archived.');
+    }
+    markProjectUnarchived(doc);
     await doc.save();
     const resourceCounts = await resourceCountsByService(doc);
     return toPublic(doc, resourceCounts);
@@ -1060,6 +1545,114 @@ export class ProjectsService {
   async catalogServices(): Promise<AdminServiceKey[]> {
     const keys = await serviceCatalogService.listAssignableKeys('admin');
     return keys.filter(isAdminServiceKey);
+  }
+
+  /** Super-admin: update a project belonging to an org admin. */
+  async updateForAdminBySuperAdmin(
+    adminId: string,
+    projectId: string,
+    input: UpdateProjectInput
+  ): Promise<ProjectPublic> {
+    const orgId = await resolveTargetOrgOwnerId(adminId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status === 'archived') {
+      throw new ValidationError('Archived projects cannot be edited.');
+    }
+    applyProjectUpdateFields(doc, input);
+    await applySupportAgentUpdate(doc, input.supportAgentId);
+    await doc.save();
+    return toPublicWithAgent(doc, await resourceCountsByService(doc));
+  }
+
+  async listActiveSupportAgents(): Promise<ProjectSupportAgentPublic[]> {
+    const agents = await User.find({ role: 'support_agent', isActive: true })
+      .select('name email')
+      .sort({ name: 1, email: 1 })
+      .lean();
+    return agents.map((agent) => ({
+      id: agent._id.toString(),
+      name: agent.name?.trim() || agent.email,
+      email: agent.email,
+    }));
+  }
+
+  /** Super-admin: all active support agents for create-modal dropdown. */
+  async listSupportAgentsListForSuperAdmin(): Promise<
+    Array<{ _id: string; name: string; email: string }>
+  > {
+    const agents = await User.find({ role: 'support_agent', isActive: true })
+      .select('name email')
+      .sort({ name: 1, email: 1 })
+      .lean();
+    return agents.map((agent) => ({
+      _id: agent._id.toString(),
+      name: agent.name?.trim() || agent.email,
+      email: agent.email,
+    }));
+  }
+
+  /** Org owner: list active support agents for project assignment. */
+  async listSupportAgentsForOrgOwner(userId: string): Promise<ProjectSupportAgentPublic[]> {
+    await assertOrgOwner(userId);
+    return this.listActiveSupportAgents();
+  }
+
+  /** Org owner: support tickets linked to one org project. */
+  async listSupportTicketsForProject(
+    userId: string,
+    projectId: string
+  ): Promise<ProjectSupportTicketRow[]> {
+    const { orgId } = await assertOrgOwner(userId);
+    const project = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+    }).select('_id');
+    if (!project) {
+      throw new NotFoundError('Project not found.');
+    }
+
+    const tickets = await Ticket.find({ projectId: project._id })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .select('ticketNumber subject status platformAssigneeName createdAt')
+      .lean();
+
+    return tickets.map((t) => ({
+      id: t._id.toString(),
+      ticketNumber: t.ticketNumber,
+      subject: t.subject,
+      status: t.status,
+      platformAssigneeName: t.platformAssigneeName?.trim() || null,
+      createdAt: t.createdAt.toISOString(),
+    }));
+  }
+
+  /** Tenant admin: list active support agents for project assignment. */
+  async listSupportAgentsForTenantAdmin(role: string): Promise<ProjectSupportAgentPublic[]> {
+    if (role !== 'tenant_admin') {
+      throw new ForbiddenError('Only tenant administrators can list support agents.');
+    }
+    return this.listActiveSupportAgents();
+  }
+
+  /** Returns distinct client names already used in projects for this org. */
+  async distinctClientNames(userId: string): Promise<string[]> {
+    const { orgId } = await assertOrgOwner(userId);
+    const names: string[] = await ProjectModel.distinct('clientName', {
+      orgId,
+      $or: [
+        { ownerType: 'org' },
+        { ownerType: { $exists: false } },
+        { ownerType: null },
+      ],
+    });
+    return names
+      .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+      .sort((a, b) => a.localeCompare(b));
   }
 }
 

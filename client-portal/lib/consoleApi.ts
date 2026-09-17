@@ -1,10 +1,12 @@
-import { apiRequest } from './apiClient';
+import { apiRequest, getAccessToken } from './apiClient';
+import { getGatewayBaseUrl, getTenantGatewayIdentityHeaders } from './gatewayUrl';
 
 /**
  * VM console (Guacamole) API.
  *
  * Backend reference:
- *   GET /api/v1/vms/:vmId/console?protocol=rdp|ssh|vnc
+ *   GET  /api/v1/vms/:vmId/console?protocol=rdp|ssh|vnc
+ *   POST /api/v1/vms/:vmId/console/close
  *
  * The returned clientUrl points at GUACAMOLE_PUBLIC_URL (the nginx-proxied
  * Guacamole web app) and contains a hash fragment of the form:
@@ -34,6 +36,14 @@ export interface ConsoleDimensions {
   height?: number;
 }
 
+export function platformVmConsoleClosePath(vmId: string): string {
+  return `/api/v1/vms/${encodeURIComponent(vmId)}/console/close`;
+}
+
+export function tenantVmConsoleClosePath(vmId: string): string {
+  return `/api/v1/tenant-vms/${encodeURIComponent(vmId)}/console/close`;
+}
+
 /**
  * Request a Guacamole console session for a VM.
  *
@@ -60,16 +70,48 @@ export async function getConsoleSession(
 }
 
 /**
- * Best-effort cleanup of a Guacamole connection when the user leaves
- * the console page. Fire-and-forget — never await in cleanup paths.
+ * Fire-and-forget server-side Guacamole tunnel kill. Safe on tab close / unmount.
  *
- * NOTE: The backend cleanup route is not yet implemented. Guacamole
- * connections in core-api are upserted by name (`vm-<vmId>`), so they
- * are naturally replaced on the next openConsole call. This function
- * is a no-op placeholder until DELETE /api/v1/vms/console/:connectionId
- * is wired up.
+ * Uses fetch with keepalive when a Bearer token is available (sendBeacon cannot
+ * set Authorization). Falls back to sendBeacon for cookie-only flows.
  */
-export async function closeConsoleSession(connectionId: string): Promise<void> {
-  // Intentional no-op for now — see JSDoc above.
-  void connectionId;
+export function closeConsoleSessionAtPath(
+  closePath: string,
+  options?: { accessToken?: string | null; tenantPortal?: boolean }
+): void {
+  if (typeof window === 'undefined') return;
+
+  const apiBase = getGatewayBaseUrl();
+  const url = `${apiBase}${closePath}`;
+  const token =
+    options && 'accessToken' in options ? options.accessToken : getAccessToken();
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (options?.tenantPortal) {
+    Object.assign(headers, getTenantGatewayIdentityHeaders(apiBase));
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  if (!token && typeof navigator.sendBeacon === 'function') {
+    navigator.sendBeacon(url, new Blob([], { type: 'application/json' }));
+    return;
+  }
+
+  void fetch(url, {
+    method: 'POST',
+    headers,
+    credentials: options?.tenantPortal ? 'omit' : 'include',
+    keepalive: true,
+  }).catch(() => {
+    if (typeof navigator.sendBeacon === 'function') {
+      navigator.sendBeacon(url, new Blob([], { type: 'application/json' }));
+    }
+  });
+}
+
+/** Kill platform VM console tunnels for `vmId`. */
+export function closeConsoleSession(vmId: string): void {
+  closeConsoleSessionAtPath(platformVmConsoleClosePath(vmId));
 }

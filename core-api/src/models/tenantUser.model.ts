@@ -47,7 +47,7 @@ const tenantUserSchema = new Schema<ITenantUser>(
       type: String,
       lowercase: true,
       trim: true,
-      default: null,
+      // Omit when unset — do not default to null (breaks sparse unique index).
     },
     passwordHash: {
       type: String,
@@ -103,6 +103,12 @@ const tenantUserSchema = new Schema<ITenantUser>(
 );
 
 tenantUserSchema.index({ tenantId: 1, email: 1 }, { unique: true });
-tenantUserSchema.index({ tenantId: 1, username: 1 }, { unique: true, sparse: true });
+tenantUserSchema.index(
+  { tenantId: 1, username: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { username: { $type: 'string' } },
+  }
+);
 
 export const TenantUser = mongoose.model<ITenantUser>('TenantUser', tenantUserSchema);

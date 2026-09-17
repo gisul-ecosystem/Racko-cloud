@@ -93,3 +93,25 @@ export async function getTenantCatalogVmConsole(
   );
   return res.data;
 }
+
+export async function tenantCatalogVmPowerAction(
+  id: string,
+  action: import('./vmCatalogApi').CatalogVmPowerAction,
+  instanceId?: string
+): Promise<{
+  action: import('./vmCatalogApi').CatalogVmPowerAction;
+  panelUrl?: string;
+  vm: ICatalogVm;
+}> {
+  const res = await tenantPortalRequest<
+    ApiEnvelope<{
+      action: import('./vmCatalogApi').CatalogVmPowerAction;
+      panelUrl?: string;
+      vm: ICatalogVm;
+    }>
+  >(`/api/v1/tenant-vm-catalog/vms/${id}/power`, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...(instanceId ? { instanceId } : {}) }),
+  });
+  return res.data;
+}

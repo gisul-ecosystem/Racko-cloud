@@ -29,9 +29,9 @@ const STAFF_ROUTE_PERMISSIONS: Array<{ prefix: string; anyOf: string[] }> = [
   { prefix: SUPER_ADMIN_OVERVIEW_PATH, anyOf: ['overview.read'] },
   { prefix: '/super-admin-console/vm-management', anyOf: ['vm_management.manage'] },
   { prefix: '/super-admin-console/vm-inventory', anyOf: ['vm_inventory.read'] },
+  { prefix: '/super-admin-console/server-assign', anyOf: ['vm_inventory.write'] },
   { prefix: '/super-admin-console/create-vm', anyOf: ['vm_catalog.superadmin'] },
   { prefix: '/super-admin-console/machine-manager', anyOf: ['machine_manager.manage'] },
-  { prefix: '/super-admin-console/elastic-servers', anyOf: ['elastic_servers.superadmin'] },
   { prefix: '/super-admin-console/azure', anyOf: ['azure.manage'] },
   { prefix: '/super-admin-console/aws', anyOf: ['aws.manage'] },
   { prefix: '/super-admin-console/white-labelling', anyOf: ['white_labelling.manage'] },
@@ -95,7 +95,13 @@ export default function SuperAdminConsoleClientLayout({
       return;
     }
     if (!isControlPlaneRole(user.role)) {
-      router.replace(user.role === 'admin' ? '/console' : '/dashboard/user');
+      router.replace(
+        user.role === 'admin'
+          ? '/console'
+          : user.role === 'support_agent'
+            ? '/support-agent'
+            : '/dashboard/user'
+      );
     }
   }, [isLoading, isAuthenticated, user, router, pathname]);
 

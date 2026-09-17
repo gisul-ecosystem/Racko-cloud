@@ -11,6 +11,7 @@ export interface IAdminWalletTransaction extends Document {
     | 'vm_creation'
     | 'azure_lab_request'
     | 'aws_lab_request'
+    | 'gcp_lab_request'
     | 'catalog_vm_purchase'
     | 'dedicated_server_purchase'
     | 'manual_credit'
@@ -52,6 +53,7 @@ const adminWalletTransactionSchema = new Schema<IAdminWalletTransaction>(
         'vm_creation',
         'azure_lab_request',
         'aws_lab_request',
+        'gcp_lab_request',
         'catalog_vm_purchase',
         'dedicated_server_purchase',
         'manual_credit',

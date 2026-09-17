@@ -300,6 +300,18 @@ function buildPayload(
     if (params.passphrase) parameters['passphrase'] = params.passphrase;
   }
 
+  if (protocol === 'vnc') {
+    parameters['color-depth'] = '16';
+    parameters['cursor'] = 'remote';
+    parameters['read-only'] = 'false';
+    // Let Guacamole push browser size via SetDesktopSize when the server
+    // supports it; unsupported servers (e.g. macOS Screen Sharing) scale in
+    // place — never use RDP-style reconnect resize here.
+    parameters['disable-display-resize'] = 'false';
+    if (params.width) parameters['width'] = String(params.width);
+    if (params.height) parameters['height'] = String(params.height);
+  }
+
   return {
     name,
     parentIdentifier: 'ROOT',
@@ -385,10 +397,94 @@ function buildClientUrl(
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export class GuacamoleClient {
+  private static readonly KILL_CONFIRM_MAX_ATTEMPTS = 8;
+  private static readonly KILL_CONFIRM_DELAY_MS = 250;
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   /**
-   * Create or update a connection for a VM, then return a browser-facing
-   * one-shot URL containing an embedded admin auth token. The URL always
-   * points at GUACAMOLE_PUBLIC_URL — never the internal docker hostname.
+   * Force-disconnect live tunnels for a connection id and confirm they are gone.
+   * Shared by last-wins open, explicit console close, and access-schedule teardown.
+   */
+  async killSessionsForConnectionWithRetry(
+    connectionIdentifier: string,
+    options?: { username?: string; throwOnPersistentFailure?: boolean }
+  ): Promise<number> {
+    const throwOnPersistentFailure = options?.throwOnPersistentFailure ?? true;
+    const username = options?.username?.trim();
+    let killedTotal = 0;
+
+    for (let attempt = 1; attempt <= GuacamoleClient.KILL_CONFIRM_MAX_ATTEMPTS; attempt++) {
+      const active = await this.listActiveConnections();
+      const matching = active
+        .filter((a) => a.connectionIdentifier === connectionIdentifier)
+        .filter((a) => !username || a.username === username);
+      if (matching.length === 0) {
+        if (killedTotal > 0) {
+          logger.info('Guacamole connection sessions cleared', {
+            connectionIdentifier,
+            killedTotal,
+            attempt,
+          });
+        }
+        return killedTotal;
+      }
+
+      const ids = matching.map((a) => a.identifier);
+      await this.killActiveConnections(ids);
+      killedTotal += ids.length;
+
+      if (attempt < GuacamoleClient.KILL_CONFIRM_MAX_ATTEMPTS) {
+        await this.sleep(GuacamoleClient.KILL_CONFIRM_DELAY_MS);
+      }
+    }
+
+    const remaining = (await this.listActiveConnections())
+      .filter((a) => a.connectionIdentifier === connectionIdentifier)
+      .filter((a) => !username || a.username === username);
+    if (remaining.length > 0) {
+      logger.error('Guacamole active sessions still open after kill retries', {
+        connectionIdentifier,
+        remaining: remaining.map((a) => a.identifier),
+      });
+      if (throwOnPersistentFailure) {
+        throw new InternalError('Could not disconnect existing console session. Please try again.');
+      }
+    }
+
+    return killedTotal;
+  }
+
+  /**
+   * Resolve stable connection name → id, then kill with confirm-retry.
+   * Idempotent when the connection definition does not exist.
+   */
+  async killSessionsForConnectionNameWithRetry(
+    connectionName: string,
+    options?: { username?: string; throwOnPersistentFailure?: boolean }
+  ): Promise<number> {
+    const connectionIdentifier = await this.getConnectionIdentifierByName(connectionName);
+    if (!connectionIdentifier) {
+      logger.info('Guacamole kill skipped — connection not found (idempotent)', { connectionName });
+      return 0;
+    }
+    return this.killSessionsForConnectionWithRetry(connectionIdentifier, options);
+  }
+
+  /** Last-wins takeover before minting a new client URL. */
+  private async clearActiveSessionsForConnectionId(connectionIdentifier: string): Promise<number> {
+    return this.killSessionsForConnectionWithRetry(connectionIdentifier, {
+      throwOnPersistentFailure: true,
+    });
+  }
+
+  /**
+   * Create or update a connection for a VM, force-disconnect any existing live
+   * tunnel (last connection wins), then return a browser-facing one-shot URL
+   * containing an embedded admin auth token. The URL always points at
+   * GUACAMOLE_PUBLIC_URL — never the internal docker hostname.
    *
    * `name` should be stable per VM (e.g. `vm-${vmId}`) so repeated calls update
    * the same connection instead of creating duplicates.
@@ -403,6 +499,7 @@ export class GuacamoleClient {
     if (!params.port) throw new InternalError('port is required.');
 
     const connection = await upsertConnection(name, protocol, params);
+    const displaced = await this.clearActiveSessionsForConnectionId(connection.identifier);
     const token = await getToken();
     const clientUrl = buildClientUrl(
       connection.identifier,
@@ -415,6 +512,7 @@ export class GuacamoleClient {
       name,
       protocol,
       connectionId: connection.identifier,
+      displacedSessions: displaced,
     });
 
     return {
@@ -505,28 +603,13 @@ export class GuacamoleClient {
 
   /**
    * Kill active tunnels for a named connection (optional Guacamole username filter).
-   * Returns how many tunnels were targeted.
+   * Returns how many tunnel kill operations were issued (with confirm-retry).
    */
   async killActiveSessionsForConnection(
     connectionName: string,
-    options?: { username?: string }
+    options?: { username?: string; throwOnPersistentFailure?: boolean }
   ): Promise<number> {
-    const connectionIdentifier = await this.getConnectionIdentifierByName(connectionName);
-    if (!connectionIdentifier) {
-      logger.info('Guacamole kill skipped — connection not found', { connectionName });
-      return 0;
-    }
-
-    const active = await this.listActiveConnections();
-    const username = options?.username?.trim();
-    const ids = active
-      .filter((a) => a.connectionIdentifier === connectionIdentifier)
-      .filter((a) => !username || a.username === username)
-      .map((a) => a.identifier);
-
-    if (ids.length === 0) return 0;
-    await this.killActiveConnections(ids);
-    return ids.length;
+    return this.killSessionsForConnectionNameWithRetry(connectionName, options);
   }
 
   /**

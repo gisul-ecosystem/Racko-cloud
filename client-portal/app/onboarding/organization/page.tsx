@@ -34,13 +34,14 @@ import {
   organizationOnboardingSchema,
   splitPhone,
   stepStorageKey,
-  verifiedPhoneStorageKey,
+  // verifiedPhoneStorageKey, // OTP on hold
   zodIssuesToFieldErrors,
   type FormFieldErrors,
   type OrganizationOnboardingForm,
   type OrgRegisterDraft,
 } from '@/lib/organizationOnboardingSchema';
-import { sendPhoneOtp, verifyPhoneOtp } from '@/lib/otpApi';
+// OTP on hold — provider not finalized.
+// import { sendPhoneOtp, verifyPhoneOtp } from '@/lib/otpApi';
 
 const STEPPER = [
   { id: 1, title: 'Contact', subtitle: 'Contact Information' },
@@ -70,7 +71,7 @@ const inputClass =
 const textareaClass =
   'w-full rounded-lg border border-gray-700 bg-[#0f172a] px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
 const labelClass = 'mb-1.5 block text-sm font-medium text-gray-200';
-const PHONE_OTP_PURPOSE = 'organization_onboarding_phone' as const;
+// const PHONE_OTP_PURPOSE = 'organization_onboarding_phone' as const;
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
@@ -173,13 +174,14 @@ export default function OrganizationOnboardingPage() {
   const [form, setForm] = useState<OrganizationOnboardingForm>(EMPTY_FORM);
   const [phoneDial, setPhoneDial] = useState('+91');
   const [phoneNational, setPhoneNational] = useState('');
-  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
-  const [otpCode, setOtpCode] = useState('');
-  const [otpSentTo, setOtpSentTo] = useState<string | null>(null);
-  const [otpSending, setOtpSending] = useState(false);
-  const [otpVerifying, setOtpVerifying] = useState(false);
-  const [otpMessage, setOtpMessage] = useState<string | null>(null);
-  const [otpError, setOtpError] = useState<string | null>(null);
+  // OTP on hold — provider not finalized.
+  // const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
+  // const [otpCode, setOtpCode] = useState('');
+  // const [otpSentTo, setOtpSentTo] = useState<string | null>(null);
+  // const [otpSending, setOtpSending] = useState(false);
+  // const [otpVerifying, setOtpVerifying] = useState(false);
+  // const [otpMessage, setOtpMessage] = useState<string | null>(null);
+  // const [otpError, setOtpError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isLoading) return;
@@ -250,10 +252,11 @@ export default function OrganizationOnboardingPage() {
         const phoneParts = splitPhone(next.phone);
         setPhoneDial(phoneParts.dialCode);
         setPhoneNational(phoneParts.national);
-        const storedVerifiedPhone = localStorage.getItem(verifiedPhoneStorageKey(user.id));
-        if (storedVerifiedPhone && storedVerifiedPhone === next.phone) {
-          setVerifiedPhone(storedVerifiedPhone);
-        }
+        // OTP on hold — provider not finalized.
+        // const storedVerifiedPhone = localStorage.getItem(verifiedPhoneStorageKey(user.id));
+        // if (storedVerifiedPhone && storedVerifiedPhone === next.phone) {
+        //   setVerifiedPhone(storedVerifiedPhone);
+        // }
         const storedStep = Number(localStorage.getItem(stepStorageKey(user.id)));
         if (storedStep >= 1 && storedStep <= TOTAL_PROGRESS_STEPS) {
           setStep(storedStep as OnboardingStep);
@@ -284,10 +287,14 @@ export default function OrganizationOnboardingPage() {
     return next;
   }
 
+  /*
   function currentPhone(): string {
     return joinPhone(phoneDial, phoneNational);
   }
+  */
 
+  // OTP on hold — provider not finalized.
+  /*
   function resetPhoneOtpState() {
     setVerifiedPhone(null);
     setOtpSentTo(null);
@@ -296,17 +303,19 @@ export default function OrganizationOnboardingPage() {
     setOtpError(null);
     if (user) localStorage.removeItem(verifiedPhoneStorageKey(user.id));
   }
+  */
 
   function handleDialChange(code: string) {
     setPhoneDial(code);
-    resetPhoneOtpState();
+    // resetPhoneOtpState();
   }
 
   function handleNationalChange(value: string) {
     setPhoneNational(value);
-    resetPhoneOtpState();
+    // resetPhoneOtpState();
   }
 
+  /*
   function validatePhoneForOtp(phone: string): boolean {
     const result = contactStepSchema.pick({ phone: true }).safeParse({ phone });
     if (!result.success) {
@@ -363,6 +372,7 @@ export default function OrganizationOnboardingPage() {
       setOtpVerifying(false);
     }
   }
+  */
 
   function validateCurrentStep(data: OrganizationOnboardingForm): boolean {
     const schema =
@@ -387,10 +397,11 @@ export default function OrganizationOnboardingPage() {
   function handleContinue() {
     const data = syncPhonesIntoForm();
     if (!validateCurrentStep(data)) return;
-    if (step === 1 && verifiedPhone !== data.phone) {
-      setOtpError('Verify your phone number before continuing.');
-      return;
-    }
+    // OTP on hold — provider not finalized.
+    // if (step === 1 && verifiedPhone !== data.phone) {
+    //   setOtpError('Verify your phone number before continuing.');
+    //   return;
+    // }
     const nextStep = Math.min(step + 1, TOTAL_PROGRESS_STEPS) as OnboardingStep;
     setStep(nextStep);
     if (user) {
@@ -418,12 +429,13 @@ export default function OrganizationOnboardingPage() {
       }
       return;
     }
-    if (verifiedPhone !== result.data.phone) {
-      setStep(1);
-      if (user) localStorage.setItem(stepStorageKey(user.id), '1');
-      setOtpError('Verify your phone number before submitting organization details.');
-      return;
-    }
+    // OTP on hold — provider not finalized.
+    // if (verifiedPhone !== result.data.phone) {
+    //   setStep(1);
+    //   if (user) localStorage.setItem(stepStorageKey(user.id), '1');
+    //   setOtpError('Verify your phone number before submitting organization details.');
+    //   return;
+    // }
 
     setSaving(true);
     setError(null);
@@ -438,7 +450,7 @@ export default function OrganizationOnboardingPage() {
       if (user) {
         localStorage.removeItem(draftStorageKey(user.id));
         localStorage.removeItem(stepStorageKey(user.id));
-        localStorage.removeItem(verifiedPhoneStorageKey(user.id));
+        // localStorage.removeItem(verifiedPhoneStorageKey(user.id));
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to submit organization request.');
@@ -494,10 +506,6 @@ export default function OrganizationOnboardingPage() {
           <div className="mt-6 rounded-xl border border-gray-800 bg-black/20 p-5 text-sm text-gray-300">
             <p>
               <span className="font-semibold text-white">Company:</span> {request.companyName}
-            </p>
-            <p className="mt-2">
-              <span className="font-semibold text-white">Organization ID:</span>{' '}
-              {request.orgId ?? 'Generated after submit'}
             </p>
             <p className="mt-2">
               <span className="font-semibold text-white">NDA status:</span>{' '}
@@ -665,12 +673,15 @@ export default function OrganizationOnboardingPage() {
                 readOnly
                 placeholder="your@company.com"
               />
-              <TextInput
-                label="Organization ID"
-                icon={<Building2 className="h-4 w-4" />}
-                value={request?.orgId ?? 'Generated after submit'}
-                readOnly
+              <PhoneField
+                label="Phone Number"
+                dialCode={phoneDial}
+                national={phoneNational}
+                onDialChange={handleDialChange}
+                onNationalChange={handleNationalChange}
+                error={fieldErrors.phone}
               />
+              {/* OTP on hold — provider not finalized.
               <PhoneField
                 label="Phone Number"
                 dialCode={phoneDial}
@@ -722,6 +733,7 @@ export default function OrganizationOnboardingPage() {
                 {otpMessage ? <p className="mt-2 text-xs text-green-400">{otpMessage}</p> : null}
                 {otpError ? <p className="mt-2 text-xs text-red-400">{otpError}</p> : null}
               </div>
+              */}
             </div>
           ) : null}
 

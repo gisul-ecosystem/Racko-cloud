@@ -12,6 +12,7 @@ export interface CreateBulkTenantUsersDto {
 export interface TenantUserProfile {
   id: string;
   email: string;
+  username: string | null;
   role: 'tenant_user';
   tenantId: string;
   isActive: boolean;
@@ -25,6 +26,7 @@ export interface BulkCreateTenantUsersResult {
     email: string;
     password: string;
     status: 'created' | 'failed';
+    userId?: string;
     error?: string;
   }>;
 }

@@ -9,7 +9,7 @@ export default function CreateProjectRedirectPage() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace('/console/projects');
+    router.replace('/console/projects?create=1');
   }, [router]);
 
   return (

@@ -27,6 +27,7 @@ import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   createProject,
   fetchProject,
+  fetchProjectClientNames,
   fetchProjectCostReport,
   fetchProjects,
   previewProjectName,
@@ -39,6 +40,7 @@ import {
 import {
   createTenantProject,
   fetchTenantEligibleProjectServices,
+  fetchTenantProjectClientNames,
   fetchTenantProject,
   fetchTenantProjectCostReport,
   fetchTenantProjects,
@@ -53,6 +55,7 @@ import {
   tenantAccentSelectedBox,
   tenantAccentText,
 } from '@/lib/tenantAccentStyles';
+import { ClientNameCombobox } from './ClientNameCombobox';
 
 const PAGE_SIZE = 4;
 const ORG_ACCENT = '#B91C1C';
@@ -74,6 +77,8 @@ interface CreateProjectInput {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
+  clientEmail?: string;
+  autoArchiveEnabled?: boolean;
 }
 
 interface AssignableServiceOption {
@@ -205,18 +210,14 @@ export function ProjectsListView({
   const [previewName, setPreviewName] = useState('');
   const [projectName, setProjectName] = useState('');
   const [clientName, setClientName] = useState('');
-  const [clientMode, setClientMode] = useState<'select' | 'new'>('select');
+  const [clientNames, setClientNames] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [clientEmail, setClientEmail] = useState('');
   const [availableServices, setAvailableServices] = useState<AssignableServiceOption[]>([]);
   const [selectedServices, setSelectedServices] = useState<AdminServiceKey[]>([]);
   const [createdProject, setCreatedProject] = useState<OrgProject | null>(null);
-
-  const existingClients = useMemo(
-    () => [...new Set(projects.map((p) => p.clientName).filter(Boolean))],
-    [projects]
-  );
 
   const serviceLabel = useCallback(
     (key: string) => {
@@ -269,6 +270,10 @@ export function ProjectsListView({
   }, []);
 
   const activeProjects = projects.filter((project) => project.status === 'active');
+  const archivedProjects = useMemo(
+    () => projects.filter((project) => project.status === 'archived'),
+    [projects]
+  );
   const totalSpend = costRows.reduce((sum, row) => sum + row.totalDebit, 0);
   const totalResources = projects.reduce(
     (total, project) =>
@@ -318,6 +323,16 @@ export function ProjectsListView({
 
   function openAllView() {
     setShowAll(true);
+    setStatusFilter('all');
+    setQuery('');
+    setPage(1);
+  }
+
+  function openArchivedView() {
+    setShowAll(true);
+    setStatusFilter('archived');
+    setQuery('');
+    setPage(1);
   }
 
   function openDashboardView() {
@@ -333,19 +348,30 @@ export function ProjectsListView({
     setModalError(null);
     setCreatedProject(null);
     setClientName('');
-    setClientMode('select');
     setDescription('');
     setStartDate('');
     setEndDate('');
+    setClientEmail('');
     setSelectedServices([]);
     try {
-      const [preview, services] = await Promise.all([
+      const loadClientNames = async (): Promise<string[]> => {
+        if (portal === 'tenant') {
+          const names = await fetchTenantProjectClientNames().catch(() => [] as string[]);
+          if (names.length > 0) return names;
+          return [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort();
+        }
+        return fetchProjectClientNames().catch(() => [] as string[]);
+      };
+
+      const [preview, services, names] = await Promise.all([
         api.namePreview(),
         api.assignableServices(),
+        loadClientNames(),
       ]);
       setPreviewName(preview.name);
       setProjectName(preview.name);
       setAvailableServices(services);
+      setClientNames(names);
     } catch (err) {
       setModalError(err instanceof ApiError ? err.message : 'Failed to prepare project form.');
     } finally {
@@ -389,6 +415,8 @@ export function ProjectsListView({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         enabledServices: selectedServices,
+        clientEmail: clientEmail.trim() || undefined,
+        autoArchiveEnabled: true,
       });
       let detailed = created;
       try {
@@ -456,11 +484,17 @@ export function ProjectsListView({
             </button>
           )}
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">
-            {showAll ? 'All Projects' : 'My Projects'}
+            {showAll
+              ? statusFilter === 'archived'
+                ? 'Archived Projects'
+                : 'All Projects'
+              : 'My Projects'}
           </h1>
           <p className="mt-1 text-sm text-gray-500">
             {showAll
-              ? 'Manage and organize all your cloud projects in one place.'
+              ? statusFilter === 'archived'
+                ? 'Review archived projects and restore them if needed.'
+                : 'Manage and organize all your cloud projects in one place.'
               : 'Create and manage your infrastructure projects.'}
           </p>
         </div>
@@ -558,9 +592,13 @@ export function ProjectsListView({
               {pageItems.length === 0 ? (
                 <div className="px-6 py-16 text-center">
                   <FolderKanban className="mx-auto h-10 w-10 text-gray-300" />
-                  <p className="mt-3 text-sm font-medium text-gray-900">No projects found</p>
+                  <p className="mt-3 text-sm font-medium text-gray-900">
+                    {statusFilter === 'archived' ? 'No archived projects' : 'No projects found'}
+                  </p>
                   <p className="mt-1 text-sm text-gray-500">
-                    Try a different search, or create a new project.
+                    {statusFilter === 'archived'
+                      ? 'Archived projects will appear here after you archive or auto-archive them.'
+                      : 'Try a different search, or create a new project.'}
                   </p>
                 </div>
               ) : (
@@ -709,13 +747,16 @@ export function ProjectsListView({
                       Open a project to launch services and review its spend.
                     </p>
                   </div>
-                  <Link
-                    href={api.reportsHref}
+                  <button
+                    type="button"
+                    onClick={openArchivedView}
                     className="inline-flex items-center gap-1 text-xs font-semibold hover:underline"
                     style={tenantAccentText(accent)}
                   >
-                    View reports <ArrowRight className="h-3.5 w-3.5" />
-                  </Link>
+                    View archived projects
+                    {archivedProjects.length > 0 ? ` (${archivedProjects.length})` : ''}
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1062,38 +1103,14 @@ export function ProjectsListView({
                         <label className="mb-1.5 block text-xs font-semibold text-gray-700">
                           Client Name <span className="text-red-500">*</span>
                         </label>
-                        <select
-                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
-                          style={accentFocus}
-                          value={clientMode === 'new' ? '__new__' : clientName}
-                          onChange={(e) => {
-                            if (e.target.value === '__new__') { setClientMode('new'); setClientName(''); }
-                            else { setClientMode('select'); setClientName(e.target.value); }
-                          }}
-                          onFocus={(e) => { e.currentTarget.style.borderColor = accent; }}
-                          onBlur={(e) => { e.currentTarget.style.borderColor = ''; }}
-                        >
-                          <option value="">Select a client…</option>
-                          {existingClients.map((c) => <option key={c} value={c}>{c}</option>)}
-                          <option disabled>────────────────</option>
-                          <option value="__new__">✚ Create new client</option>
-                        </select>
-                        {clientMode === 'new' && (
-                          <div className="mt-2 rounded-lg border border-[#B91C1C]/30 bg-red-50/40 p-2.5">
-                            <p className="mb-1.5 text-[11px] font-medium text-[#B91C1C]">New client name</p>
-                            <input
-                              value={clientName}
-                              onChange={(event) => setClientName(event.target.value)}
-                              required
-                              placeholder="e.g. Acme Corp"
-                              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none transition focus:ring-2"
-                              style={accentFocus}
-                              onFocus={(e) => { e.currentTarget.style.borderColor = accent; }}
-                              onBlur={(e) => { e.currentTarget.style.borderColor = ''; }}
-                              autoFocus
-                            />
-                          </div>
-                        )}
+                        <ClientNameCombobox
+                          value={clientName}
+                          onChange={setClientName}
+                          clientNames={clientNames}
+                          required
+                          disabled={modalSaving}
+                          placeholder="e.g. Acme Corp"
+                        />
                         <p className="mt-1 text-[11px] text-gray-400">
                           The client this project belongs to.
                         </p>
@@ -1166,6 +1183,24 @@ export function ProjectsListView({
                         />
                         <p className="mt-1 text-[11px] text-gray-400">When does this project end?</p>
                       </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        Client email{' '}
+                        <span className="font-normal text-gray-400">(optional)</span>
+                      </label>
+                      <input
+                        type="email"
+                        value={clientEmail}
+                        onChange={(e) => setClientEmail(e.target.value)}
+                        placeholder="client@example.com"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                        style={accentFocus}
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">
+                        Sent a project expiry notice 24 hours before the end date.
+                      </p>
                     </div>
                   </div>
                 </div>

@@ -5,9 +5,16 @@ import type {
   ProjectNamePreview,
   ProjectReportByProjectRow,
   ProjectReportByServiceRow,
+  ProjectSupportAgent,
 } from './projectsApi';
 
-export type { OrgProject, ProjectNamePreview, ProjectReportByProjectRow, ProjectReportByServiceRow };
+export type {
+  OrgProject,
+  ProjectNamePreview,
+  ProjectReportByProjectRow,
+  ProjectReportByServiceRow,
+  ProjectSupportAgent,
+};
 export { PROJECT_SERVICE_LABELS } from './projectsApi';
 
 interface ApiEnvelope<T> {
@@ -46,8 +53,34 @@ export async function fetchTenantProject(id: string): Promise<OrgProject> {
   return data.project;
 }
 
+export interface TenantProjectElasticResource {
+  id: string;
+  name: string;
+  ipAddress: string;
+  username: string;
+  protocol: string;
+  assignedUsers: Array<{ email: string | null; username: string | null }>;
+}
+
+export async function fetchTenantProjectElasticResources(
+  projectId: string
+): Promise<TenantProjectElasticResource[]> {
+  const data = await unwrap<{
+    resources: TenantProjectElasticResource[];
+    total: number;
+  }>(tenantPortalRequest(`${BASE}/${projectId}/resources/elastic-servers`));
+  return data.resources;
+}
+
 export async function previewTenantProjectName(): Promise<ProjectNamePreview> {
   return unwrap(tenantPortalRequest(`${BASE}/name-preview`));
+}
+
+export async function fetchTenantProjectClientNames(): Promise<string[]> {
+  const data = await unwrap<{ clientNames: string[] }>(
+    tenantPortalRequest(`${BASE}/client-names`)
+  );
+  return data.clientNames;
 }
 
 export async function fetchTenantEligibleProjectServices(): Promise<AdminServiceKey[]> {
@@ -64,6 +97,8 @@ export async function createTenantProject(input: {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
+  clientEmail?: string;
+  autoArchiveEnabled?: boolean;
 }): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     tenantPortalRequest(`${BASE}`, {
@@ -74,9 +109,25 @@ export async function createTenantProject(input: {
   return data.project;
 }
 
+export async function fetchTenantProjectSupportAgents(): Promise<ProjectSupportAgent[]> {
+  const data = await unwrap<{ agents: ProjectSupportAgent[] }>(
+    tenantPortalRequest(`${BASE}/support-agents`)
+  );
+  return data.agents;
+}
+
 export async function updateTenantProject(
   id: string,
-  input: { name?: string; clientName?: string; description?: string | null; startDate?: string | null; endDate?: string | null }
+  input: {
+    name?: string;
+    clientName?: string;
+    description?: string | null;
+    startDate?: string | null;
+    endDate?: string | null;
+    clientEmail?: string | null;
+    autoArchiveEnabled?: boolean;
+    supportAgentId?: string | null;
+  }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     tenantPortalRequest(`${BASE}/${id}`, {
@@ -115,6 +166,13 @@ export async function removeTenantProjectService(
 export async function archiveTenantProject(id: string): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     tenantPortalRequest(`${BASE}/${id}/archive`, { method: 'POST' })
+  );
+  return data.project;
+}
+
+export async function unarchiveTenantProject(id: string): Promise<OrgProject> {
+  const data = await unwrap<{ project: OrgProject }>(
+    tenantPortalRequest(`${BASE}/${id}/unarchive`, { method: 'POST' })
   );
   return data.project;
 }

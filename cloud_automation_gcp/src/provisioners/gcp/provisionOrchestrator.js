@@ -1,6 +1,6 @@
 import Request from '../../models/Request.js';
 import {
-  createLabProject,
+  resolveLabProject,
   createIdentityUsers,
   assignProjectIamRoles,
   sendCredentialsEmail,
@@ -43,7 +43,7 @@ export async function run(requestId) {
       'Create GCP project',
       1,
       () =>
-        createLabProject({
+        resolveLabProject({
           displayName: request.projectName,
           requestId: String(request._id),
         })
@@ -64,6 +64,7 @@ export async function run(requestId) {
           accountCount: request.accountCount,
           projectId: project.projectId,
           idMode: request.idMode,
+          requestId: String(request._id),
         })
     );
 

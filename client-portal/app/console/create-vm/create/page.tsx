@@ -11,6 +11,7 @@ import {
   type VmCatalogCategory,
 } from '../../../../lib/vmCatalogApi';
 import { ProjectSelect } from '../../../../components/console/ProjectSelect';
+import { CreateProjectModal } from '../../../../components/console/CreateProjectModal';
 
 const OS_OPTIONS: { id: VmCatalogCategory; label: string }[] = [
   { id: 'ubuntu', label: 'Ubuntu' },
@@ -129,6 +130,8 @@ export default function CreateVmPage() {
   const [billing, setBilling] = useState<BillingKey>('monthly');
   const [quantity, setQuantity] = useState('1');
   const [projectId, setProjectId] = useState('');
+  const [projectRefreshKey, setProjectRefreshKey] = useState(0);
+  const [cpOpen, setCpOpen] = useState(false);
   const [softwareMode, setSoftwareMode] = useState<'skip' | 'select'>('skip');
   const [selectedSoftwareIds, setSelectedSoftwareIds] = useState<string[]>([]);
   const [softwareOptions, setSoftwareOptions] = useState<CatalogSoftwareOption[]>([]);
@@ -519,6 +522,8 @@ export default function CreateVmPage() {
                       onChange={setProjectId}
                       disabled={buyLoading}
                       portal={projectPortal}
+                      onCreateProject={() => setCpOpen(true)}
+                      refreshKey={projectRefreshKey}
                     />
                   ) : null}
 
@@ -762,6 +767,18 @@ export default function CreateVmPage() {
           </div>
         </div>
       ) : null}
+
+      <CreateProjectModal
+        open={cpOpen}
+        onClose={() => setCpOpen(false)}
+        portal={projectPortal}
+        preselectedServices={['create-vm']}
+        lockServices
+        onCreated={(project) => {
+          setProjectId(project.id);
+          setProjectRefreshKey((k) => k + 1);
+        }}
+      />
     </div>
   );
 }

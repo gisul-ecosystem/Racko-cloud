@@ -34,3 +34,13 @@ export function parseCidr(cidr: string): string[] {
   }
   return ips;
 }
+
+/** Trim and canonicalize IPv4 strings so 010.001.002.003 and 10.1.2.3 match. */
+export function normalizeCanonicalIpv4(ipAddress: string): string {
+  const trimmed = ipAddress.trim();
+  const parts = trimmed.split('.');
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/.test(part))) {
+    return trimmed;
+  }
+  return parts.map((part) => String(parseInt(part, 10))).join('.');
+}

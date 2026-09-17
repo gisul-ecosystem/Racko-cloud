@@ -5,7 +5,10 @@ export type NotificationType =
   | 'tenant_order'
   | 'vm_plan_expired'
   | 'catalog_vm_request'
-  | 'dedicated_server_request';
+  | 'dedicated_server_request'
+  | 'project_expiring_soon'
+  | 'project_grace_period'
+  | 'project_archived';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 export interface INotification extends Document {
@@ -39,6 +42,9 @@ const notificationSchema = new Schema<INotification>(
         'vm_plan_expired',
         'catalog_vm_request',
         'dedicated_server_request',
+        'project_expiring_soon',
+        'project_grace_period',
+        'project_archived',
       ],
       required: true,
     },

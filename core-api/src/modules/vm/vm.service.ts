@@ -1582,13 +1582,11 @@ export class VMService {
     return { success: true, vmid: vm.vmid, node: vm.node, operation, taskId: finalUpid };
   }
 
-  async startVM(
+  private async prepareStartVM(
     vmId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
     req: Request
-  ): Promise<VMOperationResult> {
-    const ip = getClientIp(req);
-    const ua = getUserAgent(req);
+  ): Promise<IVM> {
     const authReq = req as AuthenticatedRequest;
 
     const vm = await VM.findById(vmId);
@@ -1603,7 +1601,36 @@ export class VMService {
       throw new VMOperationError('VM is already running.', vm.status, 'stopped');
     }
 
+    return vm;
+  }
+
+  async startVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<VMOperationResult> {
+    const ip = getClientIp(req);
+    const ua = getUserAgent(req);
+    const vm = await this.prepareStartVM(vmId, adminId, req);
     return this.powerOnStoppedVm(vm, adminId, { ipAddress: ip, userAgent: ua });
+  }
+
+  /**
+   * Public API: validate synchronously, run Proxmox power op in the background.
+   */
+  async acceptPublicStartVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ status: 'accepted'; vmId: string; operation: 'start' }> {
+    await this.prepareStartVM(vmId, adminId, req);
+    void this.startVM(vmId, adminId, req).catch((err: unknown) => {
+      logger.error('[PublicAPI] Background VM start failed', {
+        vmId: vmId.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    return { status: 'accepted', vmId: vmId.toString(), operation: 'start' };
   }
 
   /**
@@ -1695,13 +1722,11 @@ export class VMService {
   /**
    * Stop a VM (graceful shutdown).
    */
-  async stopVM(
+  private async prepareStopVM(
     vmId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
     req: Request
-  ): Promise<VMOperationResult> {
-    const ip = getClientIp(req);
-    const ua = getUserAgent(req);
+  ): Promise<IVM> {
     const authReq = req as AuthenticatedRequest;
 
     const vm = await VM.findById(vmId);
@@ -1716,12 +1741,39 @@ export class VMService {
       throw new VMOperationError('VM is already stopped.', vm.status, 'running');
     }
 
+    return vm;
+  }
+
+  async stopVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<VMOperationResult> {
+    const ip = getClientIp(req);
+    const ua = getUserAgent(req);
+    const vm = await this.prepareStopVM(vmId, adminId, req);
+
     const { taskId } = await this.gracefulShutdownVm(vm, adminId, {
       ipAddress: ip,
       userAgent: ua,
     });
 
     return { success: true, vmid: vm.vmid, node: vm.node, operation: 'stop', taskId };
+  }
+
+  async acceptPublicStopVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ status: 'accepted'; vmId: string; operation: 'stop' }> {
+    await this.prepareStopVM(vmId, adminId, req);
+    void this.stopVM(vmId, adminId, req).catch((err: unknown) => {
+      logger.error('[PublicAPI] Background VM stop failed', {
+        vmId: vmId.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    return { status: 'accepted', vmId: vmId.toString(), operation: 'stop' };
   }
 
   /**
@@ -1870,13 +1922,11 @@ export class VMService {
   /**
    * Restart a VM (graceful reboot).
    */
-  async restartVM(
+  private async prepareRestartVM(
     vmId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
     req: Request
-  ): Promise<VMOperationResult> {
-    const ip = getClientIp(req);
-    const ua = getUserAgent(req);
+  ): Promise<IVM> {
     const authReq = req as AuthenticatedRequest;
 
     const vm = await VM.findById(vmId);
@@ -1890,6 +1940,18 @@ export class VMService {
     if (vm.status !== 'running') {
       throw new VMOperationError('VM must be running to restart.', vm.status, 'running');
     }
+
+    return vm;
+  }
+
+  async restartVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<VMOperationResult> {
+    const ip = getClientIp(req);
+    const ua = getUserAgent(req);
+    const vm = await this.prepareRestartVM(vmId, adminId, req);
 
     const response = await proxmoxClient.post<{ data: string }>(
       `/nodes/${vm.node}/qemu/${vm.vmid}/status/reboot`,
@@ -1930,6 +1992,21 @@ export class VMService {
     });
 
     return { success: true, vmid: vm.vmid, node: vm.node, operation: 'restart', taskId: upid };
+  }
+
+  async acceptPublicRestartVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ status: 'accepted'; vmId: string; operation: 'restart' }> {
+    await this.prepareRestartVM(vmId, adminId, req);
+    void this.restartVM(vmId, adminId, req).catch((err: unknown) => {
+      logger.error('[PublicAPI] Background VM restart failed', {
+        vmId: vmId.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    return { status: 'accepted', vmId: vmId.toString(), operation: 'restart' };
   }
 
   /**
@@ -3498,6 +3575,46 @@ export class VMService {
       clientUrl: session.clientUrl,
       connectionId: session.connectionId,
     };
+  }
+
+  /**
+   * Kill live Guacamole tunnels for this VM (server-side disconnect).
+   * Same auth as openConsole; idempotent when no tunnels remain.
+   */
+  async closeConsole(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ killed: number }> {
+    const authReq = req as AuthenticatedRequest;
+
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    if (authReq.user.role === 'user') {
+      const access = await assertVmAccessibleForUser(vm, authReq.user.userId, 'user');
+      if (!access.allowed) {
+        throw new AccessWindowDeniedError(
+          access.error || 'Access denied: outside scheduled window.',
+          access.nextWindow ?? null
+        );
+      }
+    }
+
+    const connectionName = `vm-${vmId.toString()}`;
+    const killed = await guacamoleClient.killSessionsForConnectionNameWithRetry(connectionName, {
+      throwOnPersistentFailure: false,
+    });
+
+    logger.info('[VMConsole] Guacamole sessions closed', {
+      userId: authReq.user.userId,
+      vmId: vmId.toString(),
+      connectionName,
+      killed,
+    });
+
+    return { killed };
   }
 }
 

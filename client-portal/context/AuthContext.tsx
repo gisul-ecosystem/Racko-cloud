@@ -23,8 +23,9 @@ import {
   hasExecutiveHomeRole,
   SUPER_ADMIN_OVERVIEW_PATH,
 } from '../lib/rbacApi';
+import { isTenantWorkspacePath } from '../lib/portalMode';
 
-export type UserRole = 'super_admin' | 'staff' | 'admin' | 'user';
+export type UserRole = 'super_admin' | 'staff' | 'admin' | 'support_agent' | 'user';
 export type AccountType = 'legacy' | 'b2c' | 'b2b';
 export type OnboardingStatus =
   | 'active'
@@ -114,6 +115,7 @@ function getPostLoginRoute(user: AuthUser): string {
   }
 
   if (user.role === 'super_admin' || user.role === 'staff') return '/super-admin-console';
+  if (user.role === 'support_agent') return '/support-agent';
   if (user.role === 'admin') return '/console';
   return '/dashboard/user';
 }
@@ -186,6 +188,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearAccessToken();
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     setState({ user: null, isLoading: false, isAuthenticated: false });
+    // Tenant workspace uses its own JWT in sessionStorage — never hijack to platform login.
+    if (
+      typeof window !== 'undefined' &&
+      isTenantWorkspacePath(window.location.pathname)
+    ) {
+      return;
+    }
     // Full navigation so middleware sees the cleared refreshToken cookie
     window.location.replace('/login');
   }, []);
@@ -282,6 +291,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             (decoded.startsWith('/console') ||
               decoded.startsWith('/dashboard') ||
               decoded.startsWith('/super-admin-console') ||
+              decoded.startsWith('/support-agent') ||
               decoded.startsWith('/onboarding') ||
               decoded === '/request' ||
               decoded.startsWith('/status/'))

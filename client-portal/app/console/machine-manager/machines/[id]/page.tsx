@@ -9,13 +9,14 @@ import { ApiError } from '../../../../../lib/apiClient';
 import {
   fetchMachine,
   createJobs,
-  fetchJobs,
+  fetchMachineJobs,
   fetchMachines,
   deleteMachine,
   execCommand,
   resetMachines,
   issueResetStreamTicket,
-  openResetStatusStream,
+  openResetStatusStreamWithReconnect,
+  clearMachineJobs,
   type IMachine,
   type MachineStatus,
   type IJob,
@@ -138,7 +139,7 @@ function LiveJobEntry({ job: initialJob, isAuthenticated, onViewLogs }: {
 export default function MachineDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
   const { addToast, toasts, dismiss } = useToast();
   const { catalog, loading: catalogLoading } = useSoftwareCatalog(isAuthenticated);
 
@@ -156,7 +157,10 @@ export default function MachineDetailPage() {
   const [resetting, setResetting] = useState(false);
   const [resetStatus, setResetStatus] = useState<'idle' | 'resetting' | 'success' | 'failed'>('idle');
   const [resetError, setResetError] = useState<string>('');
-  const sseRef = useRef<EventSource | null>(null);
+  const sseRef = useRef<EventSource | (() => void) | null>(null);
+
+  // Clear logs state
+  const [clearingLogs, setClearingLogs] = useState(false);
 
   // Terminal tabs state — each tab is an independent terminal session
   interface TerminalEntry { command: string; output: string; exitCode: number; ts: string }
@@ -191,12 +195,12 @@ export default function MachineDetailPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [m, allJobs] = await Promise.all([
+      const [m, machineJobs] = await Promise.all([
         fetchMachine(id),
-        fetchJobs(),
+        fetchMachineJobs(id),
       ]);
       setMachine(m);
-      setJobs(allJobs.filter((j) => j.machineId === id));
+      setJobs(machineJobs);
     } catch {
       addToast('error', 'Failed to load machine.');
     } finally {
@@ -205,8 +209,8 @@ export default function MachineDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    if (isAuthenticated) void load();
-  }, [load, isAuthenticated]);
+    if (!authLoading && isAuthenticated) void load();
+  }, [load, isAuthenticated, authLoading]);
 
   const toggle = (swId: string) =>
     setSelected((prev) => prev.includes(swId) ? prev.filter((s) => s !== swId) : [...prev, swId]);
@@ -237,8 +241,12 @@ export default function MachineDetailPage() {
     }
   };
 
-  // Cleanup SSE on unmount
-  useEffect(() => () => { sseRef.current?.close(); }, []);
+  // Cleanup SSE on unmount — handles both EventSource (.close) and stop function (call directly)
+  useEffect(() => () => {
+    const ref = sseRef.current;
+    if (typeof ref === 'function') ref();
+    else ref?.close();
+  }, []);
 
   const handleReset = async () => {
     if (!machine) return;
@@ -258,42 +266,49 @@ export default function MachineDetailPage() {
         return;
       }
 
-      // Open SSE stream to track completion
+      // Issue a reusable stream ticket (valid for 15 minutes — survives reconnects).
       const ticket = await issueResetStreamTicket(sessionId);
-      const sse = openResetStatusStream(sessionId, ticket.streamToken);
-      sseRef.current = sse;
 
-      sse.onmessage = (e: MessageEvent) => {
-        const event = JSON.parse(e.data as string) as {
-          type: string;
-          machineId?: string;
-          success?: boolean;
-          error?: string;
-        };
-        if (event.type === 'reset_complete') {
-          sse.close();
-          sseRef.current = null;
-          if (event.success) {
-            setResetStatus('success');
-            addToast('success', `"${machine.name}" reset successfully.`);
-            // Reload page data — jobs cleared, machine fresh
-            setTimeout(() => void load(), 1500);
-          } else {
-            setResetStatus('failed');
-            setResetError(event.error ?? 'Reset failed.');
-            addToast('error', `Reset failed: ${event.error ?? 'Unknown error'}`);
+      // Use the reconnecting stream instead of plain EventSource.
+      // The reset script kills VM processes which can briefly drop the connection.
+      // openResetStatusStreamWithReconnect retries with exponential backoff (up to 10×)
+      // and on each reconnect the server replays the persisted result from MongoDB
+      // instantly — so even if the reset finished while disconnected, we get the result.
+      const stop = openResetStatusStreamWithReconnect(
+        sessionId,
+        ticket.streamToken,
+        // onEvent — called for each reset_complete event (deduplicated on reconnect)
+        (event) => {
+          if (event.type === 'reset_complete') {
+            if (event.success) {
+              setResetStatus('success');
+              addToast('success', `"${machine.name}" reset successfully.`);
+              setTimeout(() => void load(), 1500);
+            } else {
+              setResetStatus('failed');
+              setResetError(event.error ?? 'Reset failed.');
+              addToast('error', `Reset failed: ${event.error ?? 'Unknown error'}`);
+            }
+            setResetting(false);
+            sseRef.current = null;
           }
+        },
+        // onTerminal — all done cleanly, stream stopped
+        () => {
+          sseRef.current = null;
           setResetting(false);
-        }
-      };
+        },
+        // onGiveUp — all 10 retries exhausted (~5 minutes) without a result
+        () => {
+          sseRef.current = null;
+          setResetting(false);
+          setResetStatus('failed');
+          setResetError('Connection lost after multiple retries. The reset may have completed — check the machine status.');
+        },
+        1, // expectedCount — single machine
+      );
 
-      sse.onerror = () => {
-        sse.close();
-        sseRef.current = null;
-        setResetStatus('failed');
-        setResetError('Lost connection to agent.');
-        setResetting(false);
-      };
+      sseRef.current = stop;
     } catch (err) {
       setResetStatus('failed');
       setResetError(err instanceof ApiError ? err.message : 'Failed to initiate reset.');
@@ -329,6 +344,20 @@ export default function MachineDetailPage() {
     terminalBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeTab?.history]);
 
+  const handleClearLogs = async () => {
+    if (!machine || clearingLogs) return;
+    setClearingLogs(true);
+    try {
+      await clearMachineJobs(machine._id);
+      setJobs([]);
+      addToast('success', 'Logs cleared.');
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to clear logs.');
+    } finally {
+      setClearingLogs(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -361,19 +390,6 @@ export default function MachineDetailPage() {
         />
       )}
 
-      {showResetConfirm && machine && (
-        <ConfirmModal
-          open
-          title="Reset VM"
-          description={`This will uninstall all user-installed software from "${machine.name}". This cannot be undone.`}
-          confirmLabel="Reset VM"
-          confirmVariant="danger"
-          loading={resetting}
-          onConfirm={() => void handleReset()}
-          onCancel={() => setShowResetConfirm(false)}
-        />
-      )}
-
       {/* Back */}
       <Link href="/console/machine-manager/machines"
         className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
@@ -397,17 +413,6 @@ export default function MachineDetailPage() {
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </button>
           <button
-            onClick={() => setShowResetConfirm(true)}
-            disabled={resetting || machine.status !== 'online'}
-            title={machine.status !== 'online' ? 'Agent must be online to reset' : 'Reset VM — removes all user-installed software'}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 transition hover:bg-orange-100 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {resetting
-              ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Resetting…</>
-              : <><RotateCcw className="h-3.5 w-3.5" /> Reset VM</>
-            }
-          </button>
-          <button
             onClick={() => setShowRemoveConfirm(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
           >
@@ -415,29 +420,6 @@ export default function MachineDetailPage() {
           </button>
         </div>
       </div>
-
-      {/* Reset status banner */}
-      {resetStatus !== 'idle' && (
-        <div className={`mb-4 flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
-          resetStatus === 'resetting' ? 'border-blue-200 bg-blue-50 text-blue-700'
-          : resetStatus === 'success' ? 'border-green-200 bg-green-50 text-green-700'
-          : 'border-red-200 bg-red-50 text-red-700'
-        }`}>
-          {resetStatus === 'resetting' && <Loader2 className="h-4 w-4 animate-spin shrink-0" />}
-          {resetStatus === 'success' && <CheckCircle2 className="h-4 w-4 shrink-0" />}
-          {resetStatus === 'failed' && <X className="h-4 w-4 shrink-0" />}
-          <span>
-            {resetStatus === 'resetting' && 'Reset in progress — this may take a few minutes...'}
-            {resetStatus === 'success' && 'VM reset successfully. All user-installed software has been removed.'}
-            {resetStatus === 'failed' && `Reset failed: ${resetError}`}
-          </span>
-          {(resetStatus === 'success' || resetStatus === 'failed') && (
-            <button onClick={() => setResetStatus('idle')} className="ml-auto shrink-0 hover:opacity-70">
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      )}
 
       {/* Machine info */}
       <div className="mb-6 rounded-xl border border-gray-200 bg-white p-5">
@@ -479,6 +461,17 @@ export default function MachineDetailPage() {
             <Package className="h-4 w-4 text-gray-400" />
             <h2 className="text-sm font-semibold text-gray-700">Installation History</h2>
             <span className="ml-auto text-xs text-gray-400">{jobs.length} job{jobs.length !== 1 ? 's' : ''}</span>
+            <button
+              onClick={() => void handleClearLogs()}
+              disabled={clearingLogs}
+              className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:opacity-40"
+            >
+              {clearingLogs
+                ? <RefreshCw className="h-3 w-3 animate-spin" />
+                : <Trash2 className="h-3 w-3" />
+              }
+              Clear Logs
+            </button>
           </div>
           <table className="w-full text-sm">
             <thead>

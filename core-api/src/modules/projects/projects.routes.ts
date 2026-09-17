@@ -18,12 +18,29 @@ import {
   projectReportsQuerySchema,
   removeProjectServiceSchema,
   tenantIdParamSchema,
+  tenantProjectParamSchema,
   updateProjectSchema,
 } from './projects.validation';
 
 const router = Router();
 
 router.use(requireAuth);
+
+router.get(
+  '/support-agent-preview',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    projectsController.supportAgentPreview(req, res, next);
+  }
+);
+
+router.get(
+  '/support-agents-list',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    projectsController.supportAgentsList(req, res, next);
+  }
+);
 
 /** Super-admin: manage projects for an organization owner */
 router.get(
@@ -89,6 +106,42 @@ router.post(
   }
 );
 
+router.patch(
+  '/admins/:adminId/:projectId',
+  requirePermission('admin_users.manage'),
+  validateRequest(adminProjectParamSchema),
+  (req, res, next) => {
+    projectsController.updateForAdmin(req, res, next);
+  }
+);
+
+router.post(
+  '/admins/:adminId/:projectId/archive',
+  requirePermission('admin_users.manage'),
+  validateRequest(adminProjectParamSchema),
+  (req, res, next) => {
+    projectsController.archiveForAdmin(req, res, next);
+  }
+);
+
+router.post(
+  '/admins/:adminId/:projectId/unarchive',
+  requirePermission('admin_users.manage'),
+  validateRequest(adminProjectParamSchema),
+  (req, res, next) => {
+    projectsController.unarchiveForAdmin(req, res, next);
+  }
+);
+
+router.delete(
+  '/admins/:adminId/:projectId',
+  requirePermission('admin_users.manage'),
+  validateRequest(adminProjectParamSchema),
+  (req, res, next) => {
+    projectsController.deleteForAdmin(req, res, next);
+  }
+);
+
 /** Super-admin: manage projects for a white-label tenant */
 router.get(
   '/tenants/:tenantId',
@@ -117,6 +170,15 @@ router.get(
   }
 );
 
+router.get(
+  '/tenants/:tenantId/client-names',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantIdParamSchema),
+  (req, res, next) => {
+    projectsController.listClientNamesForTenant(req, res, next);
+  }
+);
+
 router.post(
   '/tenants/:tenantId',
   requirePermission('white_labelling.manage'),
@@ -132,6 +194,51 @@ router.post(
   validateRequest(addProjectServicesForTenantSchema),
   (req, res, next) => {
     projectsController.addServicesForTenantSuperAdmin(req, res, next);
+  }
+);
+
+router.get(
+  '/tenants/:tenantId/:projectId',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
+  (req, res, next) => {
+    projectsController.getByIdForTenantSuperAdmin(req, res, next);
+  }
+);
+
+router.patch(
+  '/tenants/:tenantId/:projectId',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
+  (req, res, next) => {
+    projectsController.updateForTenantSuperAdmin(req, res, next);
+  }
+);
+
+router.post(
+  '/tenants/:tenantId/:projectId/archive',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
+  (req, res, next) => {
+    projectsController.archiveForTenantSuperAdmin(req, res, next);
+  }
+);
+
+router.post(
+  '/tenants/:tenantId/:projectId/unarchive',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
+  (req, res, next) => {
+    projectsController.unarchiveForTenantSuperAdmin(req, res, next);
+  }
+);
+
+router.delete(
+  '/tenants/:tenantId/:projectId',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
+  (req, res, next) => {
+    projectsController.deleteForTenantSuperAdmin(req, res, next);
   }
 );
 
@@ -167,6 +274,14 @@ router.get('/for-service/:serviceKey', (req, res, next) => {
   projectsController.listForService(req, res, next);
 });
 
+router.get('/client-names', requirePlatformPermission('projects.read'), (req, res, next) => {
+  projectsController.listClientNames(req, res, next);
+});
+
+router.get('/support-agents', requirePlatformPermission('projects.manage'), (req, res, next) => {
+  projectsController.listSupportAgents(req, res, next);
+});
+
 router.get('/', requirePlatformPermission('projects.read'), (req, res, next) => {
   projectsController.list(req, res, next);
 });
@@ -177,6 +292,24 @@ router.post(
   validateRequest(createProjectSchema),
   (req, res, next) => {
     projectsController.create(req, res, next);
+  }
+);
+
+router.get(
+  '/:id/resources/elastic-servers',
+  requirePlatformPermission('projects.read'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    projectsController.listElasticResources(req, res, next);
+  }
+);
+
+router.get(
+  '/:id/support-tickets',
+  requirePlatformPermission('projects.read'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    projectsController.listSupportTickets(req, res, next);
   }
 );
 
@@ -222,6 +355,15 @@ router.post(
   validateRequest(projectIdParamSchema),
   (req, res, next) => {
     projectsController.archive(req, res, next);
+  }
+);
+
+router.post(
+  '/:id/unarchive',
+  requirePlatformPermission('projects.manage'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    projectsController.unarchive(req, res, next);
   }
 );
 

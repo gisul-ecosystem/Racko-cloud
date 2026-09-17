@@ -9,6 +9,7 @@ import { VmCatalogPlan } from '../../models/vmCatalogPlan.model';
 import { ProjectModel } from '../../models/project.model';
 import { User } from '../../models/user.model';
 import { TenantUser } from '../../models/tenantUser.model';
+import { Tenant } from '../../models/tenant.model';
 import { TenantNotification } from '../../models/tenantNotification.model';
 import { Notification } from '../notification/notification.model';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
@@ -18,6 +19,9 @@ import { projectsService } from '../projects/projects.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
+import { config } from '../../config';
+import { sendCatalogVmExpiryWarningEmail } from '../../utils/email/sender';
+import { inventoryExternalVmMirrorService } from '../vmInventory/inventoryExternalVmMirror.service';
 import {
   callCatalogAgentPurchase,
   callCatalogAgentScrape,
@@ -25,17 +29,35 @@ import {
   callCatalogAgentPower,
 } from './catalogAgentClient';
 import type { CatalogAgentError, CatalogPowerAction } from './catalogAgentClient';
+
+export type CatalogVmPowerAction = CatalogPowerAction | 'terminate';
 import {
-  selectProvider as resellerSelect,
+  type ResellerSelectResult,
   provisionVm as resellerProvision,
   terminateVm as resellerTerminate,
+  powerVm as resellerPowerVm,
+  getAzureProvisionReady,
+  type AzureProvisionReadyStatus,
+  listAzureSubscriptionLocations,
+  searchAzureMarketplaceImages,
+  listAzureImageSkuPlans,
+  validateAzureVmImage,
+  validateAzureProvisionQuote,
+  validateAzureCustomImage,
+  searchAzureCustomImages,
+  listAzurePlacementOptions,
 } from './resellerClient';
 import {
   stripProviderLeakFields,
   resolveDurationDays,
   specsToCanonicalSpec,
+  planDimensionsToCanonicalSpec,
+  projectAzureResourceGroupName,
   computeExpiresAt,
+  computeExpiresFrom,
+  hasFixedProviderTerm,
   isAutoCloudProvider,
+  inferCategoryFromOsLabel,
   type CatalogVmCallerRole,
 } from './catalogVmSerializer';
 import { guacamoleClient } from '../../utils/guacamoleClient';
@@ -49,7 +71,11 @@ import { customerDisplayName } from './vmCatalogPlan.service';
 import { catalogPricingBucket, needsOsTemplateChange } from './webynePlanRouting';
 import { SoftwareCatalogModel } from '../software-catalog/software-catalog.model';
 import { resolveSoftwareIconUrl } from '../software-catalog/software-catalog.icons';
+import { JobModel } from '../machine-manager/machine-manager.model';
 import { randomUUID } from 'crypto';
+
+const AGENT_ONLINE_WAIT_TIMEOUT_MS = 15 * 60 * 1000;
+const AGENT_ONLINE_WAIT_POLL_MS = 4000;
 
 const GST_RATE = 0.18;
 
@@ -60,8 +86,28 @@ function catalogCategoryToMachineOs(
 }
 const BILLING_PERIODS = ['hourly', 'monthly', 'quarterly', 'yearly'] as const;
 
+function portalBaseUrl(): string {
+  return config.FRONTEND_URL.replace(/\/$/, '');
+}
+
 function roundMoney(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Webyne manual attach flow — no reseller /api/select call on Buy Now. */
+function defaultWebyneManualSelection(
+  category: string,
+  canonicalSpec: string
+): ResellerSelectResult {
+  return {
+    provider: 'webyne',
+    region: null,
+    category,
+    canonicalSpec,
+    rawTotalPricePerHr: null,
+    autoProvisioned: false,
+    reason: 'webyne_manual_flow',
+  };
 }
 
 export interface CatalogVmConsoleSession {
@@ -91,6 +137,237 @@ const OPEN_FOR_SUPER_ADMIN: VmCatalogStatus[] = [
 const WINDOWS_ATTACH_DELAY_MS = 12 * 60 * 1000;
 
 class VmCatalogService {
+  private async waitForMachineAgentOnline(machineId: string): Promise<void> {
+    const { MachineModel } = await import('../machine-manager/machine-manager.model');
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < AGENT_ONLINE_WAIT_TIMEOUT_MS) {
+      const doc = await MachineModel.findById(machineId)
+        .select('status agentId')
+        .lean();
+      const isOnline = doc?.status === 'online';
+      const hasAgentId = Boolean(doc?.agentId);
+      if (isOnline && hasAgentId) return;
+
+      await new Promise((resolve) => setTimeout(resolve, AGENT_ONLINE_WAIT_POLL_MS));
+    }
+
+    throw new Error('Agent did not come online within 15 minutes after push.');
+  }
+
+  private postReadyStageLabel(stage: NonNullable<CatalogVmResponse['postReadyStage']>): string {
+    switch (stage) {
+      case 'not_requested':
+        return 'Not requested';
+      case 'agent_pushing':
+        return 'Agent pushing';
+      case 'agent_waiting_online':
+        return 'Waiting for agent online';
+      case 'agent_online':
+        return 'Agent online';
+      case 'software_queued':
+        return 'Software queued';
+      case 'software_installing':
+        return 'Software installing';
+      case 'software_done':
+        return 'Software completed';
+      case 'failed':
+      default:
+        return 'Failed';
+    }
+  }
+
+  private async resolvePostReadyJobSummary(
+    docs: ICatalogVm[]
+  ): Promise<
+    Map<
+      string,
+      {
+        status: 'none' | 'pending' | 'running' | 'done' | 'failed';
+        total: number;
+        done: number;
+        failed: number;
+        running: number;
+        pending: number;
+        stage: NonNullable<CatalogVmResponse['postReadyStage']>;
+        stageLabel: string;
+        machineStatus?: 'pending' | 'online' | 'offline';
+        agentConnected?: boolean;
+        runningSoftware: string[];
+        pendingSoftware: string[];
+      }
+    >
+  > {
+    const machineIds = [
+      ...new Set(
+        docs
+          .map((d) => d.machineId?.toString())
+          .filter((id): id is string => Boolean(id) && mongoose.Types.ObjectId.isValid(id!))
+      ),
+    ];
+    if (machineIds.length === 0) return new Map();
+
+    const jobs = await JobModel.find({
+      machineId: { $in: machineIds.map((id) => new mongoose.Types.ObjectId(id)) },
+    })
+      .select('machineId status softwareIds')
+      .lean();
+
+    const { MachineModel } = await import('../machine-manager/machine-manager.model');
+    const machineDocs = await MachineModel.find({
+      _id: { $in: machineIds.map((id) => new mongoose.Types.ObjectId(id)) },
+    })
+      .select('_id status agentId')
+      .lean();
+
+    const machineById = new Map(
+      machineDocs.map((m) => [m._id.toString(), m])
+    );
+
+    const softwareIds = [
+      ...new Set(
+        jobs
+          .flatMap((job) => job.softwareIds ?? [])
+          .map((id) => id.toString())
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      ),
+    ];
+    const softwareById = new Map<string, string>();
+    if (softwareIds.length > 0) {
+      const softwareRows = await SoftwareCatalogModel.find({
+        _id: { $in: softwareIds.map((id) => new mongoose.Types.ObjectId(id)) },
+      })
+        .select('name')
+        .lean();
+      for (const sw of softwareRows) {
+        softwareById.set(sw._id.toString(), sw.name);
+      }
+    }
+
+    const countsByMachine = new Map<
+      string,
+      {
+        total: number;
+        done: number;
+        failed: number;
+        running: number;
+        pending: number;
+        runningSoftware: Set<string>;
+        pendingSoftware: Set<string>;
+      }
+    >();
+
+    for (const job of jobs) {
+      const key = job.machineId.toString();
+      const c = (key ? countsByMachine.get(key) : undefined) ?? {
+        total: 0,
+        done: 0,
+        failed: 0,
+        running: 0,
+        pending: 0,
+        runningSoftware: new Set<string>(),
+        pendingSoftware: new Set<string>(),
+      };
+      c.total += 1;
+      const softwareName = softwareById.get(job.softwareIds?.[0]?.toString() || '');
+      if (job.status === 'success') c.done += 1;
+      else if (job.status === 'failed') c.failed += 1;
+      else if (job.status === 'pending') {
+        c.pending += 1;
+        if (softwareName) c.pendingSoftware.add(softwareName);
+      } else {
+        c.running += 1; // installing / retrying
+        if (softwareName) c.runningSoftware.add(softwareName);
+      }
+      countsByMachine.set(key, c);
+    }
+
+    const out = new Map<
+      string,
+      {
+        status: 'none' | 'pending' | 'running' | 'done' | 'failed';
+        total: number;
+        done: number;
+        failed: number;
+        running: number;
+        pending: number;
+        stage: NonNullable<CatalogVmResponse['postReadyStage']>;
+        stageLabel: string;
+        machineStatus?: 'pending' | 'online' | 'offline';
+        agentConnected?: boolean;
+        runningSoftware: string[];
+        pendingSoftware: string[];
+      }
+    >();
+
+    for (const doc of docs) {
+      const hasPreferredSoftware = (doc.preferredSoftwareIds?.length ?? 0) > 0;
+      const key = doc.machineId?.toString();
+      const c = (key ? countsByMachine.get(key) : undefined) ?? {
+        total: 0,
+        done: 0,
+        failed: 0,
+        running: 0,
+        pending: 0,
+        runningSoftware: new Set<string>(),
+        pendingSoftware: new Set<string>(),
+      };
+      const machine = key ? machineById.get(key) : undefined;
+      const machineStatus = machine?.status as 'pending' | 'online' | 'offline' | undefined;
+      const agentConnected = Boolean(machine?.agentId);
+      const fallback = (doc.postReadyStatus ?? 'none') as
+        | 'none'
+        | 'pending'
+        | 'running'
+        | 'done'
+        | 'failed';
+      let status: 'none' | 'pending' | 'running' | 'done' | 'failed' = fallback;
+      if (c.total > 0) {
+        if (c.failed > 0) status = 'failed';
+        else if (c.running > 0 || c.pending > 0) status = 'running';
+        else if (c.done === c.total) status = 'done';
+        else status = 'running';
+      }
+
+      let stage: NonNullable<CatalogVmResponse['postReadyStage']> = 'not_requested';
+      if (status === 'failed') {
+        stage = 'failed';
+      } else if (!hasPreferredSoftware) {
+        stage = 'not_requested';
+      } else if (c.total > 0) {
+        if (c.done === c.total) stage = 'software_done';
+        else if (c.running > 0) stage = 'software_installing';
+        else if (c.pending > 0) stage = 'software_queued';
+        else stage = 'software_installing';
+      } else if (!doc.machineId) {
+        stage = 'agent_pushing';
+      } else if (machineStatus === 'online' && agentConnected) {
+        stage = 'agent_online';
+      } else if (machineStatus === 'pending' || !agentConnected) {
+        stage = 'agent_waiting_online';
+      } else {
+        stage = 'agent_pushing';
+      }
+
+      out.set(doc._id.toString(), {
+        status,
+        total: c.total,
+        done: c.done,
+        failed: c.failed,
+        running: c.running,
+        pending: c.pending,
+        stage,
+        stageLabel: this.postReadyStageLabel(stage),
+        ...(machineStatus ? { machineStatus } : {}),
+        agentConnected,
+        runningSoftware: Array.from(c.runningSoftware),
+        pendingSoftware: Array.from(c.pendingSoftware),
+      });
+    }
+
+    return out;
+  }
+
   private adminDisplayStatus(status: VmCatalogStatus): VmCatalogStatus {
     if (status === 'ready_to_attach' || status === 'fulfilling') return 'provisioning';
     return status;
@@ -107,6 +384,20 @@ class VmCatalogService {
       projectName?: string;
       clientName?: string;
       role?: CatalogVmCallerRole;
+      postReadyOverride?: {
+        status: 'none' | 'pending' | 'running' | 'done' | 'failed';
+        total: number;
+        done: number;
+        failed: number;
+        running: number;
+        pending: number;
+        stage: NonNullable<CatalogVmResponse['postReadyStage']>;
+        stageLabel: string;
+        machineStatus?: 'pending' | 'online' | 'offline';
+        agentConnected?: boolean;
+        runningSoftware: string[];
+        pendingSoftware: string[];
+      };
     }
   ): CatalogVmResponse {
     const includeSecrets = Boolean(opts?.includeSecrets);
@@ -128,8 +419,28 @@ class VmCatalogService {
       ...(opts?.clientName ? { clientName: opts.clientName } : {}),
       preferredSoftwareIds: (doc.preferredSoftwareIds ?? []).map((id) => id.toString()),
       ...(doc.machineId ? { machineId: doc.machineId.toString() } : {}),
-      postReadyStatus: doc.postReadyStatus ?? 'none',
+      postReadyStatus: opts?.postReadyOverride?.status ?? (doc.postReadyStatus ?? 'none'),
       ...(doc.postReadyError ? { postReadyError: doc.postReadyError } : {}),
+      ...(opts?.postReadyOverride
+        ? {
+            postReadyJobTotal: opts.postReadyOverride.total,
+            postReadyJobDone: opts.postReadyOverride.done,
+            postReadyJobFailed: opts.postReadyOverride.failed,
+            postReadyJobRunning: opts.postReadyOverride.running,
+            postReadyJobPending: opts.postReadyOverride.pending,
+            postReadyStage: opts.postReadyOverride.stage,
+            postReadyStageLabel: opts.postReadyOverride.stageLabel,
+            ...(opts.postReadyOverride.machineStatus
+              ? { postReadyMachineStatus: opts.postReadyOverride.machineStatus }
+              : {}),
+            postReadyAgentConnected: Boolean(opts.postReadyOverride.agentConnected),
+            postReadyRunningSoftware: opts.postReadyOverride.runningSoftware,
+            postReadyPendingSoftware: opts.postReadyOverride.pendingSoftware,
+          }
+        : {}),
+      ...(doc.provider === 'webyne' || doc.provider === 'azure'
+        ? { powerControlMode: doc.provider as 'webyne' | 'azure' }
+        : {}),
       provider: doc.provider,
       category: doc.category,
       planId: doc.planId,
@@ -168,6 +479,7 @@ class VmCatalogService {
         : {}),
       ...(doc.region ? { region: doc.region } : {}),
       ...(doc.providerInstanceId ? { providerInstanceId: doc.providerInstanceId } : {}),
+      ...(doc.azureResourceGroup ? { azureResourceGroup: doc.azureResourceGroup } : {}),
       ...(doc.expiresAt ? { expiresAt: doc.expiresAt.toISOString() } : {}),
       autoProvisioned: Boolean(doc.autoProvisioned),
       ...(doc.rawProviderCostPerHr != null
@@ -242,17 +554,20 @@ class VmCatalogService {
     docs: ICatalogVm[],
     opts?: { adminEmail?: string; includeSecrets?: boolean }
   ): Promise<CatalogVmResponse[]> {
-    const [names, projects] = await Promise.all([
+    const [names, projects, postReadyByRequest] = await Promise.all([
       this.resolveCustomerPlanNames(docs),
       this.resolveProjectLabels(docs),
+      this.resolvePostReadyJobSummary(docs),
     ]);
     return docs.map((doc) => {
       const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
+      const postReady = postReadyByRequest.get(doc._id.toString());
       return this.toResponse(doc, {
         ...opts,
         forAdmin: true,
         role: 'admin',
         displayPlanName: names.get(doc.planId),
+        ...(postReady ? { postReadyOverride: postReady } : {}),
         ...(project
           ? { projectName: project.projectName, clientName: project.clientName }
           : {}),
@@ -377,9 +692,6 @@ class VmCatalogService {
           ...(base.status === 'active' && row?.ipAddress ? { ipAddress: row.ipAddress } : {}),
           ...(base.status === 'active' && row?.username ? { username: row.username } : {}),
           ...(base.status === 'active' && row?.protocol ? { protocol: row.protocol } : {}),
-          ...(base.status === 'active' && row?.externalRef
-            ? { externalRef: row.externalRef }
-            : {}),
           ...(base.status === 'active' && row?.password
             ? (() => {
                 try {
@@ -420,7 +732,7 @@ class VmCatalogService {
     const message = `${requesterEmail} paid ₹${doc.pricingSnapshot.total} for ${doc.quantity}× ${doc.planName} (${doc.billing}). Status: provisioning.`;
     const requestId = doc._id.toString();
     const actionUrl = opts?.tenantId
-      ? `/super-admin-console/webyne-vm-requests`
+      ? `/super-admin-console/webyne-vm-requests/${opts.tenantId}?scope=tenant`
       : `/super-admin-console/webyne-vm-requests/${doc.adminId?.toString() ?? ''}`;
 
     const results = await Promise.allSettled(
@@ -541,8 +853,12 @@ class VmCatalogService {
   private schedulePostReadySetup(doc: ICatalogVm): void {
     const softwareIds = doc.preferredSoftwareIds ?? [];
     if (softwareIds.length === 0) return;
-    if (!doc.adminId) {
-      logger.warn('[VmCatalog] Post-ready install skipped — Machine Manager is org-admin only', {
+
+    // Use the org admin id directly, or fall back to the super-admin who attached
+    // the VM (reviewedBy) so tenant VMs also get the agent+software push.
+    const effectiveAdminId = doc.adminId ?? doc.reviewedBy;
+    if (!effectiveAdminId) {
+      logger.warn('[VmCatalog] Post-ready install skipped — no admin or reviewer id', {
         requestId: doc._id.toString(),
       });
       void CatalogVmModel.updateOne(
@@ -550,14 +866,14 @@ class VmCatalogService {
         {
           $set: {
             postReadyStatus: 'failed',
-            postReadyError:
-              'Automatic agent/software install is available for organization VMs only.',
+            postReadyError: 'No admin or reviewer id available for agent install.',
             updatedAt: new Date(),
           },
         }
       ).catch(() => undefined);
       return;
     }
+
     void this.runPostReadySetup(doc._id).catch((err: unknown) => {
       logger.error('[VmCatalog] Post-ready setup failed', {
         requestId: doc._id.toString(),
@@ -570,28 +886,83 @@ class VmCatalogService {
     const doc = await CatalogVmModel.findById(id);
     if (!doc) return;
     if (doc.status !== 'active') return;
-    if (!doc.adminId) return;
+
+    // Org admin id takes priority; fall back to the reviewing super-admin for tenant VMs.
+    const effectiveAdminId = doc.adminId ?? doc.reviewedBy;
+    if (!effectiveAdminId) return;
 
     const softwareIds = (doc.preferredSoftwareIds ?? []).map((sid) => sid.toString());
     if (softwareIds.length === 0) return;
 
-    if (!doc.ipAddress || !doc.username || !doc.password) {
-      doc.postReadyStatus = 'failed';
-      doc.postReadyError = 'Missing IP, username, or password for agent install.';
-      doc.updatedAt = new Date();
-      await doc.save();
-      return;
-    }
+    const os = catalogCategoryToMachineOs(doc.category);
+    const instanceDocs = await CatalogVmInstanceModel.find({ catalogVmId: doc._id })
+      .sort({ instanceOrder: 1, createdAt: 1 })
+      .lean();
 
-    let plainPassword: string;
-    try {
-      plainPassword = decrypt(doc.password);
-    } catch {
-      doc.postReadyStatus = 'failed';
-      doc.postReadyError = 'Stored password could not be decrypted for agent install.';
-      doc.updatedAt = new Date();
-      await doc.save();
-      return;
+    const pushTargets: Array<{
+      name: string;
+      ipAddress: string;
+      os: 'windows' | 'linux';
+      username: string;
+      password: string;
+    }> = [];
+
+    if (instanceDocs.length > 0) {
+      for (const instance of instanceDocs) {
+        if (!instance.ipAddress || !instance.username || !instance.password) {
+          doc.postReadyStatus = 'failed';
+          doc.postReadyError = `Missing IP, username, or password for VM #${instance.instanceOrder}.`;
+          doc.updatedAt = new Date();
+          await doc.save();
+          return;
+        }
+
+        let plainPassword: string;
+        try {
+          plainPassword = decrypt(instance.password);
+        } catch {
+          doc.postReadyStatus = 'failed';
+          doc.postReadyError = `Stored password for VM #${instance.instanceOrder} could not be decrypted.`;
+          doc.updatedAt = new Date();
+          await doc.save();
+          return;
+        }
+
+        pushTargets.push({
+          name: `${doc.planName} #${instance.instanceOrder} · ${instance.ipAddress}`.slice(0, 120),
+          ipAddress: instance.ipAddress,
+          os,
+          username: instance.username,
+          password: plainPassword,
+        });
+      }
+    } else {
+      if (!doc.ipAddress || !doc.username || !doc.password) {
+        doc.postReadyStatus = 'failed';
+        doc.postReadyError = 'Missing IP, username, or password for agent install.';
+        doc.updatedAt = new Date();
+        await doc.save();
+        return;
+      }
+
+      let plainPassword: string;
+      try {
+        plainPassword = decrypt(doc.password);
+      } catch {
+        doc.postReadyStatus = 'failed';
+        doc.postReadyError = 'Stored password could not be decrypted for agent install.';
+        doc.updatedAt = new Date();
+        await doc.save();
+        return;
+      }
+
+      pushTargets.push({
+        name: `${doc.planName} · ${doc.ipAddress}`.slice(0, 120),
+        ipAddress: doc.ipAddress,
+        os,
+        username: doc.username,
+        password: plainPassword,
+      });
     }
 
     doc.postReadyStatus = 'running';
@@ -600,36 +971,34 @@ class VmCatalogService {
     await doc.save();
 
     const { machineManagerService } = await import('../machine-manager/machine-manager.service');
-    const os = catalogCategoryToMachineOs(doc.category);
     const sessionId = randomUUID();
-    const machineName = `${doc.planName} · ${doc.ipAddress}`.slice(0, 120);
 
     try {
       const { machines } = await machineManagerService.pushAgentToVMs(
-        [
-          {
-            name: machineName,
-            ipAddress: doc.ipAddress,
-            os,
-            username: doc.username,
-            password: plainPassword,
-          },
-        ],
-        doc.adminId,
-        sessionId
+        pushTargets,
+        effectiveAdminId,
+        sessionId,
+        undefined, // groupId — not applicable for catalog VMs
+        false      // installRackoApp=false — skip racko-app during software install to
+                   // avoid Windows Installer conflicts (WebView2 vs Postman/other packages).
+                   // RackoApp installs later via the heartbeat update path.
       );
 
-      const machine = machines[0];
-      if (!machine) {
+      if (!machines.length) {
         throw new Error('Machine Manager did not return a machine record.');
       }
 
-      doc.machineId = new mongoose.Types.ObjectId(machine._id);
+      // Keep a primary machine link for compatibility (first machine).
+      doc.machineId = new mongoose.Types.ObjectId(machines[0]!._id);
       await doc.save();
 
+      // Match Setup Wizard behavior: queue software only after agent is actually
+      // online/registered for each machine.
+      await Promise.all(machines.map((m) => this.waitForMachineAgentOnline(m._id)));
+
       await machineManagerService.createJobs(
-        { machineIds: [machine._id], softwareIds },
-        doc.adminId
+        { machineIds: machines.map((m) => m._id), softwareIds },
+        effectiveAdminId
       );
 
       doc.postReadyStatus = 'done';
@@ -639,7 +1008,7 @@ class VmCatalogService {
 
       logger.info('[VmCatalog] Post-ready agent push + software jobs queued', {
         requestId: doc._id.toString(),
-        machineId: machine._id,
+        machineCount: machines.length,
         softwareCount: softwareIds.length,
       });
     } catch (err) {
@@ -656,7 +1025,7 @@ class VmCatalogService {
   private async runAutoProvision(input: {
     requestId: mongoose.Types.ObjectId;
     adminId: mongoose.Types.ObjectId;
-    selection: Awaited<ReturnType<typeof resellerSelect>>;
+    selection: ResellerSelectResult;
     canonicalSpec: string;
     category: string;
     total: number;
@@ -806,28 +1175,7 @@ class VmCatalogService {
     const canonicalSpec =
       dto.canonicalSpec || specsToCanonicalSpec(dto.specs, dto.category);
 
-    let selection: Awaited<ReturnType<typeof resellerSelect>>;
-    try {
-      selection = await resellerSelect({
-        canonicalSpec,
-        category: dto.category,
-        durationDays,
-        specs: dto.specs,
-      });
-    } catch (err) {
-      logger.warn('[VmCatalog] Reseller select failed — falling back to webyne', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      selection = {
-        provider: 'webyne',
-        region: null,
-        category: dto.category,
-        canonicalSpec,
-        rawTotalPricePerHr: null,
-        autoProvisioned: false,
-        reason: 'select_error_fallback',
-      };
-    }
+    const selection = defaultWebyneManualSelection(dto.category, canonicalSpec);
 
     // Always route through Webyne (Super Admin manual flow).
     // Cloud auto-provision (Azure/AWS/OCI/GCP) is disabled intentionally so that
@@ -1031,32 +1379,10 @@ class VmCatalogService {
       throw new ValidationError('Invalid purchase total.');
     }
 
-    const durationDays = resolveDurationDays(dto.billing, dto.durationDays);
     const canonicalSpec =
       dto.canonicalSpec || specsToCanonicalSpec(dto.specs, dto.category);
 
-    let selection: Awaited<ReturnType<typeof resellerSelect>>;
-    try {
-      selection = await resellerSelect({
-        canonicalSpec,
-        category: dto.category,
-        durationDays,
-        specs: dto.specs,
-      });
-    } catch (err) {
-      logger.warn('[VmCatalog] Reseller select failed — falling back to webyne', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      selection = {
-        provider: 'webyne',
-        region: null,
-        category: dto.category,
-        canonicalSpec,
-        rawTotalPricePerHr: null,
-        autoProvisioned: false,
-        reason: 'select_error_fallback',
-      };
-    }
+    const selection = defaultWebyneManualSelection(dto.category, canonicalSpec);
 
     const autoProvisioned = false;
     const provider = 'webyne';
@@ -1103,7 +1429,6 @@ class VmCatalogService {
       ...(selection.rawTotalPricePerHr != null
         ? { rawProviderCostPerHr: selection.rawTotalPricePerHr }
         : {}),
-      ...(autoProvisioned ? { expiresAt: computeExpiresAt(durationDays) } : {}),
     });
 
     const customerPlanName = this.displayNameForPlan(plan);
@@ -1363,21 +1688,42 @@ class VmCatalogService {
             .filter((id): id is string => Boolean(id))
         ),
       ];
-      const admins = await User.find({
-        _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
-      })
-        .select('email')
-        .lean();
+      const tenantIds = [
+        ...new Set(
+          openDocs
+            .map((d) => d.tenantId?.toString())
+            .filter((id): id is string => Boolean(id))
+        ),
+      ];
+      const [admins, tenants] = await Promise.all([
+        adminIds.length
+          ? User.find({
+              _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
+            })
+              .select('email')
+              .lean()
+          : Promise.resolve([]),
+        tenantIds.length
+          ? Tenant.find({
+              _id: { $in: tenantIds.map((id) => new mongoose.Types.ObjectId(id)) },
+            })
+              .select('name')
+              .lean()
+          : Promise.resolve([]),
+      ]);
       const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
+      const tenantNameById = new Map(tenants.map((t) => [t._id.toString(), t.name]));
 
       for (const doc of openDocs) {
         const requestId = doc._id.toString();
         const requesterLabel = doc.adminId
           ? emailById.get(doc.adminId.toString()) ?? 'Admin'
-          : 'Tenant';
+          : tenantNameById.get(doc.tenantId?.toString() ?? '') ?? 'Tenant';
         const actionUrl = doc.adminId
           ? `/super-admin-console/webyne-vm-requests/${doc.adminId.toString()}`
-          : '/super-admin-console/webyne-vm-requests';
+          : doc.tenantId
+            ? `/super-admin-console/webyne-vm-requests/${doc.tenantId.toString()}?scope=tenant`
+            : '/super-admin-console/webyne-vm-requests';
         for (const sa of superAdmins) {
           const exists = await Notification.exists({
             userId: sa._id,
@@ -1420,62 +1766,93 @@ class VmCatalogService {
     }
   }
 
-  /** Super-admin: one card per requesting admin with pending/total counts. */
+  /** Super-admin: one card per requesting admin or tenant with pending/total counts. */
   async listRequesterGroups(): Promise<CatalogVmRequesterGroup[]> {
     // Repair: ensure open requests have super-admin notifications (older buys may have missed them)
     await this.ensureSuperAdminNotificationsForOpenRequests();
 
-    const groups = await CatalogVmModel.aggregate<{
-      _id: mongoose.Types.ObjectId;
-      pendingCount: number;
-      totalCount: number;
-      lastRequestedAt: Date | null;
-    }>([
-      { $match: { adminId: { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: '$adminId',
-          pendingCount: {
-            $sum: {
-              $cond: [
-                {
-                  $in: ['$status', OPEN_FOR_SUPER_ADMIN],
-                },
-                1,
-                0,
-              ],
-            },
-          },
-          totalCount: { $sum: 1 },
-          lastRequestedAt: { $max: '$createdAt' },
+    const groupStage = {
+      pendingCount: {
+        $sum: {
+          $cond: [{ $in: ['$status', OPEN_FOR_SUPER_ADMIN] }, 1, 0],
         },
       },
-      { $sort: { pendingCount: -1, lastRequestedAt: -1 } },
+      totalCount: { $sum: 1 },
+      lastRequestedAt: { $max: '$createdAt' },
+    } as const;
+
+    const [adminGroups, tenantGroups] = await Promise.all([
+      CatalogVmModel.aggregate<{
+        _id: mongoose.Types.ObjectId;
+        pendingCount: number;
+        totalCount: number;
+        lastRequestedAt: Date | null;
+      }>([
+        { $match: { adminId: { $exists: true, $ne: null } } },
+        { $group: { _id: '$adminId', ...groupStage } },
+      ]),
+      CatalogVmModel.aggregate<{
+        _id: mongoose.Types.ObjectId;
+        pendingCount: number;
+        totalCount: number;
+        lastRequestedAt: Date | null;
+      }>([
+        { $match: { tenantId: { $exists: true, $ne: null } } },
+        { $group: { _id: '$tenantId', ...groupStage } },
+      ]),
     ]);
 
-    if (groups.length === 0) return [];
+    if (adminGroups.length === 0 && tenantGroups.length === 0) return [];
 
-    const adminIds = groups.map((g) => g._id);
-    const admins = await User.find({ _id: { $in: adminIds } })
-      .select('email')
-      .lean();
+    const [admins, tenants] = await Promise.all([
+      adminGroups.length
+        ? User.find({ _id: { $in: adminGroups.map((g) => g._id) } })
+            .select('email')
+            .lean()
+        : Promise.resolve([]),
+      tenantGroups.length
+        ? Tenant.find({ _id: { $in: tenantGroups.map((g) => g._id) } })
+            .select('name')
+            .lean()
+        : Promise.resolve([]),
+    ]);
     const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
+    const tenantNameById = new Map(tenants.map((t) => [t._id.toString(), t.name]));
 
-    return groups.map((g) => ({
-      adminId: g._id.toString(),
-      adminEmail: emailById.get(g._id.toString()) ?? g._id.toString(),
-      pendingCount: g.pendingCount,
-      totalCount: g.totalCount,
-      lastRequestedAt: g.lastRequestedAt ? g.lastRequestedAt.toISOString() : null,
-    }));
+    const cards: CatalogVmRequesterGroup[] = [
+      ...adminGroups.map((g) => ({
+        adminId: g._id.toString(),
+        kind: 'admin' as const,
+        adminEmail: emailById.get(g._id.toString()) ?? g._id.toString(),
+        pendingCount: g.pendingCount,
+        totalCount: g.totalCount,
+        lastRequestedAt: g.lastRequestedAt ? g.lastRequestedAt.toISOString() : null,
+      })),
+      ...tenantGroups.map((g) => ({
+        adminId: g._id.toString(),
+        kind: 'tenant' as const,
+        adminEmail: tenantNameById.get(g._id.toString()) ?? g._id.toString(),
+        pendingCount: g.pendingCount,
+        totalCount: g.totalCount,
+        lastRequestedAt: g.lastRequestedAt ? g.lastRequestedAt.toISOString() : null,
+      })),
+    ];
+
+    cards.sort((a, b) => {
+      if (b.pendingCount !== a.pendingCount) return b.pendingCount - a.pendingCount;
+      return (b.lastRequestedAt ?? '').localeCompare(a.lastRequestedAt ?? '');
+    });
+    return cards;
   }
 
   async listRequestsForSuperAdmin(opts: {
     status?: VmCatalogStatus | 'all';
     adminId?: mongoose.Types.ObjectId;
+    tenantId?: mongoose.Types.ObjectId;
   }): Promise<CatalogVmResponse[]> {
     const filter: Record<string, unknown> = {};
-    if (opts.adminId) filter.adminId = opts.adminId;
+    if (opts.tenantId) filter.tenantId = opts.tenantId;
+    else if (opts.adminId) filter.adminId = opts.adminId;
     if (opts.status && opts.status !== 'all') filter.status = opts.status;
 
     const docs = await CatalogVmModel.find(filter).sort({ createdAt: -1 });
@@ -1484,13 +1861,44 @@ class VmCatalogService {
         docs.map((d) => d.adminId?.toString()).filter((id): id is string => Boolean(id))
       ),
     ];
-    const admins = await User.find({
-      _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
-    })
-      .select('email')
-      .lean();
+    const tenantIds = [
+      ...new Set(
+        docs.map((d) => d.tenantId?.toString()).filter((id): id is string => Boolean(id))
+      ),
+    ];
+    const tenantUserIds = [
+      ...new Set(
+        docs.map((d) => d.tenantUserId?.toString()).filter((id): id is string => Boolean(id))
+      ),
+    ];
+    const [admins, tenants, tenantUsers] = await Promise.all([
+      adminIds.length
+        ? User.find({
+            _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
+          })
+            .select('email')
+            .lean()
+        : Promise.resolve([]),
+      tenantIds.length
+        ? Tenant.find({
+            _id: { $in: tenantIds.map((id) => new mongoose.Types.ObjectId(id)) },
+          })
+            .select('name')
+            .lean()
+        : Promise.resolve([]),
+      tenantUserIds.length
+        ? TenantUser.find({
+            _id: { $in: tenantUserIds.map((id) => new mongoose.Types.ObjectId(id)) },
+          })
+            .select('email')
+            .lean()
+        : Promise.resolve([]),
+    ]);
     const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
+    const tenantNameById = new Map(tenants.map((t) => [t._id.toString(), t.name]));
+    const tenantUserEmailById = new Map(tenantUsers.map((u) => [u._id.toString(), u.email]));
     const projects = await this.resolveProjectLabels(docs);
+    const postReadyByRequest = await this.resolvePostReadyJobSummary(docs);
     const instances = await CatalogVmInstanceModel.find({
       catalogVmId: { $in: docs.map((doc) => doc._id) },
     })
@@ -1506,12 +1914,20 @@ class VmCatalogService {
 
     return docs.map((doc) => {
       const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
+      const postReady = postReadyByRequest.get(doc._id.toString());
       const instanceRows = instancesByRequest.get(doc._id.toString()) || [];
+      const tenantLabel = doc.tenantId
+        ? tenantUserEmailById.get(doc.tenantUserId?.toString() ?? '') ??
+          tenantNameById.get(doc.tenantId.toString())
+        : undefined;
       return {
         ...this.toResponse(doc, {
-        adminEmail: doc.adminId ? emailById.get(doc.adminId.toString()) : undefined,
+        adminEmail: doc.adminId
+          ? emailById.get(doc.adminId.toString())
+          : tenantLabel,
         includeSecrets: true,
         role: 'super_admin',
+        ...(postReady ? { postReadyOverride: postReady } : {}),
         ...(project
           ? { projectName: project.projectName, clientName: project.clientName }
           : {}),
@@ -1798,6 +2214,15 @@ class VmCatalogService {
     doc.reviewedBy = reviewerId;
     doc.reviewedAt = new Date();
     doc.updatedAt = new Date();
+    // Manual Webyne VMs on a fixed term never got a deadline, so nothing could
+    // warn before the provider contract lapsed. Hourly plans are skipped: they
+    // bill continuously and have no end date to reach.
+    if (!doc.expiresAt && hasFixedProviderTerm(doc.billing)) {
+      doc.expiresAt = computeExpiresFrom(
+        doc.attachedAt,
+        resolveDurationDays(doc.billing)
+      );
+    }
     await doc.save();
 
     await CatalogVmInstanceModel.updateMany(
@@ -1827,6 +2252,42 @@ class VmCatalogService {
     );
 
     return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
+  }
+
+  /** Super-admin retry: re-run post-ready agent push + software installation. */
+  async retryPostReadySetup(
+    id: mongoose.Types.ObjectId,
+    reviewerId: mongoose.Types.ObjectId
+  ): Promise<CatalogVmResponse> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM request not found.');
+    if (doc.status !== 'active') {
+      throw new ValidationError('Retry install is available only for active requests.');
+    }
+
+    const softwareIds = doc.preferredSoftwareIds ?? [];
+    if (softwareIds.length === 0) {
+      throw new ValidationError('No software package was selected for this request.');
+    }
+    if (doc.postReadyStatus === 'pending' || doc.postReadyStatus === 'running') {
+      throw new ValidationError('Install retry is already in progress for this request.');
+    }
+
+    doc.reviewedBy = reviewerId;
+    doc.reviewedAt = new Date();
+    doc.postReadyStatus = 'pending';
+    doc.postReadyError = undefined;
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    this.schedulePostReadySetup(doc);
+
+    const postReady = (await this.resolvePostReadyJobSummary([doc])).get(doc._id.toString());
+    return this.toResponse(doc, {
+      includeSecrets: true,
+      role: 'super_admin',
+      ...(postReady ? { postReadyOverride: postReady } : {}),
+    });
   }
 
   /**
@@ -1975,32 +2436,11 @@ class VmCatalogService {
     return this.toResponse(doc, { includeSecrets: true });
   }
 
-  /**
-   * Super-admin: Virtualizor / Start / Stop / Reboot on Webyne machineshow.
-   */
-  async powerAction(
-    id: mongoose.Types.ObjectId,
-    action: CatalogPowerAction,
-    instanceId?: string
-  ): Promise<{
-    action: CatalogPowerAction;
-    panelUrl?: string;
-    request: CatalogVmResponse;
-  }> {
-    const doc = await CatalogVmModel.findById(id);
-    if (!doc) throw new NotFoundError('Catalog VM request not found.');
-
-    if (!['ready_to_attach', 'active', 'failed'].includes(doc.status)) {
-      throw new ValidationError(
-        'Power controls are available after the VM has been provisioned on Webyne.'
-      );
-    }
-    if (!doc.externalRef) {
-      throw new ValidationError(
-        'Missing Webyne machine id (externalRef). Use Fetch details first.'
-      );
-    }
-
+  private async resolvePowerExternalRef(
+    doc: ICatalogVm,
+    instanceId: string | undefined,
+    missingMessage: string
+  ): Promise<string> {
     let externalRef = doc.externalRef;
     if (instanceId && mongoose.Types.ObjectId.isValid(instanceId)) {
       const instance = await CatalogVmInstanceModel.findOne({
@@ -2012,21 +2452,221 @@ class VmCatalogService {
       }
     }
 
+    if (!externalRef) {
+      throw new ValidationError(missingMessage);
+    }
+
+    return externalRef;
+  }
+
+  private resolveAzurePowerRef(doc: ICatalogVm): {
+    resourceGroup: string;
+    vmName: string;
+    subscriptionId?: string;
+  } {
+    const subscriptionId = doc.externalRef?.trim() || undefined;
+    const rgField = doc.azureResourceGroup?.trim();
+    const instanceField = doc.providerInstanceId?.trim() || '';
+
+    if (instanceField.includes('/')) {
+      const slash = instanceField.indexOf('/');
+      const parsedRg = instanceField.slice(0, slash).trim();
+      const parsedName = instanceField.slice(slash + 1).trim();
+      if (parsedRg && parsedName) {
+        return {
+          resourceGroup: rgField || parsedRg,
+          vmName: parsedName,
+          subscriptionId,
+        };
+      }
+    }
+
+    if (rgField && instanceField) {
+      return { resourceGroup: rgField, vmName: instanceField, subscriptionId };
+    }
+
+    throw new ValidationError(
+      'Azure VM is missing resource group or VM name required for power actions.'
+    );
+  }
+
+  private async executeAzureCatalogPowerAction(
+    doc: ICatalogVm,
+    action: CatalogVmPowerAction,
+    opts: { ownerFacing: boolean }
+  ): Promise<{ action: CatalogVmPowerAction; terminated?: boolean }> {
+    if (opts.ownerFacing && doc.status !== 'active') {
+      throw new ValidationError('Power controls are only available for active VMs.');
+    }
+    if (!opts.ownerFacing && doc.status !== 'active') {
+      throw new ValidationError('Azure power controls are only available for active VMs.');
+    }
+    if (action === 'virtualizor') {
+      throw new ValidationError('Virtualization controls are not available for Azure VMs.');
+    }
+
+    const ref = this.resolveAzurePowerRef(doc);
+    const resellerAction =
+      action === 'terminate' ? 'terminate' : (action as 'start' | 'stop' | 'reboot');
+
+    await resellerPowerVm({
+      provider: 'azure',
+      action: resellerAction,
+      resourceGroup: ref.resourceGroup,
+      vmName: ref.vmName,
+      ...(ref.subscriptionId ? { subscriptionId: ref.subscriptionId } : {}),
+    });
+
+    if (action === 'terminate') {
+      doc.status = 'terminated';
+      doc.updatedAt = new Date();
+      await doc.save();
+
+      await this.notifyOwner(
+        doc,
+        'Azure VM terminated',
+        `Your ${doc.planName} VM was terminated in Azure and removed from My VM.`,
+        {
+          requestId: doc._id.toString(),
+          event: 'terminated',
+        }
+      );
+    }
+
+    logger.info('[VmCatalog] Azure catalog VM power action completed', {
+      requestId: doc._id.toString(),
+      action,
+      ownerFacing: opts.ownerFacing,
+      resourceGroup: ref.resourceGroup,
+      vmName: ref.vmName,
+    });
+
+    return {
+      action,
+      ...(action === 'terminate' ? { terminated: true } : {}),
+    };
+  }
+
+  private async executeCatalogPowerAction(
+    doc: ICatalogVm,
+    action: CatalogVmPowerAction,
+    instanceId: string | undefined,
+    opts: { ownerFacing: boolean }
+  ): Promise<{ action: CatalogVmPowerAction; panelUrl?: string; terminated?: boolean }> {
+    if (doc.provider === 'azure') {
+      return this.executeAzureCatalogPowerAction(doc, action, opts);
+    }
+
+    if (opts.ownerFacing) {
+      if (doc.status !== 'active') {
+        throw new ValidationError('Power controls are only available for active VMs.');
+      }
+      if (doc.provider !== 'webyne') {
+        throw new ValidationError('Power controls are not available for this VM.');
+      }
+    } else if (!['ready_to_attach', 'active', 'failed'].includes(doc.status)) {
+      throw new ValidationError(
+        'Power controls are available after the VM has been provisioned on Webyne.'
+      );
+    }
+
+    if (action === 'terminate') {
+      throw new ValidationError('Terminate is only available for Azure catalog VMs.');
+    }
+
+    const externalRef = await this.resolvePowerExternalRef(
+      doc,
+      instanceId,
+      opts.ownerFacing
+        ? 'This VM is not ready for power controls yet.'
+        : 'Missing Webyne machine id (externalRef). Use Fetch details first.'
+    );
+
     const result = await callCatalogAgentPower({
       externalRef,
       action,
     });
 
-    logger.info('[VmCatalog] Webyne power action completed', {
-      requestId: id.toString(),
+    logger.info('[VmCatalog] Catalog VM power action completed', {
+      requestId: doc._id.toString(),
       action,
+      ownerFacing: opts.ownerFacing,
       panelUrl: result.panelUrl,
     });
 
     return {
       action,
       ...(result.panelUrl ? { panelUrl: result.panelUrl } : {}),
+    };
+  }
+
+  /**
+   * Super-admin: Virtualizor / Start / Stop / Reboot on Webyne machineshow.
+   */
+  async powerAction(
+    id: mongoose.Types.ObjectId,
+    action: CatalogVmPowerAction,
+    instanceId?: string
+  ): Promise<{
+    action: CatalogVmPowerAction;
+    panelUrl?: string;
+    terminated?: boolean;
+    request: CatalogVmResponse;
+  }> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM request not found.');
+
+    const result = await this.executeCatalogPowerAction(doc, action, instanceId, {
+      ownerFacing: false,
+    });
+
+    return {
+      ...result,
       request: await this.toResponse(doc, { includeSecrets: true }),
+    };
+  }
+
+  async powerActionForAdmin(
+    id: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    action: CatalogVmPowerAction,
+    instanceId?: string
+  ): Promise<{
+    action: CatalogVmPowerAction;
+    panelUrl?: string;
+    terminated?: boolean;
+    vm: CatalogVmResponse;
+  }> {
+    const doc = await this.findOwnedByAdmin(id, adminId);
+    const result = await this.executeCatalogPowerAction(doc, action, instanceId, {
+      ownerFacing: true,
+    });
+
+    return {
+      ...result,
+      vm: await this.toCustomerResponse(doc),
+    };
+  }
+
+  async powerActionForTenant(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId,
+    action: CatalogVmPowerAction,
+    instanceId?: string
+  ): Promise<{
+    action: CatalogVmPowerAction;
+    panelUrl?: string;
+    terminated?: boolean;
+    vm: CatalogVmResponse;
+  }> {
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    const result = await this.executeCatalogPowerAction(doc, action, instanceId, {
+      ownerFacing: true,
+    });
+
+    return {
+      ...result,
+      vm: await this.toCustomerResponse(doc),
     };
   }
 
@@ -2095,11 +2735,25 @@ class VmCatalogService {
     }
 
     try {
-      await resellerTerminate({
+      const terminateInput: {
+        provider: string;
+        region?: string | null;
+        providerInstanceId: string;
+        resourceGroup?: string;
+        vmName?: string;
+        subscriptionId?: string;
+      } = {
         provider: doc.provider,
         region: doc.region,
         providerInstanceId: doc.providerInstanceId,
-      });
+      };
+      if (doc.provider === 'azure') {
+        const ref = this.resolveAzurePowerRef(doc);
+        terminateInput.resourceGroup = ref.resourceGroup;
+        terminateInput.vmName = ref.vmName;
+        if (ref.subscriptionId) terminateInput.subscriptionId = ref.subscriptionId;
+      }
+      await resellerTerminate(terminateInput);
     } catch (err) {
       logger.error('[VmCatalog] Reseller terminate failed', {
         requestId: doc._id.toString(),
@@ -2123,6 +2777,254 @@ class VmCatalogService {
         planName: doc.planName,
       }
     );
+  }
+
+  /**
+   * Super-admin: push a provider term's end date out after renewing with the
+   * provider. Clearing the warning marker re-arms the alert for the new date.
+   */
+  async extendCatalogVmExpiry(
+    id: mongoose.Types.ObjectId,
+    expiresAt: Date
+  ): Promise<CatalogVmResponse> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM not found.');
+
+    if (Number.isNaN(expiresAt.getTime())) {
+      throw new ValidationError('Provide a valid end date.');
+    }
+    if (expiresAt.getTime() <= Date.now()) {
+      throw new ValidationError('The new end date must be in the future.');
+    }
+
+    const previous = doc.expiresAt ?? null;
+    doc.expiresAt = expiresAt;
+    doc.expiryWarningSentFor = null;
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    logger.info('[VmCatalog] Provider term extended', {
+      requestId: doc._id.toString(),
+      provider: doc.provider,
+      previousExpiresAt: previous ? previous.toISOString() : null,
+      expiresAt: expiresAt.toISOString(),
+    });
+
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
+  }
+
+  /**
+   * Super-admin: erase a catalog VM from Racko.
+   *
+   * Racko cannot destroy a Webyne machine — the panel is driven by browser
+   * automation that only exposes start/stop/reboot — so an active VM must have
+   * been terminated at the provider first, which the caller asserts. Ownership
+   * of a catalog VM lives on the document itself, so removing it also removes
+   * the owner's access; the mirror drop covers the separate case where the same
+   * IP was published to a tenant through the VM inventory.
+   */
+  async deleteCatalogVmForSuperAdmin(
+    id: mongoose.Types.ObjectId,
+    opts: { confirmTerminatedAtProvider: boolean }
+  ): Promise<{
+    planName: string;
+    ipAddresses: string[];
+    instancesDeleted: number;
+    ownerLabel: string | null;
+  }> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM not found.');
+
+    const liveStatuses: VmCatalogStatus[] = [
+      'active',
+      'provisioning',
+      'fulfilling',
+      'ready_to_attach',
+    ];
+    if (liveStatuses.includes(doc.status) && !opts.confirmTerminatedAtProvider) {
+      throw new ValidationError(
+        `This VM is still ${doc.status.replace(/_/g, ' ')}. Terminate it with the provider first, then confirm you have done so — deleting the record here does not stop provider billing.`
+      );
+    }
+
+    const owner = await this.resolveOwnerContact(doc);
+    const instances = await CatalogVmInstanceModel.find({ catalogVmId: doc._id })
+      .select('ipAddress')
+      .lean();
+
+    const ipAddresses = [
+      ...new Set(
+        [doc.ipAddress, ...instances.map((i) => i.ipAddress)].filter(
+          (ip): ip is string => Boolean(ip && ip.trim())
+        )
+      ),
+    ];
+
+    await inventoryExternalVmMirrorService.dropServersByIp(ipAddresses);
+
+    const { deletedCount } = await CatalogVmInstanceModel.deleteMany({
+      catalogVmId: doc._id,
+    });
+    await CatalogVmModel.deleteOne({ _id: doc._id });
+
+    logger.warn('[VmCatalog] Catalog VM deleted by super admin', {
+      requestId: doc._id.toString(),
+      provider: doc.provider,
+      status: doc.status,
+      planName: doc.planName,
+      ipAddresses,
+      instancesDeleted: deletedCount ?? 0,
+      owner: owner.label,
+    });
+
+    return {
+      planName: doc.planName,
+      ipAddresses,
+      instancesDeleted: deletedCount ?? 0,
+      ownerLabel: owner.label,
+    };
+  }
+
+  /** Human label for the tenant or admin a VM belongs to. */
+  private async resolveOwnerContact(
+    doc: ICatalogVm
+  ): Promise<{ email: string | null; label: string | null }> {
+    if (doc.adminId) {
+      const admin = await User.findById(doc.adminId).select('email').lean();
+      return { email: admin?.email ?? null, label: admin?.email ?? null };
+    }
+    if (doc.tenantId) {
+      const [tenant, tenantUser] = await Promise.all([
+        Tenant.findById(doc.tenantId).select('name').lean(),
+        doc.tenantUserId
+          ? TenantUser.findById(doc.tenantUserId).select('email').lean()
+          : Promise.resolve(null),
+      ]);
+      const parts = [tenantUser?.email, tenant?.name].filter(Boolean);
+      return {
+        email: tenantUser?.email ?? null,
+        label: parts.length > 0 ? parts.join(' · ') : null,
+      };
+    }
+    return { email: null, label: null };
+  }
+
+  /**
+   * Warn the owner and every super admin that a paid provider term is ending.
+   *
+   * This never terminates anything. Manual Webyne VMs have no programmatic
+   * teardown, so the whole point is to get a human to renew or terminate on the
+   * provider before the term lapses. Marking `expiryWarningSentFor` keeps it to
+   * one alert per end date, and extending the date re-arms it.
+   */
+  async warnExpiringCatalogVm(doc: ICatalogVm): Promise<void> {
+    if (!doc.expiresAt) return;
+
+    const expiresAt = doc.expiresAt;
+    const daysRemaining = Math.ceil(
+      (expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000)
+    );
+    const expiresAtLabel = expiresAt.toISOString().slice(0, 10);
+    const providerLabel = doc.provider === 'webyne' ? 'Webyne' : doc.provider.toUpperCase();
+    const canTerminateInRacko = isAutoCloudProvider(doc.provider);
+    const owner = await this.resolveOwnerContact(doc);
+    const machine = doc.ipAddress || doc.hostname || null;
+
+    const customerNames = await this.resolveCustomerPlanNames([doc]);
+    const customerPlanName = customerNames.get(doc.planId) ?? doc.planName;
+
+    await this.notifyOwner(
+      doc,
+      'VM term is ending',
+      `Your ${customerPlanName} VM term ends on ${expiresAtLabel}. Ask your administrator to extend it if you still need the VM.`,
+      {
+        requestId: doc._id.toString(),
+        event: 'expiring',
+        planName: customerPlanName,
+        expiresAt: expiresAtLabel,
+      }
+    );
+
+    if (owner.email) {
+      await sendCatalogVmExpiryWarningEmail({
+        to: owner.email,
+        audience: 'owner',
+        planName: customerPlanName,
+        providerLabel,
+        billingLabel: doc.billing,
+        ipAddress: machine,
+        hostname: doc.hostname ?? null,
+        ownerLabel: null,
+        expiresAtLabel,
+        daysRemaining,
+        canTerminateInRacko,
+        manageUrl: `${portalBaseUrl()}/console/create-vm/my-vms`,
+      }).catch((err: unknown) => {
+        logger.error('[VmCatalog] Expiry warning email to owner failed', {
+          requestId: doc._id.toString(),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
+    const superAdmins = await User.find({ role: 'super_admin', isActive: true })
+      .select('_id email')
+      .lean();
+
+    const requestId = doc._id.toString();
+    const superAdminMessage = `${doc.planName} (${doc.billing}) on ${providerLabel}${
+      machine ? ` — ${machine}` : ''
+    } ends on ${expiresAtLabel}.${
+      canTerminateInRacko ? '' : ' Terminate or extend it on Webyne manually.'
+    }`;
+
+    await Promise.allSettled(
+      superAdmins.flatMap((admin) => [
+        Notification.create({
+          userId: admin._id,
+          type: 'catalog_vm_request',
+          title: 'VM provider term ending',
+          message: superAdminMessage,
+          severity: 'warning',
+          read: false,
+          actionUrl: '/super-admin-console/create-vm/my-vms',
+          metadata: {
+            jobId: `${requestId}:expiring:${expiresAtLabel}`,
+            requestId,
+            event: 'catalog_expiring',
+            planName: doc.planName,
+            expiresAt: expiresAtLabel,
+          },
+        }),
+        sendCatalogVmExpiryWarningEmail({
+          to: admin.email,
+          audience: 'super_admin',
+          planName: doc.planName,
+          providerLabel,
+          billingLabel: doc.billing,
+          ipAddress: machine,
+          hostname: doc.hostname ?? null,
+          ownerLabel: owner.label,
+          expiresAtLabel,
+          daysRemaining,
+          canTerminateInRacko,
+          manageUrl: `${portalBaseUrl()}/super-admin-console/create-vm/my-vms`,
+        }),
+      ])
+    );
+
+    doc.expiryWarningSentFor = expiresAt;
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    logger.info('[VmCatalog] Sent provider term expiry warning', {
+      requestId,
+      provider: doc.provider,
+      expiresAt: expiresAtLabel,
+      daysRemaining,
+      superAdmins: superAdmins.length,
+      notifiedOwner: Boolean(owner.email),
+    });
   }
 
   // ─── Tenant portal (white-label) ─────────────────────────────────────────
@@ -2296,7 +3198,8 @@ class VmCatalogService {
 
   async listForTenant(tenantId: mongoose.Types.ObjectId): Promise<CatalogVmResponse[]> {
     const docs = await CatalogVmModel.find({ tenantId }).sort({ createdAt: -1 });
-    return this.toCustomerResponses(docs);
+    const responses = await this.toCustomerResponses(docs);
+    return this.expandAdminResponsesWithInstances(docs, responses);
   }
 
   async getOverviewForTenant(tenantId: mongoose.Types.ObjectId): Promise<CatalogVmOverview> {
@@ -2401,6 +3304,726 @@ class VmCatalogService {
       clientUrl: session.clientUrl,
       connectionId: session.connectionId,
     };
+  }
+
+  private async resolveManualAzureOwner(
+    ownerType: 'admin' | 'tenant',
+    ownerId: mongoose.Types.ObjectId
+  ): Promise<{ adminId?: mongoose.Types.ObjectId; tenantId?: mongoose.Types.ObjectId }> {
+    if (ownerType === 'admin') {
+      const admin = await User.findById(ownerId).select('role isActive email').lean();
+      if (!admin || admin.role !== 'admin' || !admin.isActive) {
+        throw new ValidationError('Selected platform admin is not active.');
+      }
+      return { adminId: ownerId };
+    }
+
+    const tenant = await Tenant.findById(ownerId).select('name status').lean();
+    if (!tenant || tenant.status !== 'active') {
+      throw new ValidationError('Selected tenant is not active.');
+    }
+    return { tenantId: ownerId };
+  }
+
+  /** Super-admin: register an existing Azure VM into VM Catalog (manual path). */
+  async registerManualAzureCatalogVm(
+    dto: {
+      resourceGroup: string;
+      vmName: string;
+      region: string;
+      ipAddress: string;
+      hostname?: string;
+      username: string;
+      password: string;
+      protocol: 'rdp' | 'ssh';
+      osCategory: string;
+      catalogTemplate: string;
+      billing?: string;
+      subscriptionId?: string;
+      attachNow?: boolean;
+      ownerType?: 'admin' | 'tenant';
+      ownerId?: string;
+    },
+    superAdminId: mongoose.Types.ObjectId
+  ): Promise<CatalogVmResponse> {
+    const superAdmin = await User.findById(superAdminId).select('email role isActive').lean();
+    if (!superAdmin || superAdmin.role !== 'super_admin' || !superAdmin.isActive) {
+      throw new ForbiddenError('Only active super admins can register manual Azure VMs.');
+    }
+
+    const osCategory = dto.osCategory.trim();
+    const catalogTemplate = dto.catalogTemplate.trim();
+    const category = inferCategoryFromOsLabel(osCategory);
+
+    let owner: { adminId?: mongoose.Types.ObjectId; tenantId?: mongoose.Types.ObjectId } = {};
+    if (dto.attachNow) {
+      if (!dto.ownerType || !dto.ownerId) {
+        throw new ValidationError('Owner is required when attaching immediately.');
+      }
+      owner = await this.resolveManualAzureOwner(
+        dto.ownerType,
+        new mongoose.Types.ObjectId(dto.ownerId)
+      );
+    }
+
+    const billing = String(dto.billing || 'monthly').trim();
+    const hostname = dto.hostname?.trim() || dto.vmName.trim();
+    const now = new Date();
+    const attachNow = Boolean(dto.attachNow);
+
+    const doc = await CatalogVmModel.create({
+      ...owner,
+      provider: 'azure',
+      category,
+      planId: 'manual-azure',
+      planName: catalogTemplate,
+      specs: {},
+      billing,
+      quantity: 1,
+      template: { value: 'manual-azure', label: osCategory },
+      pricingSnapshot: {
+        currency: 'INR',
+        subtotal: 0,
+        tax: 0,
+        total: 0,
+        billingLabel: billing,
+      },
+      status: attachNow ? 'active' : 'ready_to_attach',
+      walletDebited: false,
+      hostname,
+      ipAddress: dto.ipAddress.trim(),
+      username: dto.username.trim(),
+      password: encrypt(dto.password),
+      protocol: dto.protocol,
+      ...(dto.subscriptionId ? { externalRef: dto.subscriptionId.trim() } : {}),
+      azureResourceGroup: dto.resourceGroup.trim(),
+      providerInstanceId: dto.vmName.trim(),
+      region: dto.region.trim(),
+      providerPurchased: true,
+      autoProvisioned: false,
+      ...(attachNow
+        ? {
+            attachedAt: now,
+            reviewedBy: superAdminId,
+            reviewedAt: now,
+          }
+        : {}),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    if (attachNow) {
+      await this.notifyOwner(
+        doc,
+        'Azure VM is ready',
+        `Your ${catalogTemplate} VM from Azure is now available in My VM.`,
+        {
+          requestId: doc._id.toString(),
+          event: 'attached',
+        }
+      );
+    }
+
+    logger.info('[VmCatalog] Manual Azure VM registered', {
+      requestId: doc._id.toString(),
+      vmName: dto.vmName,
+      resourceGroup: dto.resourceGroup,
+      attachNow,
+      ownerType: dto.ownerType,
+    });
+
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
+  }
+
+  private async resolveSuperAdminProject(
+    ownerType: 'admin' | 'tenant',
+    ownerId: string,
+    projectId: string
+  ) {
+    if (ownerType === 'admin') {
+      return projectsService.getByIdForAdmin(ownerId, projectId);
+    }
+    return projectsService.getByIdForTenant(ownerId, projectId);
+  }
+
+  /** Super-admin: reseller Azure provision env readiness. */
+  async getAzureProvisionReadyStatus(): Promise<AzureProvisionReadyStatus> {
+    return getAzureProvisionReady();
+  }
+
+  private async assertSuperAdmin(superAdminId: mongoose.Types.ObjectId) {
+    const superAdmin = await User.findById(superAdminId).select('role isActive').lean();
+    if (!superAdmin || superAdmin.role !== 'super_admin' || !superAdmin.isActive) {
+      throw new ForbiddenError('Only active super admins can access Azure catalog tools.');
+    }
+  }
+
+  async listSuperAdminAzureLocations(superAdminId: mongoose.Types.ObjectId) {
+    await this.assertSuperAdmin(superAdminId);
+    return listAzureSubscriptionLocations();
+  }
+
+  async searchSuperAdminAzureMarketplaceImages(
+    superAdminId: mongoose.Types.ObjectId,
+    input: {
+      query?: string;
+      osType?: 'linux' | 'windows' | 'all';
+      skip?: number;
+      take?: number;
+    }
+  ) {
+    await this.assertSuperAdmin(superAdminId);
+    return searchAzureMarketplaceImages(input);
+  }
+
+  async listSuperAdminAzureImageSkuPlans(
+    superAdminId: mongoose.Types.ObjectId,
+    input: {
+      region: string;
+      publisher: string;
+      offer: string;
+      productDisplayName?: string;
+    }
+  ) {
+    await this.assertSuperAdmin(superAdminId);
+    return listAzureImageSkuPlans(input);
+  }
+
+  async validateSuperAdminAzureVmImage(
+    superAdminId: mongoose.Types.ObjectId,
+    input: {
+      publisher: string;
+      offer: string;
+      sku: string;
+      region?: string;
+      version?: string;
+    }
+  ) {
+    await this.assertSuperAdmin(superAdminId);
+    return validateAzureVmImage(input);
+  }
+
+  async listSuperAdminAzureCustomImages(
+    superAdminId: mongoose.Types.ObjectId,
+    query = '',
+    limit = 50,
+    resourceGroup?: string
+  ) {
+    await this.assertSuperAdmin(superAdminId);
+    return searchAzureCustomImages(query, limit, resourceGroup);
+  }
+
+  async validateSuperAdminAzureCustomImage(
+    superAdminId: mongoose.Types.ObjectId,
+    input: { imageId: string; region?: string }
+  ) {
+    await this.assertSuperAdmin(superAdminId);
+    return validateAzureCustomImage(input);
+  }
+
+  /** Super-admin: list Azure region/SKU options priced for a spec. */
+  async listSuperAdminAzurePlacementOptions(
+    dto: {
+      category: string;
+      vcpu: number;
+      ramGb: number;
+      ssdGb: number;
+      nestedVirtualization?: boolean;
+      assignPublicIp?: boolean;
+      region?: string;
+      imagePublisher?: string;
+      imageOffer?: string;
+      imageSku?: string;
+    },
+    superAdminId: mongoose.Types.ObjectId
+  ) {
+    await this.assertSuperAdmin(superAdminId);
+    return listAzurePlacementOptions({
+      vcpu: dto.vcpu,
+      ramGb: dto.ramGb,
+      ssdGb: dto.ssdGb,
+      category: catalogPricingBucket(dto.category),
+      nestedVirtualization: Boolean(dto.nestedVirtualization),
+      assignPublicIp: Boolean(dto.assignPublicIp),
+      region: dto.region,
+      imagePublisher: dto.imagePublisher,
+      imageOffer: dto.imageOffer,
+      imageSku: dto.imageSku,
+    });
+  }
+
+  /** Super-admin: pre-create quote — SKU, image, pricing estimate, and Azure family quota. */
+  async validateSuperAdminAzureProvisionQuote(
+    dto: {
+      vmSize: string;
+      region: string;
+      category?: string;
+      vcpu?: number;
+      ramGb?: number;
+      ssdGb?: number;
+      nestedVirtualization?: boolean;
+      assignPublicIp?: boolean;
+      imagePublisher?: string;
+      imageOffer?: string;
+      imageSku?: string;
+      customImageId?: string;
+    },
+    superAdminId: mongoose.Types.ObjectId
+  ) {
+    await this.assertSuperAdmin(superAdminId);
+    return validateAzureProvisionQuote({
+      vmSize: dto.vmSize,
+      region: dto.region,
+      category: catalogPricingBucket(dto.category || 'linux'),
+      vcpu: dto.vcpu,
+      ramGb: dto.ramGb,
+      ssdGb: dto.ssdGb,
+      nestedVirtualization: Boolean(dto.nestedVirtualization),
+      assignPublicIp: Boolean(dto.assignPublicIp),
+      ...(dto.customImageId?.trim() ? { customImageId: dto.customImageId.trim() } : {}),
+      ...(dto.imagePublisher && dto.imageOffer && dto.imageSku
+        ? {
+            imagePublisher: dto.imagePublisher,
+            imageOffer: dto.imageOffer,
+            imageSku: dto.imageSku,
+          }
+        : {}),
+    });
+  }
+
+  /** Provision Azure VM in the background — HTTP returns immediately with status provisioning. */
+  private runAzureCatalogProvisionInBackground(
+    docId: mongoose.Types.ObjectId,
+    superAdminId: mongoose.Types.ObjectId,
+    input: {
+      region: string;
+      category: string;
+      canonicalSpec: string;
+      resourceGroup: string;
+      assignPublicIp: boolean;
+      resolvedVmSize?: string;
+      attachNow: boolean;
+      catalogTemplate: string;
+      imageReference?: {
+        publisher?: string;
+        offer?: string;
+        sku?: string;
+        version?: string;
+        id?: string;
+        osType?: string;
+      };
+    }
+  ): void {
+    void (async () => {
+      const doc = await CatalogVmModel.findById(docId);
+      if (!doc || doc.status !== 'provisioning') return;
+
+      try {
+        const provisioned = await resellerProvision({
+          provider: 'azure',
+          region: input.region,
+          category: input.category,
+          canonicalSpec: input.canonicalSpec,
+          catalogVmId: doc._id.toString(),
+          resourceGroup: input.resourceGroup,
+          assignPublicIp: input.assignPublicIp,
+          ...(input.resolvedVmSize ? { vmSize: input.resolvedVmSize } : {}),
+          ...(input.imageReference ? { imageReference: input.imageReference } : {}),
+        });
+
+        doc.status = input.attachNow ? 'active' : 'ready_to_attach';
+        doc.providerPurchased = true;
+        doc.ipAddress = provisioned.ip || undefined;
+        doc.hostname = provisioned.hostname || provisioned.meta?.vmName || undefined;
+        doc.username = provisioned.username;
+        doc.password = encrypt(provisioned.password);
+        doc.protocol = provisioned.protocol;
+        doc.providerInstanceId = provisioned.providerInstanceId;
+        doc.azureResourceGroup = provisioned.meta?.resourceGroup || input.resourceGroup;
+        doc.region = provisioned.region || input.region;
+        doc.updatedAt = new Date();
+
+        if (input.attachNow) {
+          doc.attachedAt = new Date();
+          doc.reviewedBy = superAdminId;
+          doc.reviewedAt = new Date();
+        }
+
+        await doc.save();
+
+        if (input.attachNow) {
+          this.schedulePostReadySetup(doc);
+          await this.notifyOwner(
+            doc,
+            'Azure VM is ready',
+            `Your ${input.catalogTemplate} VM from Azure is now available in My VM.`,
+            {
+              requestId: doc._id.toString(),
+              event: 'attached',
+            }
+          );
+        }
+
+        logger.info('[VmCatalog] Azure VM provision completed', {
+          requestId: doc._id.toString(),
+          resourceGroup: input.resourceGroup,
+          region: input.region,
+          vmName: doc.providerInstanceId,
+          attachNow: input.attachNow,
+        });
+      } catch (err) {
+        doc.status = 'failed';
+        doc.fulfillError = err instanceof Error ? err.message : String(err);
+        doc.updatedAt = new Date();
+        await doc.save();
+        logger.error('[VmCatalog] Azure background provision failed', {
+          requestId: doc._id.toString(),
+          error: doc.fulfillError,
+        });
+      }
+    })();
+  }
+
+  /** Super-admin: create Azure VM via reseller and register in catalog. */
+  async createSuperAdminAzureCatalogVm(
+    dto: {
+      ownerType: 'admin' | 'tenant';
+      ownerId: string;
+      projectId: string;
+      category: string;
+      catalogTemplate: string;
+      osCategory?: string;
+      canonicalSpec?: string;
+      vcpu?: number;
+      ramGb?: number;
+      ssdGb?: number;
+      region?: string;
+      nestedVirtualization?: boolean;
+      billing?: string;
+      attachNow?: boolean;
+      vmSize?: string;
+      imagePublisher?: string;
+      imageOffer?: string;
+      imageSku?: string;
+      imageVersion?: string;
+      customImageId?: string;
+      assignPublicIp?: boolean;
+    },
+    superAdminId: mongoose.Types.ObjectId
+  ): Promise<CatalogVmResponse> {
+    await this.assertSuperAdmin(superAdminId);
+
+    const project = await this.resolveSuperAdminProject(dto.ownerType, dto.ownerId, dto.projectId);
+    const resourceGroup = projectAzureResourceGroupName(project);
+    const category = catalogPricingBucket(dto.category);
+    const assignPublicIp = Boolean(dto.assignPublicIp);
+
+    let imageReference:
+      | {
+          publisher?: string;
+          offer?: string;
+          sku?: string;
+          version?: string;
+          id?: string;
+          osType?: string;
+        }
+      | undefined;
+    let osImageLabel: string | undefined;
+
+    if (dto.customImageId?.trim()) {
+      const imageValidation = await validateAzureCustomImage({
+        imageId: dto.customImageId.trim(),
+        region: dto.region,
+      });
+      if (!imageValidation.valid || !imageValidation.id) {
+        throw new ValidationError(imageValidation.message || 'Invalid Azure custom template.');
+      }
+      imageReference = {
+        id: imageValidation.id,
+        osType: imageValidation.osType,
+      };
+      osImageLabel = imageValidation.label;
+    } else if (dto.imagePublisher && dto.imageOffer && dto.imageSku) {
+      const regionForImage = dto.region?.trim();
+      if (regionForImage) {
+        // Wizard step 3/4 already validated marketplace image for this region.
+        imageReference = {
+          publisher: dto.imagePublisher.trim(),
+          offer: dto.imageOffer.trim(),
+          sku: dto.imageSku.trim(),
+          version: dto.imageVersion?.trim() || 'latest',
+        };
+        osImageLabel = dto.osCategory?.trim() || dto.catalogTemplate.trim();
+      } else {
+        const imageValidation = await validateAzureVmImage({
+          publisher: dto.imagePublisher,
+          offer: dto.imageOffer,
+          sku: dto.imageSku,
+          region: dto.region,
+          version: dto.imageVersion,
+        });
+        if (!imageValidation.valid) {
+          throw new ValidationError(imageValidation.message || 'Invalid Azure OS image.');
+        }
+        imageReference = {
+          publisher: imageValidation.publisher!,
+          offer: imageValidation.offer!,
+          sku: imageValidation.sku!,
+          version: imageValidation.version,
+        };
+        osImageLabel = imageValidation.label;
+      }
+    }
+
+    const resolvedCanonicalSpec =
+      dto.canonicalSpec?.trim() ||
+      (dto.vcpu != null && dto.ramGb != null && dto.ssdGb != null
+        ? planDimensionsToCanonicalSpec(dto.vcpu, dto.ramGb, dto.ssdGb, category)
+        : undefined);
+
+    const hasWizardPlacement = Boolean(
+      dto.region?.trim() && dto.vmSize?.trim() && resolvedCanonicalSpec
+    );
+
+    let region: string;
+    let canonicalSpec: string;
+    let resolvedVmSize: string | undefined;
+
+    if (hasWizardPlacement) {
+      // Skip slow reseller validate-spec + selectProvider — wizard step 4 already priced this.
+      region = dto.region!.trim();
+      canonicalSpec = resolvedCanonicalSpec!;
+      resolvedVmSize = dto.vmSize!.trim();
+    } else {
+      if (dto.vcpu == null || dto.ramGb == null || dto.ssdGb == null) {
+        throw new ValidationError(
+          'region, vmSize, and canonicalSpec — or vcpu, ramGb, and ssdGb — are required.'
+        );
+      }
+      const placement = await listAzurePlacementOptions({
+        vcpu: dto.vcpu,
+        ramGb: dto.ramGb,
+        ssdGb: dto.ssdGb,
+        category,
+        nestedVirtualization: Boolean(dto.nestedVirtualization),
+        assignPublicIp,
+        region: dto.region,
+        ...(dto.imagePublisher && dto.imageOffer && dto.imageSku
+          ? {
+              imagePublisher: dto.imagePublisher,
+              imageOffer: dto.imageOffer,
+              imageSku: dto.imageSku,
+            }
+          : {}),
+      });
+      const first = placement.options[0];
+      if (!first) {
+        throw new ValidationError(
+          placement.message || 'No Azure placement available for this spec.'
+        );
+      }
+      region = dto.region?.trim() || first.region;
+      canonicalSpec = placement.canonicalSpec || resolvedCanonicalSpec || '';
+      resolvedVmSize = dto.vmSize?.trim() || first.vmSize;
+    }
+
+    if (!region) {
+      throw new ValidationError('Could not resolve Azure region for provisioning.');
+    }
+    if (!resolvedVmSize) {
+      throw new ValidationError('VM size is required for Azure provisioning.');
+    }
+
+    {
+      const provisionQuote = await validateAzureProvisionQuote({
+        vmSize: resolvedVmSize,
+        region,
+        category,
+        vcpu: dto.vcpu,
+        ramGb: dto.ramGb,
+        ssdGb: dto.ssdGb,
+        nestedVirtualization: dto.nestedVirtualization,
+        assignPublicIp,
+        ...(dto.customImageId?.trim() ? { customImageId: dto.customImageId.trim() } : {}),
+        ...(dto.imagePublisher && dto.imageOffer && dto.imageSku
+          ? {
+              imagePublisher: dto.imagePublisher,
+              imageOffer: dto.imageOffer,
+              imageSku: dto.imageSku,
+            }
+          : {}),
+      });
+      if (!provisionQuote.valid) {
+        throw new ValidationError(
+          provisionQuote.message ||
+            'Azure VM size is not available in the selected region, or quota is insufficient.'
+        );
+      }
+    }
+
+    let owner: { adminId?: mongoose.Types.ObjectId; tenantId?: mongoose.Types.ObjectId } = {};
+    const attachNow = Boolean(dto.attachNow);
+    if (attachNow) {
+      owner = await this.resolveManualAzureOwner(
+        dto.ownerType,
+        new mongoose.Types.ObjectId(dto.ownerId)
+      );
+    }
+
+    const billing = String(dto.billing || 'monthly').trim();
+    const catalogTemplate = dto.catalogTemplate.trim();
+    const osCategory = dto.osCategory?.trim() || osImageLabel || catalogTemplate;
+    const now = new Date();
+    const projectOid = new mongoose.Types.ObjectId(project.id);
+
+    const doc = await CatalogVmModel.create({
+      ...owner,
+      projectId: projectOid,
+      provider: 'azure',
+      category,
+      planId: 'azure-auto',
+      planName: catalogTemplate,
+      specs: {
+        cpu: dto.vcpu != null ? `${dto.vcpu} vCPU` : undefined,
+        ram: dto.ramGb != null ? `${dto.ramGb} GB` : undefined,
+        disk: dto.ssdGb != null ? `${dto.ssdGb} GB` : undefined,
+      },
+      billing,
+      quantity: 1,
+      template: { value: 'azure-auto', label: osCategory },
+      pricingSnapshot: {
+        currency: 'INR',
+        subtotal: 0,
+        tax: 0,
+        total: 0,
+        billingLabel: billing,
+      },
+      status: 'provisioning',
+      walletDebited: false,
+      autoProvisioned: true,
+      providerPurchased: false,
+      region,
+      azureResourceGroup: resourceGroup,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    this.runAzureCatalogProvisionInBackground(doc._id, superAdminId, {
+      region,
+      category,
+      canonicalSpec,
+      resourceGroup,
+      assignPublicIp,
+      resolvedVmSize,
+      attachNow,
+      catalogTemplate,
+      imageReference,
+    });
+
+    logger.info('[VmCatalog] Azure VM provisioning started', {
+      requestId: doc._id.toString(),
+      resourceGroup,
+      region,
+      attachNow,
+    });
+
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
+  }
+
+  /** Super-admin: list Azure VMs waiting to be attached. */
+  async listReadyManualAzureCatalogVms(): Promise<CatalogVmResponse[]> {
+    const docs = await CatalogVmModel.find({
+      provider: 'azure',
+      status: 'ready_to_attach',
+    })
+      .sort({ createdAt: -1 })
+      .lean(false);
+
+    return Promise.all(
+      docs.map((doc) =>
+        this.toResponse(doc, { includeSecrets: true, role: 'super_admin' })
+      )
+    );
+  }
+
+  /** Super-admin: active Azure catalog VMs (power controls). */
+  async listSuperAdminAzureCatalogVms(): Promise<CatalogVmResponse[]> {
+    const docs = await CatalogVmModel.find({
+      provider: 'azure',
+      status: { $in: ['active', 'provisioning', 'fulfilling', 'failed'] },
+    })
+      .sort({ createdAt: -1 })
+      .lean(false);
+
+    return Promise.all(
+      docs.map((doc) =>
+        this.toResponse(doc, { includeSecrets: true, role: 'super_admin' })
+      )
+    );
+  }
+
+  /** Super-admin: attach a registered manual Azure VM to a platform admin or tenant. */
+  async attachManualAzureCatalogVm(
+    id: mongoose.Types.ObjectId,
+    reviewerId: mongoose.Types.ObjectId,
+    dto: { ownerType: 'admin' | 'tenant'; ownerId: string }
+  ): Promise<CatalogVmResponse> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM request not found.');
+    if (doc.provider !== 'azure') {
+      throw new ValidationError('This attach flow is only for Azure catalog VMs.');
+    }
+    if (doc.status !== 'ready_to_attach') {
+      throw new ValidationError('Only VMs ready to attach can be assigned to a customer.');
+    }
+    if (!doc.ipAddress && !doc.hostname) {
+      throw new ValidationError('Cannot attach without hostname or IP.');
+    }
+
+    const owner = await this.resolveManualAzureOwner(
+      dto.ownerType,
+      new mongoose.Types.ObjectId(dto.ownerId)
+    );
+
+    if (owner.adminId) {
+      doc.adminId = owner.adminId;
+      doc.tenantId = undefined;
+      doc.tenantUserId = undefined;
+    } else if (owner.tenantId) {
+      doc.tenantId = owner.tenantId;
+      doc.adminId = undefined;
+      doc.tenantUserId = undefined;
+    }
+
+    doc.status = 'active';
+    doc.attachedAt = new Date();
+    doc.reviewedBy = reviewerId;
+    doc.reviewedAt = new Date();
+    doc.updatedAt = new Date();
+    if (!doc.expiresAt && hasFixedProviderTerm(doc.billing)) {
+      doc.expiresAt = computeExpiresFrom(
+        doc.attachedAt,
+        resolveDurationDays(doc.billing)
+      );
+    }
+    await doc.save();
+
+    this.schedulePostReadySetup(doc);
+
+    const customerNames = await this.resolveCustomerPlanNames([doc]);
+    const customerPlanName = customerNames.get(doc.planId) ?? doc.planName;
+
+    await this.notifyOwner(
+      doc,
+      'Azure VM is ready',
+      `Your ${customerPlanName} VM from Azure is now available in My VM.`,
+      {
+        requestId: doc._id.toString(),
+        event: 'attached',
+      }
+    );
+
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
   }
 }
 

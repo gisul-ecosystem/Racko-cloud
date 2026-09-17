@@ -5,8 +5,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { ApiError } from '../../../../lib/apiClient';
-import { bulkCreateExternalVMs, type CreateExternalVMDto } from '../../../../lib/externalVmApi';
+import { bulkCreateExternalVMs, parseExternalVmProtocol, type CreateExternalVMDto } from '../../../../lib/externalVmApi';
 import { ProjectSelect } from '../../../../components/console/ProjectSelect';
+import { CreateProjectModal } from '../../../../components/console/CreateProjectModal';
 import { ChevronLeft } from 'lucide-react';
 
 const BULK_EXAMPLE = `[
@@ -37,6 +38,8 @@ export default function BulkImportPage() {
   const { toasts, addToast, dismiss } = useToast();
   const [jsonText, setJsonText] = useState(BULK_EXAMPLE);
   const [projectId, setProjectId] = useState('');
+  const [projectRefreshKey, setProjectRefreshKey] = useState(0);
+  const [cpOpen, setCpOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const handleFile = (file: File) => {
@@ -63,7 +66,7 @@ export default function BulkImportPage() {
     const vms: CreateExternalVMDto[] = [];
     for (const raw of parsed as BulkEntryRaw[]) {
       const ip = raw.ipAddress ?? raw.ip;
-      const proto = raw.protocol === 'ssh' ? 'ssh' : 'rdp';
+      const proto = parseExternalVmProtocol(raw.protocol);
       if (!raw.name || !ip || !raw.password) {
         addToast('error', 'Each entry needs at least name, ip, and password.');
         return;
@@ -133,6 +136,8 @@ export default function BulkImportPage() {
             value={projectId}
             onChange={setProjectId}
             disabled={submitting}
+            onCreateProject={() => setCpOpen(true)}
+            refreshKey={projectRefreshKey}
           />
         </div>
 
@@ -155,6 +160,18 @@ export default function BulkImportPage() {
           </button>
         </div>
       </div>
+
+      <CreateProjectModal
+        open={cpOpen}
+        onClose={() => setCpOpen(false)}
+        portal="org"
+        preselectedServices={['elastic-servers']}
+        lockServices
+        onCreated={(project) => {
+          setProjectId(project.id);
+          setProjectRefreshKey((k) => k + 1);
+        }}
+      />
     </div>
   );
 }

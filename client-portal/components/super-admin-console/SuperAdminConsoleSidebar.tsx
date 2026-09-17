@@ -8,12 +8,14 @@ import {
   Database,
   LayoutDashboard,
   LayoutGrid,
+  LifeBuoy,
   MonitorCheck,
   Palette,
   Plus,
   Server,
   Shield,
   Upload,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -51,25 +53,10 @@ const navItems: NavItem[] = [
     section: 'top',
   },
   {
-    href: '/super-admin-console/elastic-servers',
-    label: 'Server Import & Assign',
-    icon: Upload,
-    exact: false,
-    anyOf: ['elastic_servers.superadmin'] as string[],
-    section: 'services',
-  },
-  {
     href: '/super-admin-console/vm-management',
     label: 'VM Management',
     icon: MonitorCheck,
     anyOf: ['vm_management.manage'],
-    section: 'services',
-  },
-  {
-    href: '/super-admin-console/vm-inventory',
-    label: 'VM Inventory',
-    icon: Database,
-    anyOf: ['vm_inventory.read'],
     section: 'services',
   },
   {
@@ -108,6 +95,20 @@ const navItems: NavItem[] = [
     section: 'services',
   },
   {
+    href: '/super-admin-console/vm-inventory',
+    label: 'VM Inventory',
+    icon: Database,
+    anyOf: ['vm_inventory.read'],
+    section: 'tools',
+  },
+  {
+    href: '/super-admin-console/server-assign',
+    label: 'Server Assign',
+    icon: UserPlus,
+    anyOf: ['vm_inventory.write'],
+    section: 'tools',
+  },
+  {
     href: '/super-admin-console/white-labelling',
     label: 'White Labelling',
     icon: Palette,
@@ -119,6 +120,12 @@ const navItems: NavItem[] = [
     label: 'Customer Directory',
     icon: Users,
     anyOf: ['admin_users.manage'],
+    section: 'tools',
+  },
+  {
+    href: '/super-admin-console/support',
+    label: 'Support',
+    icon: LifeBuoy,
     section: 'tools',
   },
   {

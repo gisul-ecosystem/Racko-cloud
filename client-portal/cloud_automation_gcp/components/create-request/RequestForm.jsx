@@ -19,7 +19,7 @@ import {
 import { InstancePicker } from './InstancePicker';
 import { PermissionsPicker } from './PermissionsPicker';
 import { RegionPicker } from './RegionPicker';
-import { FINAL_FORM_STEP, RequestStepper } from './RequestStepper';
+import { FINAL_FORM_STEP } from './RequestStepper';
 import { SectionHeader } from './SectionHeader';
 import { ServiceSelector } from './ServiceSelector';
 import {
@@ -168,17 +168,6 @@ export function RequestForm({
 
   return (
     <div className="space-y-6">
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="h-0.5 bg-gradient-to-r from-[var(--cloud-accent,#B91C1C)] to-[var(--cloud-accent,#B91C1C)]" />
-        <div className="px-4 py-5 sm:px-6">
-          <RequestStepper
-            currentStep={currentStep}
-            maxReachableStep={maxReachableStep}
-            onStepClick={onStepClick}
-          />
-        </div>
-      </div>
-
       {(validationErrors.length > 0 || stepErrors.length > 0) && (
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm">
           <div className="flex items-start gap-3">
@@ -990,12 +979,17 @@ export function RequestForm({
           >
             Back
           </button>
+          <p className="text-xs font-medium text-gray-500">
+            Step {currentStep} of {FINAL_FORM_STEP}
+          </p>
           {currentStep < FINAL_FORM_STEP ? (
             <button type="button" onClick={onNext} className={RACKO_BTN_PRIMARY}>
               Next
               <ChevronRight className="h-4 w-4" />
             </button>
-          ) : null}
+          ) : (
+            <span className="text-xs font-semibold text-gray-400">Review pricing →</span>
+          )}
         </div>
       </div>
     </div>

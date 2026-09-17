@@ -49,8 +49,11 @@ export class TenantUserController {
     try {
       const authReq = req as TenantAuthenticatedRequest;
       const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
-      const createdBy = new mongoose.Types.ObjectId(authReq.tenantUser.id);
-      const users = await tenantUserService.listMyUsers(tenantId, createdBy);
+      const actor = {
+        id: new mongoose.Types.ObjectId(authReq.tenantUser.id),
+        role: authReq.tenantUser.role,
+      };
+      const users = await tenantUserService.listMyUsers(tenantId, actor);
       success(res, 'Tenant users retrieved.', { users, total: users.length });
     } catch (error) {
       next(error);
@@ -61,11 +64,14 @@ export class TenantUserController {
     try {
       const authReq = req as TenantAuthenticatedRequest;
       const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
-      const createdBy = new mongoose.Types.ObjectId(authReq.tenantUser.id);
+      const actor = {
+        id: new mongoose.Types.ObjectId(authReq.tenantUser.id),
+        role: authReq.tenantUser.role,
+      };
       const { userId } = req.params as { userId: string };
       const { isActive } = req.body as { isActive: boolean };
 
-      const user = await tenantUserService.setUserActive(userId, isActive, tenantId, createdBy);
+      const user = await tenantUserService.setUserActive(userId, isActive, tenantId, actor);
       success(res, `Tenant user ${isActive ? 'activated' : 'deactivated'}.`, { user });
     } catch (error) {
       next(error);
@@ -76,10 +82,13 @@ export class TenantUserController {
     try {
       const authReq = req as TenantAuthenticatedRequest;
       const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
-      const createdBy = new mongoose.Types.ObjectId(authReq.tenantUser.id);
+      const actor = {
+        id: new mongoose.Types.ObjectId(authReq.tenantUser.id),
+        role: authReq.tenantUser.role,
+      };
       const { userId } = req.params as { userId: string };
 
-      await tenantUserService.deleteUser(userId, tenantId, createdBy);
+      await tenantUserService.deleteUser(userId, tenantId, actor);
       success(res, 'Tenant user deleted.');
     } catch (error) {
       next(error);
@@ -90,10 +99,13 @@ export class TenantUserController {
     try {
       const authReq = req as TenantAuthenticatedRequest;
       const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
-      const createdBy = new mongoose.Types.ObjectId(authReq.tenantUser.id);
+      const actor = {
+        id: new mongoose.Types.ObjectId(authReq.tenantUser.id),
+        role: authReq.tenantUser.role,
+      };
       const { ids } = req.body as { ids: string[] };
 
-      const result = await tenantUserService.bulkDeleteUsers(ids, tenantId, createdBy);
+      const result = await tenantUserService.bulkDeleteUsers(ids, tenantId, actor);
       success(res, `${result.deleted} user(s) deleted.`, result);
     } catch (error) {
       next(error);

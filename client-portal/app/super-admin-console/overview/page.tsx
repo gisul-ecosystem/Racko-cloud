@@ -1099,11 +1099,6 @@ export default function SuperAdminOverviewPage() {
               label="Triage requests"
               icon={Database}
             />
-            <SectionLink
-              href="/super-admin-console/vm-inventory"
-              label="Open VM inventory"
-              icon={Server}
-            />
           </div>
         </Surface>
       </section>

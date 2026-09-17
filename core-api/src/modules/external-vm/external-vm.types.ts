@@ -5,6 +5,7 @@ export interface CreateExternalVMDto {
   name: string;
   ipAddress: string;
   protocol: ExternalVMProtocol;
+  port?: number;
   username?: string;
   password: string;
   /** Required for platform admin console creates. */
@@ -37,6 +38,8 @@ export interface ExternalVmMyAccess {
   allowedNow: boolean;
   schedule: AssignmentSchedulePublic | null;
   nextWindow: string | null;
+  overrideActive?: boolean;
+  overrideUntil?: string | null;
 }
 
 /** API-facing external VM shape. Password is returned DECRYPTED for admins only. */

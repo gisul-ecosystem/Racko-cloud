@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, Fragment } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -26,6 +26,7 @@ import {
   fetchCatalogVmRequests,
   formatCatalogVmStatus,
   rejectCatalogVmRequest,
+  retryCatalogVmInstall,
   type CatalogVmPowerAction,
   type ICatalogVm,
   type VmCatalogCategory,
@@ -33,8 +34,11 @@ import {
 } from '@/lib/vmCatalogApi';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
+import { ReadMoreText } from '@/components/ui/ReadMoreText';
 
 const WINDOWS_ATTACH_DELAY_MS = 12 * 60 * 1000;
+const FETCH_TO_ATTACH_TIMEOUT_MS = 3 * 60 * 1000;
+const FETCH_TO_ATTACH_POLL_MS = 2500;
 
 function formatMoney(amount: number): string {
   return new Intl.NumberFormat('en-IN', {
@@ -106,9 +110,54 @@ function StatusBadge({ status }: { status: VmCatalogStatus }) {
   );
 }
 
+function PostReadyInstallBadge({
+  status,
+}: {
+  status: NonNullable<ICatalogVm['postReadyStatus']>;
+}) {
+  if (status === 'done') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-800">
+        <CheckCircle2 className="h-3.5 w-3.5" /> Installed
+      </span>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-800">
+        <XCircle className="h-3.5 w-3.5" /> Failed
+      </span>
+    );
+  }
+  if (status === 'running') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Installing
+      </span>
+    );
+  }
+  if (status === 'pending') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+        <RefreshCw className="h-3.5 w-3.5" /> Queued
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-semibold text-gray-600">
+      Not requested
+    </span>
+  );
+}
+
 export default function WebyneVmRequestsByAdminPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const adminId = typeof params?.adminId === 'string' ? params.adminId : '';
+  const isTenant = searchParams.get('scope') === 'tenant';
+  const listOpts = isTenant
+    ? { tenantId: adminId }
+    : { adminId };
 
   const [requests, setRequests] = useState<ICatalogVm[]>([]);
   const [loading, setLoading] = useState(true);
@@ -131,7 +180,7 @@ export default function WebyneVmRequestsByAdminPage() {
     }
     try {
       const data = await fetchCatalogVmRequests({
-        adminId,
+        ...listOpts,
         status: statusFilter,
       });
       setRequests(data);
@@ -142,7 +191,7 @@ export default function WebyneVmRequestsByAdminPage() {
     } finally {
       if (!opts?.silent) setLoading(false);
     }
-  }, [adminId, statusFilter]);
+  }, [adminId, isTenant, statusFilter]);
 
   useEffect(() => {
     void load();
@@ -158,6 +207,16 @@ export default function WebyneVmRequestsByAdminPage() {
     const hasFulfilling = requests.some((r) => r.status === 'fulfilling');
     if (!hasFulfilling) return;
     const id = setInterval(() => void load({ silent: true }), 4000);
+    return () => clearInterval(id);
+  }, [requests, load]);
+
+  // Poll while post-attach software install is queued/running.
+  useEffect(() => {
+    const hasInstalling = requests.some(
+      (r) => r.postReadyStatus === 'pending' || r.postReadyStatus === 'running'
+    );
+    if (!hasInstalling) return;
+    const id = setInterval(() => void load({ silent: true }), 5000);
     return () => clearInterval(id);
   }, [requests, load]);
 
@@ -198,12 +257,95 @@ export default function WebyneVmRequestsByAdminPage() {
     setSuccessMsg(null);
     try {
       await attachCatalogVmRequest(id);
-      setSuccessMsg('VM attached — now visible to the admin under My VM.');
+      setSuccessMsg(
+        isTenant
+          ? 'VM attached — now visible to the tenant under My VM.'
+          : 'VM attached — now visible to the admin under My VM.'
+      );
       setExpandedId(id);
       setStatusFilter('active');
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Attach failed.');
+    } finally {
+      setActionId(null);
+    }
+  }
+
+  async function handleAttachWithFreshFetch(id: string) {
+    setActionId(id);
+    setSuccessMsg(null);
+    setError(null);
+    try {
+      await fetchCatalogVmDetails(id);
+      setSuccessMsg('Fetching latest VM details from Webyne. Waiting for completion…');
+
+      const startedAt = Date.now();
+      let currentStatus: VmCatalogStatus | null = null;
+
+      while (Date.now() - startedAt < FETCH_TO_ATTACH_TIMEOUT_MS) {
+        const latest = await fetchCatalogVmRequests({ ...listOpts, status: 'all' });
+        setRequests(latest);
+
+        const row = latest.find((req) => req._id === id);
+        currentStatus = row?.status ?? null;
+
+        if (currentStatus === 'ready_to_attach' || currentStatus === 'active') {
+          break;
+        }
+        if (currentStatus === 'failed') {
+          throw new Error(
+            row?.fulfillError ||
+              'Fetch details failed on Webyne. Please retry Fetch details.'
+          );
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, FETCH_TO_ATTACH_POLL_MS));
+      }
+
+      if (currentStatus !== 'ready_to_attach' && currentStatus !== 'active') {
+        throw new Error(
+          'Fetch details is still in progress. Please wait a moment and click Attach again.'
+        );
+      }
+
+      if (currentStatus === 'active') {
+        setSuccessMsg('VM is already attached and visible under My VM.');
+        setExpandedId(id);
+        setStatusFilter('active');
+        await load();
+        return;
+      }
+
+      setSuccessMsg('Fetched latest VM details from Webyne. Attaching now…');
+      await attachCatalogVmRequest(id);
+      setSuccessMsg(
+        isTenant
+          ? 'VM attached — now visible to the tenant under My VM.'
+          : 'VM attached — now visible to the admin under My VM.'
+      );
+      setExpandedId(id);
+      setStatusFilter('active');
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Attach failed after fetch details.');
+    } finally {
+      setActionId(null);
+    }
+  }
+
+  async function handleRetryInstall(id: string) {
+    setActionId(id);
+    setSuccessMsg(null);
+    setError(null);
+    try {
+      await retryCatalogVmInstall(id);
+      setSuccessMsg('Retry started: pushing agent and resuming software installation.');
+      setExpandedId(id);
+      setStatusFilter('active');
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Retry install failed.');
     } finally {
       setActionId(null);
     }
@@ -259,6 +401,52 @@ export default function WebyneVmRequestsByAdminPage() {
     }
   }
 
+  function getMachineInstallSummary(req: ICatalogVm): {
+    effectiveStatus: NonNullable<ICatalogVm['postReadyStatus']>;
+    done: number;
+    total: number;
+    failed: number;
+    running: number;
+    pending: number;
+    stage: NonNullable<ICatalogVm['postReadyStage']>;
+    stageLabel: string;
+    machineStatus?: NonNullable<ICatalogVm['postReadyMachineStatus']>;
+    agentConnected: boolean;
+    runningSoftware: string[];
+    pendingSoftware: string[];
+  } {
+    const done = req.postReadyJobDone ?? 0;
+    const total = req.postReadyJobTotal ?? 0;
+    const failed = req.postReadyJobFailed ?? 0;
+    const running = req.postReadyJobRunning ?? 0;
+    const pending = req.postReadyJobPending ?? 0;
+
+    let effectiveStatus: NonNullable<ICatalogVm['postReadyStatus']> =
+      req.postReadyStatus ?? 'none';
+
+    if (total > 0) {
+      if (failed > 0) effectiveStatus = 'failed';
+      else if (running > 0) effectiveStatus = 'running';
+      else if (pending > 0) effectiveStatus = 'pending';
+      else if (done === total) effectiveStatus = 'done';
+    }
+
+    return {
+      effectiveStatus,
+      done,
+      total,
+      failed,
+      running,
+      pending,
+      stage: req.postReadyStage ?? 'not_requested',
+      stageLabel: req.postReadyStageLabel ?? 'Not requested',
+      machineStatus: req.postReadyMachineStatus,
+      agentConnected: Boolean(req.postReadyAgentConnected),
+      runningSoftware: req.postReadyRunningSoftware ?? [],
+      pendingSoftware: req.postReadyPendingSoftware ?? [],
+    };
+  }
+
   async function handleReject(e: React.FormEvent) {
     e.preventDefault();
     if (!rejectId || !rejectReason.trim()) return;
@@ -289,6 +477,7 @@ export default function WebyneVmRequestsByAdminPage() {
         <h1 className="text-2xl font-bold text-gray-900">Requests</h1>
         <p className="mt-0.5 text-sm text-gray-500">
           From <span className="font-medium text-gray-700">{adminEmail}</span>
+          {isTenant ? ' (tenant)' : ''}
           {' · '}
           Approve to fulfill on Webyne, then Attach to release to admin. Windows
           requests on Linux-priced plans deploy as Linux first — use Change template
@@ -367,6 +556,10 @@ export default function WebyneVmRequestsByAdminPage() {
                 <tbody>
                   {requests.map((req) => (
                     <Fragment key={req._id}>
+                      {(() => {
+                        const install = getMachineInstallSummary(req);
+                        return (
+                          <>
                       <tr className="border-b border-gray-50 hover:bg-gray-50/80">
                         <td className="px-5 py-3.5">
                           <p className="font-medium text-gray-900">{req.planName}</p>
@@ -386,7 +579,9 @@ export default function WebyneVmRequestsByAdminPage() {
                         <td className="px-4 py-3.5">
                           <StatusBadge status={req.status} />
                           {req.fulfillError ? (
-                            <p className="mt-1 max-w-xs text-xs text-red-600">{req.fulfillError}</p>
+                            <div className="mt-1">
+                              <ReadMoreText text={req.fulfillError} previewLength={100} />
+                            </div>
                           ) : null}
                         </td>
                         <td className="px-4 py-3.5 text-gray-500">
@@ -470,6 +665,22 @@ export default function WebyneVmRequestsByAdminPage() {
                                 {expandedId === req._id ? 'Hide details' : 'View details'}
                               </button>
                             )}
+                            {req.status === 'active' && install.effectiveStatus === 'failed' && (
+                              <button
+                                type="button"
+                                disabled={actionId === req._id}
+                                onClick={() => void handleRetryInstall(req._id)}
+                                className="inline-flex items-center gap-1 rounded-md border border-blue-300 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-900 hover:bg-blue-100 disabled:opacity-60"
+                                title="Retry agent push and software installation"
+                              >
+                                {actionId === req._id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                )}
+                                Retry install
+                              </button>
+                            )}
                             {req.status === 'ready_to_attach' && (
                               <>
                                 {req.needsOsChange ? (
@@ -507,7 +718,7 @@ export default function WebyneVmRequestsByAdminPage() {
                                           blockedByOsChange ||
                                           blockedByDelay
                                         }
-                                        onClick={() => void handleAttach(req._id)}
+                                        onClick={() => void handleAttachWithFreshFetch(req._id)}
                                         className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717] disabled:opacity-60"
                                         title={
                                           blockedByOsChange
@@ -575,6 +786,72 @@ export default function WebyneVmRequestsByAdminPage() {
                                   All VM details fetched
                                 </span>
                               )}
+                            </div>
+
+                            <div className="mb-3 rounded-lg border border-gray-200 bg-white px-3 py-2.5">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                                Software Installation
+                              </p>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <PostReadyInstallBadge status={install.effectiveStatus} />
+                                <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                                  Stage: {install.stageLabel}
+                                </span>
+                                <span className="text-xs text-gray-600">
+                                  Selected packages: {req.preferredSoftwareIds?.length ?? 0}
+                                </span>
+                                {install.total > 0 ? (
+                                  <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800">
+                                    Jobs: {install.done}/{install.total} done
+                                  </span>
+                                ) : null}
+                                {install.failed > 0 ? (
+                                  <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-800">
+                                    {install.failed} failed
+                                  </span>
+                                ) : null}
+                                {req.machineId ? (
+                                  <span className="rounded-md bg-gray-100 px-2 py-0.5 font-mono text-[11px] text-gray-700">
+                                    Machine ID: {req.machineId}
+                                  </span>
+                                ) : null}
+                                {install.machineStatus ? (
+                                  <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-700">
+                                    Machine: {install.machineStatus}
+                                  </span>
+                                ) : null}
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                    install.agentConnected
+                                      ? 'bg-green-50 text-green-800'
+                                      : 'bg-amber-50 text-amber-800'
+                                  }`}
+                                >
+                                  Agent: {install.agentConnected ? 'connected' : 'not connected'}
+                                </span>
+                              </div>
+                              {install.runningSoftware.length > 0 ? (
+                                <p className="mt-2 text-xs text-blue-700">
+                                  Installing now: {install.runningSoftware.join(', ')}
+                                </p>
+                              ) : null}
+                              {install.pendingSoftware.length > 0 ? (
+                                <p className="mt-1 text-xs text-amber-700">
+                                  Queued next: {install.pendingSoftware.join(', ')}
+                                </p>
+                              ) : null}
+                              {install.effectiveStatus === 'running' ? (
+                                <p className="mt-2 text-xs text-blue-700">
+                                  Agent/software installation is in progress. This view auto-refreshes every 5 seconds.
+                                </p>
+                              ) : install.effectiveStatus === 'pending' ? (
+                                <p className="mt-2 text-xs text-amber-700">
+                                  Jobs are queued and waiting for the agent to pick them.
+                                </p>
+                              ) : null}
+                              {req.postReadyError ? (
+                                <p className="mt-2 text-xs text-red-700">{req.postReadyError}</p>
+                              ) : null}
                             </div>
 
                             {req.instances && req.instances.length > 0 ? (
@@ -782,6 +1059,9 @@ export default function WebyneVmRequestsByAdminPage() {
                           </td>
                         </tr>
                       )}
+                          </>
+                        );
+                      })()}
                     </Fragment>
                   ))}
                 </tbody>

@@ -1,15 +1,27 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { ChevronLeft, Maximize, RefreshCw, LogOut } from 'lucide-react';
 import {
+  closeExternalVMConsole,
   fetchExternalVM,
   getExternalVMConsole,
   type ExternalVMConsoleSession,
   type ExternalVMProtocol,
 } from '../../lib/externalVmApi';
 import { ApiError } from '../../lib/apiClient';
+import { exitGuacamoleConsolePage } from '../../lib/consoleLaunch';
+import { useIsTenantPortal } from '../../lib/portalMode';
+import { startConsoleSession, heartbeatConsoleSession, endConsoleSession, endConsoleSessionBeacon, endConsoleSessionByTokenBeacon } from '../../lib/consoleSessionApi';
+import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
+import {
+  RESIZE_REFETCH_DEBOUNCE_MS,
+  dimensionsDrifted,
+  isFullscreenTransitionActive,
+  markFullscreenTransitionUntil,
+  shouldRefetchSessionOnResize,
+} from './consoleResize';
 
 const TOOLBAR_HEIGHT = 44;
 /** Minimum time the Racko overlay stays up (iframe onLoad fires much earlier). */
@@ -21,25 +33,13 @@ const IFRAME_OVERLAY_FADE_MS = 300;
 const protocolColors: Record<ExternalVMProtocol, { bg: string; border: string; text: string }> = {
   rdp: { bg: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.4)', text: '#93c5fd' },
   ssh: { bg: 'rgba(34, 197, 94, 0.15)', border: 'rgba(34, 197, 94, 0.4)', text: '#86efac' },
+  vnc: { bg: 'rgba(168, 85, 247, 0.15)', border: 'rgba(168, 85, 247, 0.4)', text: '#d8b4fe' },
 };
 
 function getProtocolSubtitle(p: ExternalVMProtocol): string {
-  return p === 'ssh' ? 'Establishing secure SSH session' : 'Establishing secure RDP session';
-}
-
-/** Ignore sub-pixel/rounding drift so we don't loop re-fetching forever. */
-const DIMENSION_MATCH_TOLERANCE_PX = 4;
-
-function dimensionsDrifted(
-  a: { width?: number; height?: number },
-  b: { width?: number; height?: number }
-): boolean {
-  if (a.width === undefined || a.height === undefined) return false;
-  if (b.width === undefined || b.height === undefined) return false;
-  return (
-    Math.abs(a.width - b.width) > DIMENSION_MATCH_TOLERANCE_PX ||
-    Math.abs(a.height - b.height) > DIMENSION_MATCH_TOLERANCE_PX
-  );
+  if (p === 'ssh') return 'Establishing secure SSH session';
+  if (p === 'vnc') return 'Establishing secure VNC session';
+  return 'Establishing secure RDP session';
 }
 
 export interface ExternalVMConsoleViewProps {
@@ -51,6 +51,15 @@ export interface ExternalVMConsoleViewProps {
     id: string,
     dimensions?: { width?: number; height?: number }
   ) => Promise<ExternalVMConsoleSession>;
+  closeSession?: (id: string) => void;
+  /** Optional session tracking overrides — pass tenant API functions for tenant pages. */
+  sessionTracking?: {
+    start: (serverId: string) => Promise<{ sessionId: string; endToken: string }>;
+    heartbeat: (sessionId: string) => Promise<void>;
+    end: (sessionId: string) => Promise<void>;
+    endBeacon: (sessionId: string, gatewayBaseUrl: string) => void;
+    endTokenBeaconPath?: string; // API path for end-by-token beacon (tenant route)
+  };
 }
 
 /**
@@ -66,12 +75,14 @@ export function ExternalVMConsoleView({
   disconnectHref,
   fetchVm = fetchExternalVM,
   openConsole = getExternalVMConsole,
+  closeSession = closeExternalVMConsole,
+  sessionTracking,
 }: ExternalVMConsoleViewProps) {
+  const isTenantPortal = useIsTenantPortal();
   const params = useParams<{ id?: string; serverId?: string }>();
   const id = params.id ?? params.serverId;
-  const router = useRouter();
-
   const [session, setSession] = useState<ExternalVMConsoleSession | null>(null);
+  const sessionRef = useRef<ExternalVMConsoleSession | null>(null);
   const hasSessionRef = useRef(false);
   const [vmName, setVmName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,26 +103,30 @@ export function ExternalVMConsoleView({
   const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Mirrors isFullscreen for reads inside stable closures (ResizeObserver callback). */
   const isFullscreenRef = useRef(false);
+  /** Blocks resize refetch briefly after fullscreen enter/exit. */
+  const fullscreenTransitionUntilRef = useRef(0);
+
+  const sessionIdRef = useRef<string | null>(null);
+  const endTokenRef = useRef<string | null>(null);
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /**
    * Prefer the iframe's actual container box over window.innerWidth/innerHeight
-   * so Guacamole renders at the real on-screen resolution — no scaling, no
-   * black bars, no need to go fullscreen first. Falls back to window size
-   * before the container has been measured (e.g. the very first fetch, when
-   * no <iframe> has mounted yet).
-   *
-   * NOTE: We never call this while fullscreen — reloading the iframe (new
-   * iframeKey) destroys the fullscreen DOM element and kicks the browser out
-   * of fullscreen. RDP/VNC resizing while fullscreen is instead left to
-   * Guacamole's own resize-method=display-update, which resizes the existing
-   * session in place without any iframe reload. See handleFullscreenChange,
-   * the ResizeObserver, and handleIframeLoad for the isFullscreenRef guards.
+   * so Guacamole renders at the real on-screen resolution. Fullscreen enter/exit
+   * never refetches — Guacamole resizes or scales the existing tunnel in place.
    */
   const getContainerDimensions = useCallback((): { width?: number; height?: number } => {
     const container = iframeRef.current?.parentElement ?? containerRef.current;
     const width = container?.clientWidth ?? window.innerWidth;
     const height = container?.clientHeight ?? window.innerHeight;
     return { width, height };
+  }, []);
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
   }, []);
 
   const clearIframeTimeout = useCallback(() => {
@@ -152,6 +167,7 @@ export function ExternalVMConsoleView({
         const data = await openConsole(id, dims);
         if (signal?.aborted) return;
         setSession(data);
+        sessionRef.current = data;
         setIframeKey((k) => k + 1);
       } catch (err) {
         if (signal?.aborted) return;
@@ -179,12 +195,46 @@ export function ExternalVMConsoleView({
     return () => {
       clearTimeout(timer);
       ctrl.abort();
+      if (sessionRef.current && id) {
+        closeSession(id);
+      }
+      stopHeartbeat();
+      endTokenRef.current = null;
     };
-  }, [fetchSession]);
+  }, [fetchSession, id, closeSession]);
 
   useEffect(() => {
     hasSessionRef.current = !!session;
+    sessionRef.current = session;
   }, [session]);
+
+  useEffect(() => {
+    if (!id) return;
+    const onPageHide = () => {
+      if (sessionRef.current) {
+        closeSession(id);
+      }
+      if (sessionIdRef.current) {
+        if (endTokenRef.current) {
+          const apiPath = sessionTracking
+            ? '/api/v1/tenant-external-vms/sessions/end-by-token'
+            : '/api/v1/external-vms/sessions/end-by-token';
+          endConsoleSessionByTokenBeacon(endTokenRef.current, getGatewayBaseUrl(), apiPath);
+          endTokenRef.current = null;
+        } else {
+          const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+          beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+        }
+        stopHeartbeat();
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+    };
+  }, [id, closeSession]);
 
   // Resolve the VM name for the toolbar title (best-effort, non-blocking).
   useEffect(() => {
@@ -206,10 +256,8 @@ export function ExternalVMConsoleView({
     return () => clearIframeTimeout();
   }, [session, iframeKey, startIframeLoading, clearIframeTimeout]);
 
-  // Keep the console sized to its container — if the container is resized
-  // (window resize, sidebar toggle, panel drag, etc.), re-request the session
-  // with the new dimensions and reload the iframe so Guacamole re-renders at
-  // the correct resolution instead of scaling/letterboxing.
+  // Reconnect only on substantial, settled window resizes — not per-pixel
+  // drags and not when entering/exiting fullscreen (Guacamole refits in place).
   useEffect(() => {
     const container = containerRef.current;
     if (!container || typeof ResizeObserver === 'undefined') return;
@@ -221,12 +269,23 @@ export function ExternalVMConsoleView({
 
       if (resizeDebounceRef.current) clearTimeout(resizeDebounceRef.current);
       resizeDebounceRef.current = setTimeout(() => {
-        if (isFullscreenRef.current) return; // entering/inside fullscreen isn't a real resize — don't reload
-        if (!hasSessionRef.current) return; // no active session yet — initial fetch will size correctly
-        if (dimensionsDrifted({ width, height }, lastFetchDimsRef.current)) {
-          void fetchSession();
+        if (!hasSessionRef.current) return;
+        if (
+          !shouldRefetchSessionOnResize(
+            { width, height },
+            lastFetchDimsRef.current,
+            {
+              inFullscreen: isFullscreenRef.current,
+              inFullscreenTransition: isFullscreenTransitionActive(
+                fullscreenTransitionUntilRef.current
+              ),
+            }
+          )
+        ) {
+          return;
         }
-      }, 400);
+        void fetchSession();
+      }, RESIZE_REFETCH_DEBOUNCE_MS);
     });
 
     observer.observe(container);
@@ -248,6 +307,28 @@ export function ExternalVMConsoleView({
 
   const handleIframeLoad = () => {
     const elapsed = Date.now() - overlayStartedAtRef.current;
+
+    // ── Session tracking: start session when console is live ─────────────
+    if (id && !sessionIdRef.current && !(isTenantPortal && !sessionTracking)) {
+      // Platform tracking APIs require org refresh cookies; tenant pages must pass
+      // sessionTracking (see elastic / assigned consoles) or we skip tracking here.
+      const startFn = sessionTracking?.start ?? startConsoleSession;
+      void startFn(id).then(({ sessionId: sId, endToken }) => {
+        sessionIdRef.current = sId;
+        endTokenRef.current = endToken;
+        // Start 60s heartbeat
+        heartbeatIntervalRef.current = setInterval(() => {
+          if (sessionIdRef.current) {
+            const hbFn = sessionTracking?.heartbeat ?? heartbeatConsoleSession;
+            void hbFn(sessionIdRef.current);
+          }
+        }, 60_000);
+      }).catch(() => {
+        // Non-fatal — tracking failure must never affect console
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     const remainingMin = Math.max(0, IFRAME_OVERLAY_MIN_MS - elapsed);
     const remainingMax = Math.max(0, IFRAME_OVERLAY_MAX_MS - elapsed);
     scheduleOverlayHide(Math.min(remainingMin, remainingMax));
@@ -257,13 +338,16 @@ export function ExternalVMConsoleView({
     // session (flex layout settling, fonts affecting toolbar height, etc.).
     // Now that the iframe has actually rendered, re-check against the real
     // container size and self-correct if it drifted from what we requested.
-    // Skip while fullscreen — entering fullscreen changes the container size
-    // on purpose and should never trigger a reload.
-    if (isFullscreenRef.current) return;
-    const currentDims = getContainerDimensions();
-    if (dimensionsDrifted(currentDims, lastFetchDimsRef.current)) {
-      void fetchSession();
+    // Self-correct small initial layout drift only — never on fullscreen transitions.
+    if (
+      isFullscreenRef.current ||
+      isFullscreenTransitionActive(fullscreenTransitionUntilRef.current)
+    ) {
+      return;
     }
+    const currentDims = getContainerDimensions();
+    if (!dimensionsDrifted(currentDims, lastFetchDimsRef.current)) return;
+    void fetchSession();
   };
 
   useEffect(() => {
@@ -274,11 +358,11 @@ export function ExternalVMConsoleView({
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      // Deliberately does NOT re-fetch the session / reload the iframe here.
-      // Bumping iframeKey while fullscreen destroys the fullscreen DOM element
-      // and kicks the browser straight back out of fullscreen. Resizing the
-      // existing RDP/VNC display is left entirely to Guacamole's own
-      // resize-method=display-update, which resizes in place with no reload.
+      if (resizeDebounceRef.current) {
+        clearTimeout(resizeDebounceRef.current);
+        resizeDebounceRef.current = null;
+      }
+      fullscreenTransitionUntilRef.current = markFullscreenTransitionUntil();
       const nowFullscreen = !!document.fullscreenElement;
       isFullscreenRef.current = nowFullscreen;
       setIsFullscreen(nowFullscreen);
@@ -312,6 +396,7 @@ export function ExternalVMConsoleView({
     // IT the fullscreen element gives Guacamole the full screen to resize into.
     const el = containerRef.current;
     if (!el || typeof el.requestFullscreen !== 'function') return;
+    fullscreenTransitionUntilRef.current = markFullscreenTransitionUntil();
     el.requestFullscreen()
       .then(() => setTimeout(() => iframeRef.current?.focus(), 300))
       .catch(() => {
@@ -329,7 +414,24 @@ export function ExternalVMConsoleView({
         <div style={styles.toolbarLeft}>
           <button
             type="button"
-            onClick={() => router.push(backHref)}
+            onClick={() => {
+              if (sessionRef.current && id) closeSession(id);
+              if (sessionIdRef.current) {
+                if (endTokenRef.current) {
+                  const apiPath = sessionTracking
+                    ? '/api/v1/tenant-external-vms/sessions/end-by-token'
+                    : '/api/v1/external-vms/sessions/end-by-token';
+                  endConsoleSessionByTokenBeacon(endTokenRef.current, getGatewayBaseUrl(), apiPath);
+                  endTokenRef.current = null;
+                } else {
+                  const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+                  beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+                }
+                stopHeartbeat();
+                sessionIdRef.current = null;
+              }
+              exitGuacamoleConsolePage(backHref);
+            }}
             style={styles.iconButton}
             title="Back"
             aria-label="Back"
@@ -383,7 +485,24 @@ export function ExternalVMConsoleView({
           </button>
           <button
             type="button"
-            onClick={() => router.push(disconnectHref)}
+            onClick={() => {
+              if (sessionRef.current && id) closeSession(id);
+              if (sessionIdRef.current) {
+                if (endTokenRef.current) {
+                  const apiPath = sessionTracking
+                    ? '/api/v1/tenant-external-vms/sessions/end-by-token'
+                    : '/api/v1/external-vms/sessions/end-by-token';
+                  endConsoleSessionByTokenBeacon(endTokenRef.current, getGatewayBaseUrl(), apiPath);
+                  endTokenRef.current = null;
+                } else {
+                  const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+                  beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+                }
+                stopHeartbeat();
+                sessionIdRef.current = null;
+              }
+              exitGuacamoleConsolePage(disconnectHref);
+            }}
             style={styles.disconnectButton}
             title="Disconnect and return"
           >

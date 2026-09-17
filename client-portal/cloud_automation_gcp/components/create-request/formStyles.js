@@ -15,10 +15,10 @@ export const timeInputClass =
 export const sectionClass = 'overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm';
 
 export const optionCardClass = (active) =>
-  `rounded-xl border-2 p-4 text-left transition-all ${
+  `flex w-full cursor-pointer flex-col rounded-lg border p-4 text-left transition ${
     active
-      ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] shadow-sm ring-1 ring-[var(--cloud-accent,#B91C1C)]/10'
-      : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+      ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] ring-1 ring-[var(--cloud-accent,#B91C1C)]/20'
+      : 'border-gray-200 bg-white hover:border-gray-300'
   }`;
 
 export const checkboxClass =

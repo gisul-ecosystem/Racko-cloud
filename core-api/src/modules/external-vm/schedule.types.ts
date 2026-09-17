@@ -124,6 +124,29 @@ export function isAccessAllowedNow(
   return nowMins >= startMins || nowMins < endMins;
 }
 
+export interface AssignmentAccessOverrideFields {
+  accessOverride?: boolean;
+  accessOverrideUntil?: Date | null;
+}
+
+export function hasActiveAssignmentAccessOverride(
+  assignment: AssignmentAccessOverrideFields,
+  now: Date = new Date()
+): boolean {
+  if (!assignment.accessOverride) return false;
+  if (!assignment.accessOverrideUntil) return true;
+  return new Date(assignment.accessOverrideUntil).getTime() > now.getTime();
+}
+
+/** Override bypasses the weekly/daily assignment window when active. */
+export function isAssignmentAccessAllowedNow(
+  assignment: AssignmentAccessOverrideFields & { schedule?: AssignmentSchedule | null },
+  now: Date = new Date()
+): boolean {
+  if (hasActiveAssignmentAccessOverride(assignment, now)) return true;
+  return isAccessAllowedNow(assignment.schedule ?? null, now);
+}
+
 function addCalendarDays(ymd: string, days: number): string {
   const [y, m, d] = ymd.split('-').map(Number);
   const dt = new Date(Date.UTC(y!, (m ?? 1) - 1, (d ?? 1) + days));

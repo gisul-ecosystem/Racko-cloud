@@ -15,8 +15,15 @@ import {
   rejectCatalogVmRequestSchema,
   changeCatalogVmTemplateSchema,
   catalogVmPowerActionSchema,
+  extendCatalogVmExpirySchema,
+  deleteCatalogVmSchema,
   calculateVmPricingSchema,
   listVmPricingQuerySchema,
+  registerManualAzureCatalogVmSchema,
+  attachManualAzureCatalogVmSchema,
+  listSuperAdminAzurePlacementOptionsSchema,
+  validateSuperAdminAzureProvisionQuoteSchema,
+  createSuperAdminAzureCatalogVmSchema,
 } from './vmCatalog.validation';
 import {
   createVmCatalogPlanSchema,
@@ -103,6 +110,38 @@ router.get(
   }
 );
 
+router.post(
+  '/vms/:id/power',
+  requireRoleOrPermission(['admin'], 'create_vm.request'),
+  validateRequest(catalogVmPowerActionSchema),
+  (req, res, next) => {
+    vmCatalogController.powerOwnedVm(req, res, next);
+  }
+);
+
+/**
+ * Super-admin: provider term upkeep. Extend after renewing with the provider,
+ * or delete once the machine is gone. Restricted to super_admin because
+ * deleting drops the record for whichever tenant or admin owns the VM.
+ */
+router.patch(
+  '/vms/:id/extend',
+  requireRole('super_admin'),
+  validateRequest(extendCatalogVmExpirySchema),
+  (req, res, next) => {
+    vmCatalogController.extendExpiry(req, res, next);
+  }
+);
+
+router.delete(
+  '/vms/:id',
+  requireRole('super_admin'),
+  validateRequest(deleteCatalogVmSchema),
+  (req, res, next) => {
+    vmCatalogController.deleteCatalogVm(req, res, next);
+  }
+);
+
 /** Admin: submit Buy Now request */
 router.post(
   '/requests',
@@ -120,6 +159,133 @@ router.post(
   validateRequest(createCatalogVmRequestSchema),
   (req, res, next) => {
     vmCatalogController.createSuperAdminRequest(req, res, next);
+  }
+);
+
+/** Super-admin: register existing Azure VM into catalog */
+router.post(
+  '/super-admin/azure/manual',
+  requireRole('super_admin'),
+  validateRequest(registerManualAzureCatalogVmSchema),
+  (req, res, next) => {
+    vmCatalogController.registerManualAzureCatalogVm(req, res, next);
+  }
+);
+
+router.get(
+  '/super-admin/azure/ready',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    vmCatalogController.listReadyManualAzureCatalogVms(req, res, next);
+  }
+);
+
+router.get(
+  '/super-admin/azure/vms',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    vmCatalogController.listSuperAdminAzureCatalogVms(req, res, next);
+  }
+);
+
+router.post(
+  '/super-admin/azure/:id/power',
+  requireRole('super_admin'),
+  validateRequest(catalogVmPowerActionSchema),
+  (req, res, next) => {
+    vmCatalogController.powerSuperAdminAzureCatalogVm(req, res, next);
+  }
+);
+
+router.get(
+  '/super-admin/azure/provision-ready',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    vmCatalogController.getAzureProvisionReady(req, res, next);
+  }
+);
+
+router.get(
+  '/super-admin/azure/locations',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    vmCatalogController.listSuperAdminAzureLocations(req, res, next);
+  }
+);
+
+router.get(
+  '/super-admin/azure/marketplace/images',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    vmCatalogController.searchSuperAdminAzureMarketplaceImages(req, res, next);
+  }
+);
+
+router.get(
+  '/super-admin/azure/marketplace/image-plans',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    vmCatalogController.listSuperAdminAzureImageSkuPlans(req, res, next);
+  }
+);
+
+router.post(
+  '/super-admin/azure/validate-image',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    vmCatalogController.validateSuperAdminAzureVmImage(req, res, next);
+  }
+);
+
+router.get(
+  '/super-admin/azure/custom-images',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    vmCatalogController.listSuperAdminAzureCustomImages(req, res, next);
+  }
+);
+
+router.post(
+  '/super-admin/azure/validate-custom-image',
+  requireRole('super_admin'),
+  (req, res, next) => {
+    vmCatalogController.validateSuperAdminAzureCustomImage(req, res, next);
+  }
+);
+
+router.post(
+  '/super-admin/azure/placement-options',
+  requireRole('super_admin'),
+  validateRequest(listSuperAdminAzurePlacementOptionsSchema),
+  (req, res, next) => {
+    vmCatalogController.listSuperAdminAzurePlacementOptions(req, res, next);
+  }
+);
+
+router.post(
+  '/super-admin/azure/validate-provision-quote',
+  requireRole('super_admin'),
+  validateRequest(validateSuperAdminAzureProvisionQuoteSchema),
+  (req, res, next) => {
+    vmCatalogController.validateSuperAdminAzureProvisionQuote(req, res, next);
+  }
+);
+
+router.post(
+  '/super-admin/azure/create',
+  requireRole('super_admin'),
+  validateRequest(createSuperAdminAzureCatalogVmSchema),
+  (req, res, next) => {
+    vmCatalogController.createSuperAdminAzureCatalogVm(req, res, next);
+  }
+);
+
+router.patch(
+  '/super-admin/azure/:id/attach',
+  requireRole('super_admin'),
+  validateRequest(attachManualAzureCatalogVmSchema),
+  (req, res, next) => {
+    vmCatalogController.attachManualAzureCatalogVm(req, res, next);
   }
 );
 
@@ -165,6 +331,15 @@ router.patch(
   validateRequest(catalogVmRequestIdParamSchema),
   (req, res, next) => {
     vmCatalogController.attach(req, res, next);
+  }
+);
+
+router.patch(
+  '/requests/:id/retry-install',
+  requirePermission('webyne.requests.attach'),
+  validateRequest(catalogVmRequestIdParamSchema),
+  (req, res, next) => {
+    vmCatalogController.retryPostReady(req, res, next);
   }
 );
 

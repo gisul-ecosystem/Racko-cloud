@@ -32,7 +32,14 @@ export function startPricingSyncScheduler() {
   });
 
   if (process.env.PRICING_SYNC_ON_START !== 'false') {
-    setTimeout(() => void runSync('startup'), 5_000);
+    setTimeout(() => {
+      void runSync('startup').catch((err) => {
+        console.error(
+          '[pricingSync] unhandled startup failure',
+          err instanceof Error ? err.message : err
+        );
+      });
+    }, 5_000);
   }
 
   console.log(`[pricingSync] scheduler started — cron=${expression}`);

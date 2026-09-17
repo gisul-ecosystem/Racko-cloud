@@ -4,6 +4,7 @@ import type { CreateSoftwareCatalogDto, SoftwareCatalogResponse } from './softwa
 import { NotFoundError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { resolveSoftwareIconUrl } from './software-catalog.icons';
+import { seaweedfsService } from '../../services/seaweedfs.service';
 
 class SoftwareCatalogService {
   private toResponse(doc: ISoftwareCatalog): SoftwareCatalogResponse {
@@ -20,6 +21,8 @@ class SoftwareCatalogService {
       chocoName:     doc.chocoName,
       fileUrl:       doc.fileUrl,
       fileName:      doc.fileName,
+      zipInstallScript: doc.zipInstallScript,
+      postInstallScript: doc.postInstallScript,
       installArgs:   doc.installArgs,
       uploadedBy:    doc.uploadedBy.toString(),
       createdAt:     doc.createdAt.toISOString(),
@@ -35,7 +38,117 @@ class SoftwareCatalogService {
   async getById(id: mongoose.Types.ObjectId): Promise<SoftwareCatalogResponse> {
     const doc = await SoftwareCatalogModel.findById(id);
     if (!doc) throw new NotFoundError('Software not found.');
-    return this.toResponse(doc);
+    const response = this.toResponse(doc);
+    // If fileUrl is an internal storageRef, resolve it to a presigned GET URL
+    // so the agent can download it directly without authentication.
+    if (response.fileUrl && response.fileUrl.startsWith('software-catalog/')) {
+      try {
+        response.fileUrl = await this.getDownloadUrl(response.fileUrl);
+      } catch {
+        // Non-fatal — agent will get an error when it tries to download
+        logger.warn('[SoftwareCatalog] Could not generate presigned GET URL', { storageRef: response.fileUrl });
+      }
+    }
+    return response;
+  }
+
+  async issueUploadUrl(
+    fileName: string,
+    mimeType: string,
+    uploadedBy: mongoose.Types.ObjectId
+  ): Promise<{ presignedUrl: string; storageRef: string; expiresIn: number }> {
+    const safeFileName = fileName.replace(/[^a-zA-Z0-9._\-]/g, '_');
+    const ts = Date.now().toString();
+    // Store under software-catalog/ prefix — separate from shared-files
+    const { presignedUrl, storageRef } = await seaweedfsService.generatePresignedPutUrl(
+      `software-catalog/${uploadedBy.toString()}`,
+      ts,
+      safeFileName,
+      mimeType,
+      3600,
+    );
+
+    logger.info('[SoftwareCatalog] Presigned PUT URL issued', {
+      fileName, storageRef, uploadedBy: uploadedBy.toString(),
+    });
+
+    return { presignedUrl, storageRef, expiresIn: 3600 };
+  }
+
+  // ─── Multipart upload ─────────────────────────────────────────────────────
+
+  /**
+   * Step 1 of multipart upload — initiate and return uploadId + storageRef.
+   * The browser calls this once before uploading any parts.
+   */
+  async initiateMultipartUpload(
+    fileName: string,
+    mimeType: string,
+    uploadedBy: mongoose.Types.ObjectId
+  ): Promise<{ uploadId: string; storageRef: string }> {
+    const safeFileName = fileName.replace(/[^a-zA-Z0-9._\-]/g, '_');
+    const ts = Date.now().toString();
+    const storageRef = `software-catalog/${uploadedBy.toString()}/${ts}_${safeFileName}`;
+
+    const { uploadId } = await seaweedfsService.createMultipartUpload(storageRef, mimeType);
+
+    logger.info('[SoftwareCatalog] Multipart upload initiated', {
+      fileName, storageRef, uploadedBy: uploadedBy.toString(),
+    });
+
+    return { uploadId, storageRef };
+  }
+
+  /**
+   * Step 2 of multipart upload — issue a presigned URL for one part.
+   * The browser calls this once per 10MB chunk, then PUTs the chunk bytes directly to SeaweedFS.
+   * The ETag returned by SeaweedFS from the PUT must be collected and sent to completeMultipart.
+   */
+  async issuePartUploadUrl(
+    storageRef: string,
+    uploadId: string,
+    partNumber: number
+  ): Promise<{ presignedUrl: string }> {
+    return seaweedfsService.generatePresignedPartUrl(storageRef, uploadId, partNumber);
+  }
+
+  /**
+   * Step 3 of multipart upload — assemble all parts and finalise the object in S3.
+   * parts must be ordered by PartNumber ascending with the ETag from each part's PUT response.
+   */
+  async completeMultipartUpload(
+    storageRef: string,
+    uploadId: string,
+    parts: Array<{ PartNumber: number; ETag: string }>
+  ): Promise<{ storageRef: string }> {
+    await seaweedfsService.completeMultipartUpload(storageRef, uploadId, parts);
+
+    logger.info('[SoftwareCatalog] Multipart upload completed', {
+      storageRef, partCount: parts.length,
+    });
+
+    return { storageRef };
+  }
+
+  /**
+   * Abort a multipart upload — called if the browser encounters an unrecoverable error.
+   * Cleans up all partially uploaded parts from SeaweedFS storage.
+   */
+  async abortMultipartUpload(storageRef: string, uploadId: string): Promise<void> {
+    await seaweedfsService.abortMultipartUpload(storageRef, uploadId);
+    logger.info('[SoftwareCatalog] Multipart upload aborted', { storageRef, uploadId });
+  }
+
+  /**
+   * Returns a presigned GET URL for an internally stored software file.
+   * Called by the agent when it fetches software details before installing.
+   * TTL: 1 hour — enough for large installer downloads (Anaconda, VS, etc.)
+   * The agent fetches just-in-time (after acquiring the install lock) so the
+   * URL is always fresh when the download starts.
+   */
+  async getDownloadUrl(storageRef: string): Promise<string> {
+    const { presignedUrl } = await seaweedfsService.generatePresignedGetUrl(storageRef, 3600);
+    return presignedUrl;
   }
 
   async addSoftware(
@@ -55,9 +168,77 @@ class SoftwareCatalogService {
     return this.toResponse(doc);
   }
 
+  async updateSoftware(
+    id: mongoose.Types.ObjectId,
+    dto: import('./software-catalog.types').UpdateSoftwareCatalogDto
+  ): Promise<SoftwareCatalogResponse> {
+    const doc = await SoftwareCatalogModel.findById(id);
+    if (!doc) throw new NotFoundError('Software not found.');
+
+    // If a new internal file is being set, delete the old one from SeaweedFS first.
+    // Only delete internal storageRefs (start with 'software-catalog/') — never external URLs.
+    if (
+      dto.fileUrl !== undefined &&
+      dto.fileUrl !== doc.fileUrl &&
+      doc.fileUrl &&
+      doc.fileUrl.startsWith('software-catalog/')
+    ) {
+      try {
+        await seaweedfsService.delete(doc.fileUrl);
+        logger.info('[SoftwareCatalog] Deleted old S3 file on update', {
+          softwareId: id.toString(),
+          oldStorageRef: doc.fileUrl,
+        });
+      } catch (err) {
+        // Non-fatal — log and continue. The new file is already uploaded.
+        logger.warn('[SoftwareCatalog] Could not delete old S3 file on update (non-fatal)', {
+          softwareId: id.toString(),
+          oldStorageRef: doc.fileUrl,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Apply all provided fields — undefined fields are left unchanged
+    if (dto.name          !== undefined) doc.name          = dto.name;
+    if (dto.version       !== undefined) doc.version       = dto.version;
+    if (dto.iconUrl       !== undefined) doc.iconUrl       = dto.iconUrl || undefined;
+    if (dto.supportedOS   !== undefined) doc.supportedOS   = dto.supportedOS;
+    if (dto.installMethod !== undefined) doc.installMethod = dto.installMethod;
+    if (dto.wingetId      !== undefined) doc.wingetId      = dto.wingetId || undefined;
+    if (dto.aptName       !== undefined) doc.aptName       = dto.aptName || undefined;
+    if (dto.brewName      !== undefined) doc.brewName      = dto.brewName || undefined;
+    if (dto.chocoName     !== undefined) doc.chocoName     = dto.chocoName || undefined;
+    if (dto.fileUrl       !== undefined) doc.fileUrl       = dto.fileUrl || undefined;
+    if (dto.fileName      !== undefined) doc.fileName      = dto.fileName || undefined;
+    if (dto.zipInstallScript    !== undefined) doc.zipInstallScript    = dto.zipInstallScript    || undefined;
+    if (dto.postInstallScript   !== undefined) doc.postInstallScript   = dto.postInstallScript   || undefined;
+    if (dto.installArgs         !== undefined) doc.installArgs         = dto.installArgs         || undefined;
+
+    await doc.save();
+
+    logger.info('[SoftwareCatalog] Updated software', {
+      softwareId: id.toString(),
+      updatedFields: Object.keys(dto).filter((k) => dto[k as keyof typeof dto] !== undefined),
+    });
+
+    return this.toResponse(doc);
+  }
+
   async deleteSoftware(id: mongoose.Types.ObjectId): Promise<void> {
     const doc = await SoftwareCatalogModel.findById(id);
     if (!doc) throw new NotFoundError('Software not found.');
+
+    // Delete the uploaded file from SeaweedFS if it was stored internally.
+    // Only internal storageRefs start with 'software-catalog/' — external URLs are left alone.
+    if (doc.fileUrl && doc.fileUrl.startsWith('software-catalog/')) {
+      await seaweedfsService.delete(doc.fileUrl);
+      logger.info('[SoftwareCatalog] Deleted S3 file', {
+        softwareId: id.toString(),
+        storageRef: doc.fileUrl,
+      });
+    }
+
     await doc.deleteOne();
     logger.info('[SoftwareCatalog] Deleted software', { softwareId: id.toString() });
   }

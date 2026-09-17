@@ -35,12 +35,17 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     pathname === '/console/verify-email' ||
     (pathname?.startsWith('/console/dashboard') ?? false);
 
+  const isMyVmDashboardPath =
+    pathname === '/console/my-vm-dashboard' ||
+    (pathname?.startsWith('/console/my-vm-dashboard/') ?? false);
+
   const usesOwnShell =
     (pathname?.startsWith('/console/elastic-servers') ?? false) ||
     (pathname?.startsWith('/console/azure') ?? false) ||
     (pathname?.startsWith('/console/cloud-labs/azure') ?? false) ||
     (pathname?.startsWith('/console/machine-manager') ?? false) ||
     (pathname?.startsWith('/console/aws') ?? false) ||
+    (pathname?.startsWith('/console/gcp') ?? false) ||
     (pathname?.startsWith('/console/docs') ?? false) ||
     (pathname?.startsWith('/console/create-vm') ?? false) ||
     (pathname?.startsWith('/console/dedicated-server') ?? false) ||
@@ -70,6 +75,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
       (pathname?.startsWith('/console/cloud-labs') ?? false);
     const roleAllowed =
       user.role === 'admin' ||
+      (isMyVmDashboardPath && (user.role === 'staff' || user.role === 'super_admin')) ||
       (user.role === 'super_admin' && isAzureConsolePath);
 
     if (!roleAllowed) {
@@ -98,6 +104,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
   const roleAllowed =
     Boolean(user) &&
     (user!.role === 'admin' ||
+      (isMyVmDashboardPath && (user!.role === 'staff' || user!.role === 'super_admin')) ||
       (user!.role === 'super_admin' && isAzureConsolePath));
 
   if (!isAuthenticated || !user || !roleAllowed) return null;

@@ -8,26 +8,47 @@ const mongoObjectId = z
 /** Catalog membership validated in projects.service. */
 const adminServiceKeySchema = z.string().min(1).max(100);
 
+const emailSchema = z.string().email().max(320);
+
 export const createProjectSchema = z.object({
-  body: z.object({
-    clientName: z.string().min(1).max(200).trim(),
-    name: z.string().min(1).max(200).trim().optional(),
-    description: z.string().max(1000).trim().optional(),
-    startDate: z.coerce.date(),
-    endDate: z.coerce.date(),
-    enabledServices: z.array(adminServiceKeySchema).min(1),
-  }),
+  body: z
+    .object({
+      clientName: z.string().min(1).max(200).trim(),
+      name: z.string().min(1).max(200).trim().optional(),
+      description: z.string().max(1000).trim().optional(),
+      startDate: z.coerce.date(),
+      endDate: z.coerce.date(),
+      enabledServices: z.array(adminServiceKeySchema).min(1),
+      clientEmail: emailSchema.optional(),
+      autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional(),
+    })
+    .refine((d) => d.startDate <= d.endDate, {
+      message: 'endDate must be on or after startDate',
+      path: ['endDate'],
+    }),
 });
 
 export const updateProjectSchema = z.object({
   params: z.object({ id: mongoObjectId }),
-  body: z.object({
-    name: z.string().min(1).max(200).trim().optional(),
-    clientName: z.string().min(1).max(200).trim().optional(),
-    description: z.string().max(1000).trim().optional().nullable(),
-    startDate: z.coerce.date().optional().nullable(),
-    endDate: z.coerce.date().optional().nullable(),
-  }),
+  body: z
+    .object({
+      name: z.string().min(1).max(200).trim().optional(),
+      clientName: z.string().min(1).max(200).trim().optional(),
+      clientEmail: emailSchema.optional().nullable(),
+      description: z.string().max(1000).trim().optional().nullable(),
+      startDate: z.coerce.date().optional().nullable(),
+      endDate: z.coerce.date().optional().nullable(),
+      autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional().nullable(),
+    })
+    .refine(
+      (d) => {
+        if (d.startDate && d.endDate) return d.startDate <= d.endDate;
+        return true;
+      },
+      { message: 'endDate must be on or after startDate', path: ['endDate'] }
+    ),
 });
 
 export const projectIdParamSchema = z.object({
@@ -60,14 +81,22 @@ export const adminIdParamSchema = z.object({
 
 export const createProjectForAdminSchema = z.object({
   params: z.object({ adminId: mongoObjectId }),
-  body: z.object({
-    clientName: z.string().min(1).max(200).trim(),
-    name: z.string().min(1).max(200).trim().optional(),
-    description: z.string().max(1000).trim().optional(),
-    startDate: z.coerce.date(),
-    endDate: z.coerce.date(),
-    enabledServices: z.array(adminServiceKeySchema).min(1),
-  }),
+  body: z
+    .object({
+      clientName: z.string().min(1).max(200).trim(),
+      name: z.string().min(1).max(200).trim().optional(),
+      description: z.string().max(1000).trim().optional(),
+      startDate: z.coerce.date(),
+      endDate: z.coerce.date(),
+      enabledServices: z.array(adminServiceKeySchema).min(1),
+      clientEmail: emailSchema.optional(),
+      autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional(),
+    })
+    .refine((d) => d.startDate <= d.endDate, {
+      message: 'endDate must be on or after startDate',
+      path: ['endDate'],
+    }),
 });
 
 export const tenantIdParamSchema = z.object({
@@ -76,14 +105,22 @@ export const tenantIdParamSchema = z.object({
 
 export const createProjectForTenantSchema = z.object({
   params: z.object({ tenantId: mongoObjectId }),
-  body: z.object({
-    clientName: z.string().min(1).max(200).trim(),
-    name: z.string().min(1).max(200).trim().optional(),
-    description: z.string().max(1000).trim().optional(),
-    startDate: z.coerce.date(),
-    endDate: z.coerce.date(),
-    enabledServices: z.array(adminServiceKeySchema).min(1),
-  }),
+  body: z
+    .object({
+      clientName: z.string().min(1).max(200).trim(),
+      name: z.string().min(1).max(200).trim().optional(),
+      description: z.string().max(1000).trim().optional(),
+      startDate: z.coerce.date(),
+      endDate: z.coerce.date(),
+      enabledServices: z.array(adminServiceKeySchema).min(1),
+      clientEmail: emailSchema.optional(),
+      autoArchiveEnabled: z.boolean().optional(),
+      supportAgentId: mongoObjectId.optional(),
+    })
+    .refine((d) => d.startDate <= d.endDate, {
+      message: 'endDate must be on or after startDate',
+      path: ['endDate'],
+    }),
 });
 
 export const adminProjectParamSchema = z.object({

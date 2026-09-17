@@ -13,6 +13,7 @@ import {
   type VMLiveStatus,
 } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
+import { openGuacamoleConsolePage } from '../../../../../lib/consoleLaunch';
 import { VMStatusBadge, UsageBar } from '../../../../../components/dashboard/VMStatusBadge';
 import { ConfirmModal } from '../../../../../components/ui/ConfirmModal';
 import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
@@ -260,10 +261,14 @@ export default function UserVMDetailPage() {
               Refresh
             </button>
             {consoleReady && (
-              <Link href={consoleHref} className={btnPrimary}>
+              <button
+                type="button"
+                onClick={() => openGuacamoleConsolePage(consoleHref)}
+                className={btnPrimary}
+              >
                 <Monitor className="w-3.5 h-3.5" />
                 Console
-              </Link>
+              </button>
             )}
             {consolePreparing && (
               <button type="button" disabled className={btnOutline}>

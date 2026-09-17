@@ -1,4 +1,5 @@
-import { tenantPortalRequest } from './tenantPortalApiClient';
+import { tenantPortalRequest, getTenantAccessToken } from './tenantPortalApiClient';
+import { closeConsoleSessionAtPath } from './consoleApi';
 import type {
   BulkCreateExternalVMDto,
   CreateExternalVMDto,
@@ -97,6 +98,17 @@ export async function getTenantExternalVMConsole(
       `/api/v1/tenant-external-vms/${id}/console${qs}`
     )
   );
+}
+
+export function tenantExternalVmConsoleClosePath(id: string): string {
+  return `/api/v1/tenant-external-vms/${encodeURIComponent(id)}/console/close`;
+}
+
+export function closeTenantExternalVMConsole(id: string): void {
+  closeConsoleSessionAtPath(tenantExternalVmConsoleClosePath(id), {
+    accessToken: getTenantAccessToken(),
+    tenantPortal: true,
+  });
 }
 
 export async function fetchAvailableTenantExternalVMs(userId?: string): Promise<IExternalVM[]> {
@@ -234,5 +246,100 @@ export async function bulkUpdateTenantExternalVmOverride(
       method: 'PATCH',
       body: JSON.stringify({ ids, ...body }),
     })
+  );
+}
+
+// ─── Console Session API (tenant) ────────────────────────────────────────────
+
+/** Start a console session when the Guacamole iframe loads. Returns sessionId and endToken. */
+export async function startTenantConsoleSession(serverId: string): Promise<{ sessionId: string; endToken: string }> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ sessionId: string; endToken: string }>>(
+      '/api/v1/tenant-external-vms/sessions/start',
+      { method: 'POST', body: JSON.stringify({ serverId }) }
+    )
+  );
+  return { sessionId: data.sessionId, endToken: data.endToken };
+}
+
+/** Fire-and-forget heartbeat every 60s. Never throws — must not affect console. */
+export async function heartbeatTenantConsoleSession(sessionId: string): Promise<void> {
+  try {
+    await tenantPortalRequest(
+      `/api/v1/tenant-external-vms/sessions/${sessionId}/heartbeat`,
+      { method: 'POST' }
+    );
+  } catch {
+    // Non-fatal
+  }
+}
+
+/** End session on disconnect (normal path). */
+export async function endTenantConsoleSession(sessionId: string): Promise<void> {
+  try {
+    await tenantPortalRequest(
+      `/api/v1/tenant-external-vms/sessions/${sessionId}/end`,
+      { method: 'POST' }
+    );
+  } catch {
+    // Non-fatal — stale sweeper will close it
+  }
+}
+
+export interface TenantConsoleSessionEntry {
+  _id: string;
+  userId: string;
+  userEmail: string;
+  serverId: string;
+  serverName: string;
+  loginAt: string;
+  logoutAt: string | null;
+  lastHeartbeatAt: string;
+  durationSeconds: number | null;
+  isActive: boolean;
+}
+
+export interface TenantConsoleSessionSummary {
+  sessionsToday: number;
+  uniqueUsersToday: number;
+  avgDurationSeconds: number;
+  activeSessions: number;
+}
+
+export interface TenantConsoleSessionsResponse {
+  sessions: TenantConsoleSessionEntry[];
+  pagination: { total: number; page: number; limit: number; pages: number };
+  summary: TenantConsoleSessionSummary;
+}
+
+export async function fetchTenantConsoleSessions(params?: {
+  userId?: string;
+  serverId?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+}): Promise<TenantConsoleSessionsResponse> {
+  const query = new URLSearchParams();
+  if (params?.userId) query.set('userId', params.userId);
+  if (params?.serverId) query.set('serverId', params.serverId);
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantConsoleSessionsResponse>>(
+      `/api/v1/tenant-external-vms/sessions${qs ? `?${qs}` : ''}`
+    )
+  );
+}
+
+export async function bulkDeleteTenantConsoleSessions(ids: string[]): Promise<{ deleted: number }> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<{ deleted: number }>>(
+      '/api/v1/tenant-external-vms/sessions/bulk',
+      { method: 'DELETE', body: JSON.stringify({ ids }) }
+    )
   );
 }

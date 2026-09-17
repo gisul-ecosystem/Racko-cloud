@@ -5,9 +5,9 @@ import { useAuth } from '../../../../context/AuthContext';
 import { useInstallJobs } from '../../../../hooks/useInstallJobs';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
-import { type IJob, type JobStatus, issueJobStreamTicket } from '../../../../lib/machineManagerApi';
+import { type IJob, type JobStatus, issueJobStreamTicket, clearAllJobs } from '../../../../lib/machineManagerApi';
 import { getSseGatewayBaseUrl } from '../../../../lib/gatewayUrl';
-import { Briefcase, RefreshCw, X, FileText } from 'lucide-react';
+import { Briefcase, RefreshCw, X, FileText, Trash2 } from 'lucide-react';
 
 function JobStatusBadge({ status }: { status: JobStatus }) {
   const cfg: Record<JobStatus, { label: string; dot: string; badge: string }> = {
@@ -167,6 +167,18 @@ export default function JobsPage() {
   const { isAuthenticated } = useAuth();
   const { jobs, loading, error, refetch } = useInstallJobs(isAuthenticated);
   const [selectedJob, setSelectedJob] = useState<{ job: IJob; name: string } | null>(null);
+  const [clearing, setClearing] = useState(false);
+
+  const handleClearAll = async () => {
+    if (!jobs.length || clearing) return;
+    setClearing(true);
+    try {
+      await clearAllJobs();
+      refetch();
+    } catch { /* non-fatal */ } finally {
+      setClearing(false);
+    }
+  };
 
   return (
     <div className="max-w-screen-xl">
@@ -181,14 +193,26 @@ export default function JobsPage() {
             {loading ? 'Loading…' : `${jobs.length} job${jobs.length !== 1 ? 's' : ''} · live updates`}
           </p>
         </div>
-        <button
-          onClick={refetch}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-40"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {jobs.length > 0 && (
+            <button
+              onClick={() => void handleClearAll()}
+              disabled={clearing || loading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:opacity-40"
+            >
+              {clearing ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              Clear All Logs
+            </button>
+          )}
+          <button
+            onClick={refetch}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-40"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && !loading && <ErrorState title="Failed to load jobs" message={error} onRetry={refetch} />}

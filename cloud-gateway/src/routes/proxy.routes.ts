@@ -13,6 +13,7 @@ import { config } from '../config';
 import { ForbiddenError } from '../utils/errors';
 import type { AuthenticatedRequest } from '../types';
 import { injectTenantHeader, requireTenantBearer } from '../middleware/tenantAuth.middleware';
+import { requireApiCredentialManagementAuth } from '../middleware/apiCredentialAuth.middleware';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -95,6 +96,12 @@ const sharedProxyOptions = {
 // Explicit routes use the full path — no rewrite needed
 const coreApiProxy = createProxyMiddleware(sharedProxyOptions);
 
+/** Public core-api liveness — proxied to GET /health on core-api (no auth). */
+const coreApiHealthProxy = createProxyMiddleware({
+  ...sharedProxyOptions,
+  pathRewrite: () => '/health',
+});
+
 /** Live multi-cloud pricing can run for a long time — no proxy idle timeout. */
 const coreApiPricingProxy = createProxyMiddleware({
   ...sharedProxyOptions,
@@ -138,6 +145,14 @@ const tenantProjectsProxy = createMountedCoreApiProxy('/api/v1/tenant-projects')
 const tenantRbacProxy = createMountedCoreApiProxy('/api/v1/tenant-rbac');
 const tenantOverviewProxy = createMountedCoreApiProxy('/api/v1/tenant-overview');
 const tenantMyVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-my-vms');
+/** Public developer API — allow slow read paths; power actions return 202 quickly. */
+const PUBLIC_API_PROXY_TIMEOUT_MS = Math.max(config.REQUEST_TIMEOUT_MS, 120_000);
+const publicApiProxy = createProxyMiddleware({
+  ...sharedProxyOptions,
+  timeout: PUBLIC_API_PROXY_TIMEOUT_MS,
+  proxyTimeout: PUBLIC_API_PROXY_TIMEOUT_MS,
+  pathRewrite: (path) => `/api/v1/public${path === '/' ? '' : path}`,
+});
 
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
@@ -151,6 +166,13 @@ function requireRole(...roles: string[]) {
 }
 
 // ─── PUBLIC ROUTES (no auth required) ────────────────────────────────────────
+router.get('/api/health', coreApiHealthProxy);
+// OAuth2 token (public — client_id + client_secret, no platform JWT)
+router.post('/api/v1/oauth/token', coreApiProxy);
+
+// Developer API (Bearer api_access token — verified in core-api, not session JWT)
+router.use('/api/v1/public', publicApiProxy);
+
 router.post('/api/v1/auth/register', registerRateLimiter, coreApiProxy);
 router.post('/api/v1/auth/login', loginFailedRateLimiter, loginSlowDown, coreApiProxy);
 router.post('/api/v1/auth/verify-email', verifyEmailRateLimiter, coreApiProxy);
@@ -205,6 +227,7 @@ router.get('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId/status', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId/events', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId/console', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/console/close', authMiddleware, verifyMiddleware, coreApiProxy);
 router.delete('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/start', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/stop', authMiddleware, verifyMiddleware, coreApiProxy);
@@ -231,6 +254,10 @@ router.get('/api/v1/notifications', authMiddleware, verifyMiddleware, requireRol
 router.get('/api/v1/notifications/unread-count', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.patch('/api/v1/notifications/read-all', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.patch('/api/v1/notifications/:notificationId/read', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
+// Support system
+router.use('/api/v1/support', authMiddleware, verifyMiddleware, createMountedCoreApiProxy('/api/v1/support'));
+router.use('/api/v1/tenant/support', requireTenantBearer, createMountedCoreApiProxy('/api/v1/tenant/support'));
 
 // ─── VM AUTOMATION ROUTES (admin + super_admin) ─────────────────────────────
 router.get('/api/v1/vm-automations', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -263,6 +290,13 @@ router.delete('/api/v1/admin-vm-templates/:templateId', authMiddleware, verifyMi
 // ─── EXTERNAL VM ROUTES ────────────────────────────────────────────────────────
 router.post(
   '/api/v1/super-admin/external-vms/bulk-import',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiBulkImportProxy
+);
+router.post(
+  '/api/v1/super-admin/external-vms/bulk-override',
   authMiddleware,
   verifyMiddleware,
   requireRole('super_admin', 'staff'),
@@ -317,6 +351,27 @@ router.delete(
   requireRole('super_admin', 'staff'),
   coreApiProxy
 );
+router.patch(
+  '/api/v1/super-admin/external-vms/:id/lock',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.patch(
+  '/api/v1/super-admin/external-vms/:id/details',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.post(
+  '/api/v1/super-admin/external-vms/:id/sibling-login',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
 router.delete(
   '/api/v1/super-admin/external-vms/:id',
   authMiddleware,
@@ -334,8 +389,19 @@ router.post('/api/v1/external-vms/assign', authMiddleware, verifyMiddleware, req
 router.post('/api/v1/external-vms/assign/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/external-vms/assign/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/external-vms/my-assigned', authMiddleware, verifyMiddleware, requireRole('user'), coreApiProxy);
+
+// ─── Console Session routes (platform admin) ──────────────────────────────────
+// end-by-token is PUBLIC — sendBeacon cannot send auth headers, token IS the auth
+router.post('/api/v1/external-vms/sessions/end-by-token', coreApiProxy);
+router.post('/api/v1/external-vms/sessions/start', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/external-vms/sessions/:sessionId/heartbeat', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/external-vms/sessions/:sessionId/end', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/external-vms/sessions', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.delete('/api/v1/external-vms/sessions/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
 router.get('/api/v1/external-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/external-vms/:id/console', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
+router.post('/api/v1/external-vms/:id/console/close', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
 router.get('/api/v1/external-vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
 router.delete('/api/v1/external-vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
@@ -403,6 +469,121 @@ router.patch('/api/v1/vm-catalog/requests/:id/reject', authMiddleware, verifyMid
 router.post('/api/v1/vm-catalog/pricing/calculate', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiPricingProxy);
 router.get('/api/v1/vm-catalog/pricing', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiPricingProxy);
 
+/** Super-admin Azure VM wizard — ARM lookups and placement pricing can run 30s–3min. */
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/provision-ready',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/locations',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/marketplace/images',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/marketplace/image-plans',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/validate-image',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/custom-images',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/validate-custom-image',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/placement-options',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/validate-provision-quote',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/create',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/ready',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/vms',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/:id/power',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.patch(
+  '/api/v1/vm-catalog/super-admin/azure/:id/attach',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/manual',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/vms/:id/power',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('admin', 'super_admin'),
+  coreApiPricingProxy
+);
+
+/** Provider term upkeep — super-admin only, since delete drops the owner's VM. */
+router.patch(
+  '/api/v1/vm-catalog/vms/:id/extend',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin'),
+  coreApiProxy
+);
+router.delete(
+  '/api/v1/vm-catalog/vms/:id',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin'),
+  coreApiProxy
+);
+
 router.get('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans/seed', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
@@ -459,11 +640,13 @@ router.get('/api/v1/projects/name-preview', authMiddleware, verifyMiddleware, re
 router.get('/api/v1/projects/for-service/:serviceKey', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.get('/api/v1/projects', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.post('/api/v1/projects', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.get('/api/v1/projects/:id/resources/elastic-servers', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.get('/api/v1/projects/:id', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.patch('/api/v1/projects/:id', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.post('/api/v1/projects/:id/services', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.delete('/api/v1/projects/:id/services/:serviceKey', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.post('/api/v1/projects/:id/archive', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.post('/api/v1/projects/:id/unarchive', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 
 // ─── MANAGED USERS ROUTES (admin + super_admin) ──────────────────────────────
 router.post('/api/v1/managed-users/single', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -514,6 +697,7 @@ router.delete('/api/v1/vm-host-leases/:id', authMiddleware, verifyMiddleware, re
 // ─── SOFTWARE CATALOG ROUTES ──────────────────────────────────────────────────
 router.get('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/software-catalog/upload-url', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.delete('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 
@@ -521,8 +705,7 @@ router.delete('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, 
 router.post('/api/v1/agent/register', coreApiProxy);
 router.post('/api/v1/agent/enroll', coreApiProxy);
 router.get('/api/v1/agent/binary/:os', coreApiProxy);
-router.get('/api/v1/agent/install/linux', coreApiProxy);
-router.get('/api/v1/agent/reset-script', coreApiProxy); // public — no auth, agent uses this at reset time
+router.get('/api/v1/agent/install/linux', coreApiProxy);router.get('/api/v1/agent/reset-script', coreApiProxy); // public — no auth, agent uses this at reset time
 router.get('/api/v1/agent/connect', coreApiProxy); // WebSocket upgrade — handled via server.on('upgrade') in server.ts
 router.get('/api/v1/agent/jobs/:agentId', coreApiProxy);
 router.post('/api/v1/agent/jobs/:jobId/result', coreApiProxy);
@@ -593,6 +776,12 @@ router.use('/api/v1/tenant-notifications', requireTenantBearer, tenantNotificati
 router.use('/api/v1/tenant-users', requireTenantBearer, tenantUsersProxy);
 router.use('/api/v1/tenant-rbac', requireTenantBearer, tenantRbacProxy);
 router.use('/api/v1/tenant-vms', requireTenantBearer, tenantVmsProxy);
+// end-by-token is PUBLIC — sendBeacon cannot send auth headers, token IS the auth
+// Must be registered BEFORE the requireTenantBearer catch-all below.
+// Uses coreApiProxy directly (not tenantExternalVmsProxy) to avoid double path prefix.
+router.post('/api/v1/tenant-external-vms/sessions/end-by-token', coreApiProxy);
+// Bulk delete sessions — must also be before the requireTenantBearer router.use catch-all.
+router.delete('/api/v1/tenant-external-vms/sessions/bulk', requireTenantBearer, coreApiProxy);
 router.use('/api/v1/tenant-external-vms', requireTenantBearer, tenantExternalVmsProxy);
 router.use('/api/v1/tenant-vm-catalog', requireTenantBearer, tenantVmCatalogProxy);
 router.use('/api/v1/tenant-dedicated-servers', requireTenantBearer, tenantDedicatedServersProxy);
@@ -602,6 +791,24 @@ router.use('/api/v1/tenant-my-vms', requireTenantBearer, tenantMyVmsProxy);
 
 // Platform admin My VM Dashboard — JWT + role enforced in core-api
 router.get('/api/v1/my-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
+// ─── OAuth developer API credentials (phase 1 — management only) ─────────────
+router.post(
+  '/api/v1/api-credentials',
+  requireApiCredentialManagementAuth,
+  coreApiProxy
+);
+router.get('/api/v1/api-credentials', requireApiCredentialManagementAuth, coreApiProxy);
+router.get(
+  '/api/v1/api-credentials/:id/usage',
+  requireApiCredentialManagementAuth,
+  coreApiProxy
+);
+router.post(
+  '/api/v1/api-credentials/:id/revoke',
+  requireApiCredentialManagementAuth,
+  coreApiProxy
+);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify

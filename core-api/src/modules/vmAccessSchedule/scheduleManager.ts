@@ -12,7 +12,8 @@ import {
 import { logger } from '../../utils/logger';
 import { guacamoleClient } from '../../utils/guacamoleClient';
 import {
-  isAccessAllowedNow,
+  isAssignmentAccessAllowedNow,
+  hasActiveAssignmentAccessOverride,
   msUntilNextWindowEnd,
   type AssignmentSchedule,
 } from '../external-vm/schedule.types';
@@ -78,44 +79,23 @@ function guacConnectionNameForExternalVm(externalVmId: string): string {
 }
 
 /**
- * Kill live Guacamole tunnels for a named connection.
- * Matches activeConnections by connectionIdentifier (and optional Guac username).
+ * Kill live Guacamole tunnels for a named connection (confirm-retry).
+ * JWT revoke still proceeds if Guacamole is unreachable.
  */
 async function killGuacamoleSessionsForConnection(
   connectionName: string,
   options?: { username?: string }
 ): Promise<void> {
   try {
-    const connectionIdentifier =
-      await guacamoleClient.getConnectionIdentifierByName(connectionName);
-    if (!connectionIdentifier) {
-      logger.info('[accessSchedule] no Guacamole connection to kill', { connectionName });
-      return;
-    }
-
-    const active = await guacamoleClient.listActiveConnections();
-    const username = options?.username?.trim();
-    const ids = active
-      .filter((a) => a.connectionIdentifier === connectionIdentifier)
-      .filter((a) => !username || a.username === username)
-      .map((a) => a.identifier);
-
-    if (ids.length === 0) {
-      logger.info('[accessSchedule] no active Guacamole tunnels', {
-        connectionName,
-        connectionIdentifier,
-      });
-      return;
-    }
-
-    await guacamoleClient.killActiveConnections(ids);
-    logger.info('[accessSchedule] Guacamole tunnels killed', {
+    const killed = await guacamoleClient.killSessionsForConnectionNameWithRetry(connectionName, {
+      username: options?.username,
+      throwOnPersistentFailure: false,
+    });
+    logger.info('[accessSchedule] Guacamole tunnel kill finished', {
       connectionName,
-      connectionIdentifier,
-      killed: ids.length,
+      killed,
     });
   } catch (err) {
-    // Don't fail the disconnect path if Guac is down — JWT expiry still applied.
     logger.error('[accessSchedule] Guacamole kill failed', {
       connectionName,
       error: err instanceof Error ? err.message : String(err),
@@ -421,17 +401,34 @@ export function scheduleExternalAssignmentDisconnect(input: ExternalAssignmentAr
 
   cancelSchedule(timerKey);
 
-  const delayMs = msUntilNextWindowEnd(input.schedule);
+  void (async () => {
+    const overrideActive = await loadAssignmentOverrideActive(input.kind, input.assignmentId);
+    if (overrideActive) {
+      logger.info('[accessSchedule] assignment disconnect skipped (override active)', {
+        timerKey,
+        externalVmId: input.externalVmId,
+      });
+      return;
+    }
+    armExternalAssignmentDisconnectTimer(input, timerKey);
+  })();
+}
+
+function armExternalAssignmentDisconnectTimer(
+  input: ExternalAssignmentArmInput,
+  timerKey: string
+): void {
+  const { assignmentId, externalVmId, assigneeUserId, kind, schedule } = input;
+  const delayMs = msUntilNextWindowEnd(schedule);
   if (delayMs == null || delayMs <= 0) {
     logger.info('[accessSchedule] assignment disconnect not armed (no upcoming window end)', {
       timerKey,
-      externalVmId: input.externalVmId,
+      externalVmId,
     });
     return;
   }
 
   const handles: ScheduleHandles = { attempts: 0 };
-  const { assignmentId, externalVmId, assigneeUserId, kind } = input;
 
   handles.timeout = setTimeout(() => {
     void (async () => {
@@ -527,6 +524,31 @@ export function scheduleExternalAssignmentDisconnect(input: ExternalAssignmentAr
   });
 }
 
+async function loadAssignmentOverrideActive(
+  kind: 'platform' | 'tenant',
+  assignmentId: string
+): Promise<boolean> {
+  if (kind === 'platform') {
+    const { ExternalVmUserAssignmentModel } = await import(
+      '../../models/externalVmUserAssignment.model'
+    );
+    const row = await ExternalVmUserAssignmentModel.findById(assignmentId)
+      .select('accessOverride accessOverrideUntil status')
+      .lean();
+    if (!row || (row.status != null && row.status !== 'active')) return false;
+    return hasActiveAssignmentAccessOverride(row);
+  }
+
+  const { ExternalVmTenantAssignmentModel } = await import(
+    '../../models/externalVmTenantAssignment.model'
+  );
+  const row = await ExternalVmTenantAssignmentModel.findById(assignmentId)
+    .select('accessOverride accessOverrideUntil status')
+    .lean();
+  if (!row || (row.status != null && row.status !== 'active')) return false;
+  return hasActiveAssignmentAccessOverride(row);
+}
+
 async function loadAssignmentSchedule(
   kind: 'platform' | 'tenant',
   assignmentId: string
@@ -562,20 +584,20 @@ async function loadAssignmentStillAllowed(
       '../../models/externalVmUserAssignment.model'
     );
     const row = await ExternalVmUserAssignmentModel.findById(assignmentId)
-      .select('schedule status')
+      .select('schedule status accessOverride accessOverrideUntil')
       .lean();
     if (!row || (row.status != null && row.status !== 'active')) return null;
-    return isAccessAllowedNow(row.schedule ?? null);
+    return isAssignmentAccessAllowedNow(row) ? true : false;
   }
 
   const { ExternalVmTenantAssignmentModel } = await import(
     '../../models/externalVmTenantAssignment.model'
   );
   const row = await ExternalVmTenantAssignmentModel.findById(assignmentId)
-    .select('schedule status')
+    .select('schedule status accessOverride accessOverrideUntil')
     .lean();
   if (!row || (row.status != null && row.status !== 'active')) return null;
-  return isAccessAllowedNow(row.schedule ?? null);
+  return isAssignmentAccessAllowedNow(row) ? true : false;
 }
 
 /**
@@ -611,12 +633,13 @@ export async function rescheduleFromDb(): Promise<void> {
     schedule: { $ne: null, $exists: true },
     $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
   })
-    .select('_id externalVmId userId schedule')
+    .select('_id externalVmId userId schedule accessOverride accessOverrideUntil')
     .lean();
 
   let platformArmed = 0;
   for (const row of platformAssignments) {
     if (!row.schedule) continue;
+    if (hasActiveAssignmentAccessOverride(row)) continue;
     scheduleExternalAssignmentDisconnect({
       assignmentId: row._id.toString(),
       externalVmId: row.externalVmId.toString(),
@@ -631,12 +654,13 @@ export async function rescheduleFromDb(): Promise<void> {
     schedule: { $ne: null, $exists: true },
     $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
   })
-    .select('_id externalVmId tenantUserId schedule')
+    .select('_id externalVmId tenantUserId schedule accessOverride accessOverrideUntil')
     .lean();
 
   let tenantArmed = 0;
   for (const row of tenantAssignments) {
     if (!row.schedule) continue;
+    if (hasActiveAssignmentAccessOverride(row)) continue;
     scheduleExternalAssignmentDisconnect({
       assignmentId: row._id.toString(),
       externalVmId: row.externalVmId.toString(),
@@ -675,18 +699,18 @@ export async function assertUserAssignedVmsAccessible(
   const { ExternalVmUserAssignmentModel } = await import(
     '../../models/externalVmUserAssignment.model'
   );
-  const { isAccessAllowedNow: allowedNow, getNextAllowedAccessHint } = await import(
+  const { isAssignmentAccessAllowedNow, getNextAllowedAccessHint } = await import(
     '../external-vm/schedule.types'
   );
   const assignments = await ExternalVmUserAssignmentModel.find({
     userId: userOid,
     $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
   })
-    .select('schedule')
+    .select('schedule accessOverride accessOverrideUntil')
     .lean();
 
   for (const row of assignments) {
-    if (allowedNow(row.schedule ?? null)) continue;
+    if (isAssignmentAccessAllowedNow(row)) continue;
     const next = getNextAllowedAccessHint(row.schedule ?? null);
     return {
       allowed: false,
@@ -722,18 +746,18 @@ export async function assertTenantUserAssignedVmsAccessible(
   const { ExternalVmTenantAssignmentModel } = await import(
     '../../models/externalVmTenantAssignment.model'
   );
-  const { isAccessAllowedNow: allowedNow, getNextAllowedAccessHint } = await import(
+  const { isAssignmentAccessAllowedNow, getNextAllowedAccessHint } = await import(
     '../external-vm/schedule.types'
   );
   const assignments = await ExternalVmTenantAssignmentModel.find({
     tenantUserId: tenantUserOid,
     $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
   })
-    .select('schedule')
+    .select('schedule accessOverride accessOverrideUntil')
     .lean();
 
   for (const row of assignments) {
-    if (allowedNow(row.schedule ?? null)) continue;
+    if (isAssignmentAccessAllowedNow(row)) continue;
     const next = getNextAllowedAccessHint(row.schedule ?? null);
     return {
       allowed: false,
@@ -760,6 +784,37 @@ export async function assertUserSessionNotExpired(userId: string): Promise<boole
     unblockUserSession(userId);
     return true;
   }
+
+  const { ExternalVmUserAssignmentModel } = await import(
+    '../../models/externalVmUserAssignment.model'
+  );
+  const platformAssignments = await ExternalVmUserAssignmentModel.find({
+    userId: new mongoose.Types.ObjectId(userId),
+    accessOverride: true,
+    $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+  })
+    .select('accessOverride accessOverrideUntil')
+    .lean();
+  if (platformAssignments.some((row) => hasActiveAssignmentAccessOverride(row))) {
+    unblockUserSession(userId);
+    return true;
+  }
+
+  const { ExternalVmTenantAssignmentModel } = await import(
+    '../../models/externalVmTenantAssignment.model'
+  );
+  const tenantAssignments = await ExternalVmTenantAssignmentModel.find({
+    tenantUserId: new mongoose.Types.ObjectId(userId),
+    accessOverride: true,
+    $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+  })
+    .select('accessOverride accessOverrideUntil')
+    .lean();
+  if (tenantAssignments.some((row) => hasActiveAssignmentAccessOverride(row))) {
+    unblockUserSession(userId);
+    return true;
+  }
+
   return false;
 }
 

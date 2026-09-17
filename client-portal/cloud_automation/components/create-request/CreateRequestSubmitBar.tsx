@@ -24,6 +24,8 @@ interface CreateRequestSubmitBarProps {
   walletLoading?: boolean;
   insufficientBalance?: boolean;
   labsMode?: boolean;
+  submitDisabled?: boolean;
+  submitDisabledLabel?: string;
 }
 
 export function CreateRequestSubmitBar({
@@ -40,6 +42,8 @@ export function CreateRequestSubmitBar({
   walletLoading = false,
   insufficientBalance = false,
   labsMode = false,
+  submitDisabled = false,
+  submitDisabledLabel = 'Complete all steps',
 }: CreateRequestSubmitBarProps) {
   const isTenantPortal = useIsTenantPortal();
   const accent = useCloudAccentColor();
@@ -264,6 +268,7 @@ export function CreateRequestSubmitBar({
               onClick={onSubmit}
               disabled={
                 submitting ||
+                submitDisabled ||
                 (!labsMode &&
                   (insufficientBalance || walletUnavailable || !hasEstimate || walletLoading))
               }
@@ -274,6 +279,8 @@ export function CreateRequestSubmitBar({
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Creating request…
                 </>
+              ) : submitDisabled ? (
+                submitDisabledLabel
               ) : !labsMode && walletUnavailable ? (
                 'Wallet unavailable'
               ) : !labsMode && insufficientBalance ? (

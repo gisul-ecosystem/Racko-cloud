@@ -1,7 +1,7 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Server } from 'http';
-import { MachineModel } from '../machine-manager.model';
+import { JobModel, MachineModel } from '../machine-manager.model';
 import { logger } from '../../../utils/logger';
 
 // ─── Close Codes ──────────────────────────────────────────────────────────────
@@ -276,14 +276,20 @@ class WSManager {
     const conn: AgentConnection = { ws, agentId };
     this.connections.set(agentId, conn);
 
-    // Mark online immediately
-    await MachineModel.updateOne({ agentId }, { status: 'online', lastSeen: new Date() });
+    // Do NOT set status here — the HTTP heartbeat is the sole source of truth for
+    // online/offline status. Only update lastSeen so the stale sweeper has an
+    // accurate timestamp if this is the first contact before the first heartbeat.
+    await MachineModel.updateOne({ agentId }, { lastSeen: new Date() });
     logger.info('[WSManager] Agent connected', { agentId, machine: machine.name });
 
     // Notify push session registry — emits agent_connected SSE event if this machine
     // is part of an active push session. This is the authoritative "agent is alive" signal.
     const { machineManagerService } = await import('../machine-manager.service');
     void machineManagerService.notifyAgentConnected(machine._id.toString(), machine.name);
+
+    // Recovery path: if jobs were queued while the agent was offline, push all
+    // pending jobs now so install flow resumes immediately after reconnect.
+    void this.pushPendingJobsForMachine(agentId, machine._id.toString());
 
     // Start ping/pong keepalive every 30s
     conn.pingTimer = setInterval(() => this.sendPing(agentId), 30 * 1000);
@@ -311,6 +317,54 @@ class WSManager {
       logger.error('[WSManager] WebSocket error', { agentId, error: err.message });
       this.handleDisconnect(agentId, 1006, 'socket error');
     });
+  }
+
+  private async pushPendingJobsForMachine(agentId: string, machineId: string): Promise<void> {
+    const conn = this.connections.get(agentId);
+    if (!conn || conn.ws.readyState !== WebSocket.OPEN) return;
+
+    try {
+      const pendingJobs = await JobModel.find({
+        machineId,
+        status: 'pending',
+      })
+        .sort({ createdAt: 1 })
+        .lean();
+
+      if (pendingJobs.length === 0) return;
+
+      let pushed = 0;
+      for (const job of pendingJobs) {
+        if (conn.ws.readyState !== WebSocket.OPEN) break;
+        conn.ws.send(
+          JSON.stringify({
+            type: 'job',
+            payload: {
+              _id: job._id.toString(),
+              machineId: job.machineId.toString(),
+              softwareIds: (job.softwareIds ?? []).map((id) => id.toString()),
+              status: job.status,
+              logs: job.logs,
+              attempts: job.attempts,
+            },
+          })
+        );
+        pushed += 1;
+      }
+
+      logger.info('[WSManager] Re-dispatched pending jobs after reconnect', {
+        agentId,
+        machineId,
+        totalPending: pendingJobs.length,
+        pushed,
+      });
+    } catch (err) {
+      logger.error('[WSManager] Failed to re-dispatch pending jobs', {
+        agentId,
+        machineId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private sendPing(agentId: string): void {
@@ -402,11 +456,11 @@ class WSManager {
     clearTimeout(conn.pongDeadlineTimer);
     this.connections.delete(agentId);
 
-    // Mark offline in DB
-    MachineModel.updateOne({ agentId }, { status: 'offline' }).catch((err: Error) => {
-      logger.error('[WSManager] Failed to mark agent offline', { agentId, error: err.message });
-    });
-
+    // Do NOT mark offline here — a dropped WebSocket doesn't mean the machine is
+    // offline. The agent reconnects within seconds and the HTTP heartbeat continues
+    // running independently. Status is managed exclusively by:
+    //   - handleHeartbeat() → sets 'online' + updates lastSeen every 30s
+    //   - markStaleAgentsOffline() → sets 'offline' after 3 min of no heartbeat
     logger.info('[WSManager] Agent disconnected', { agentId, code, reason, totalConnections: this.connections.size });
   }
 

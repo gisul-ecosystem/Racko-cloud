@@ -18,6 +18,8 @@ export interface IExternalVmTenantAssignment extends Document {
   assignedBy?: mongoose.Types.ObjectId;
   schedule?: AssignmentSchedule | null;
   status: ExternalVmAssignmentStatus;
+  accessOverride: boolean;
+  accessOverrideUntil?: Date | null;
   createdAt: Date;
 }
 
@@ -36,6 +38,8 @@ const externalVmTenantAssignmentSchema = new Schema<IExternalVmTenantAssignment>
       required: true,
       index: true,
     },
+    accessOverride: { type: Boolean, default: false, index: true },
+    accessOverrideUntil: { type: Date, default: null },
     createdAt: { type: Date, default: Date.now },
   },
   { strict: true, timestamps: false }

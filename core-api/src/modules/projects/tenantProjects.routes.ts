@@ -39,8 +39,16 @@ router.get('/name-preview', requireTenantPermission('projects.manage'), (req, re
   tenantProjectsController.previewName(req, res, next);
 });
 
+router.get('/client-names', requireTenantPermission('projects.read'), (req, res, next) => {
+  tenantProjectsController.listClientNames(req, res, next);
+});
+
 router.get('/eligible-services', requireTenantPermission('projects.manage'), (req, res, next) => {
   tenantProjectsController.listEligibleServices(req, res, next);
+});
+
+router.get('/support-agents', (req, res, next) => {
+  tenantProjectsController.listSupportAgents(req, res, next);
 });
 
 /** Used by service purchase flows — any authenticated tenant user can pick a project. */
@@ -58,6 +66,15 @@ router.post(
   validateRequest(createProjectSchema),
   (req, res, next) => {
     tenantProjectsController.create(req, res, next);
+  }
+);
+
+router.get(
+  '/:id/resources/elastic-servers',
+  requireTenantPermission('projects.read'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    tenantProjectsController.listElasticResources(req, res, next);
   }
 );
 
@@ -103,6 +120,15 @@ router.post(
   validateRequest(projectIdParamSchema),
   (req, res, next) => {
     tenantProjectsController.archive(req, res, next);
+  }
+);
+
+router.post(
+  '/:id/unarchive',
+  requireTenantPermission('projects.manage'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    tenantProjectsController.unarchive(req, res, next);
   }
 );
 

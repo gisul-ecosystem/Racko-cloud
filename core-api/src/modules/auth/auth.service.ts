@@ -419,6 +419,8 @@ export class AuthService {
     user.isLocked = false;
     user.lockedUntil = undefined;
 
+    // support_agent role can log in — no role restriction on platform login
+
     // Invited accounts must set their own password before a session is created.
     if (user.mustSetPassword) {
       const resetToken = generateSecureToken(32);

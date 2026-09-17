@@ -2,6 +2,7 @@ import { apiRequest } from './apiClient';
 import {
   PLATFORM_AWS_CLOUD_API_PREFIX,
   PLATFORM_AZURE_CLOUD_API_PREFIX,
+  PLATFORM_GCP_CLOUD_API_PREFIX,
 } from './cloudAutomationRequest';
 
 export interface CustomerCloudLabRequest {
@@ -23,7 +24,7 @@ export interface CustomerCloudLabRequest {
 }
 
 export interface CloudLabWalletLink {
-  provider: 'azure' | 'aws';
+  provider: 'azure' | 'aws' | 'gcp';
   requestId: string;
   chargedInr?: number;
   createdAt?: string;
@@ -75,6 +76,42 @@ function normalizeAzureRequest(raw: unknown): CustomerCloudLabRequest {
       asString(row.expires_at) ||
       asString(row.expiresAt),
     ownerId: asString(row.racko_user_id) || asString(row.rackoUserId),
+  };
+}
+
+function normalizeGcpRequest(raw: unknown): CustomerCloudLabRequest {
+  const row = asRecord(raw);
+  const nested = asRecord(row.request);
+  const source = Object.keys(nested).length > 0 ? { ...row, ...nested } : row;
+  const id =
+    asString(source._id) ||
+    asString(source.id) ||
+    asString(source.requestId) ||
+    '';
+  const identityUsers = Array.isArray(source.identityUsers) ? source.identityUsers : [];
+  const accountCount =
+    asNumber(source.accountCount) ??
+    asNumber(source.account_count) ??
+    (identityUsers.length || null);
+
+  return {
+    id,
+    provider: 'gcp',
+    customerEmail: asString(source.customerEmail) || asString(source.customer_email) || '—',
+    status: asString(source.status) || 'Unknown',
+    region: asString(source.region),
+    costingMode: asString(source.costingMode) || asString(source.costing_mode),
+    accountCount,
+    estimatedPrice: asNumber(source.estimatedPrice) ?? asNumber(source.estimated_price),
+    requestName:
+      asString(source.requestName) ||
+      asString(source.request_name) ||
+      asString(source.projectName) ||
+      asString(source.project_name),
+    createdAt: asString(source.createdAt) || asString(source.created_at),
+    expiryDate:
+      asString(source.endDate) || asString(source.end_date) || asString(source.expiryDate),
+    ownerId: asString(source.createdBy) || asString(source.created_by),
   };
 }
 
@@ -148,9 +185,10 @@ export function extractCloudLabLinksFromWalletTransactions(
   for (const tx of transactions) {
     if (tx.type && tx.type !== 'debit') continue;
 
-    let provider: 'azure' | 'aws' | null = null;
+    let provider: 'azure' | 'aws' | 'gcp' | null = null;
     if (tx.reason === 'azure_lab_request') provider = 'azure';
     if (tx.reason === 'aws_lab_request') provider = 'aws';
+    if (tx.reason === 'gcp_lab_request') provider = 'gcp';
     if (!provider) continue;
 
     const requestId = String(tx.relatedVmJobId || '').trim();
@@ -213,13 +251,26 @@ async function fetchAwsRequestById(id: string): Promise<CustomerCloudLabRequest 
   }
 }
 
+async function fetchGcpRequestById(id: string): Promise<CustomerCloudLabRequest | null> {
+  try {
+    const res = await apiRequest<{ success: boolean; request?: unknown; data?: unknown }>(
+      `${PLATFORM_GCP_CLOUD_API_PREFIX}/requests/${encodeURIComponent(id)}`
+    );
+    const normalized = normalizeGcpRequest(res.request ?? res.data ?? res);
+    return normalized.id ? normalized : null;
+  } catch {
+    return null;
+  }
+}
+
 async function hydrateFromWalletLinks(
   links: CloudLabWalletLink[]
-): Promise<{ azure: CustomerCloudLabRequest[]; aws: CustomerCloudLabRequest[] }> {
+): Promise<{ azure: CustomerCloudLabRequest[]; aws: CustomerCloudLabRequest[]; gcp: CustomerCloudLabRequest[] }> {
   const azureLinks = links.filter((l) => l.provider === 'azure');
   const awsLinks = links.filter((l) => l.provider === 'aws');
+  const gcpLinks = links.filter((l) => l.provider === 'gcp');
 
-  const [azureRows, awsRows] = await Promise.all([
+  const [azureRows, awsRows, gcpRows] = await Promise.all([
     Promise.all(
       azureLinks.map(async (link) => {
         const found = await fetchAzureRequestById(link.requestId);
@@ -276,9 +327,37 @@ async function hydrateFromWalletLinks(
         };
       })
     ),
+    Promise.all(
+      gcpLinks.map(async (link) => {
+        const found = await fetchGcpRequestById(link.requestId);
+        if (found) {
+          return {
+            ...found,
+            chargedInr: link.chargedInr ?? null,
+            createdAt: found.createdAt || link.createdAt || null,
+          };
+        }
+        return {
+          id: link.requestId,
+          provider: 'gcp' as const,
+          customerEmail: '—',
+          status: 'Charged',
+          region: null,
+          costingMode: null,
+          accountCount: null,
+          estimatedPrice: null,
+          requestName: `Request #${link.requestId}`,
+          createdAt: link.createdAt || null,
+          expiryDate: null,
+          ownerId: null,
+          fromWalletOnly: true,
+          chargedInr: link.chargedInr ?? null,
+        };
+      })
+    ),
   ]);
 
-  return { azure: azureRows, aws: awsRows };
+  return { azure: azureRows, aws: awsRows, gcp: gcpRows };
 }
 
 /**
@@ -307,16 +386,20 @@ export async function fetchCloudLabsForOwner(
       apiRequest<{ success: boolean; data?: unknown[] }>(
         `${PLATFORM_AWS_CLOUD_API_PREFIX}/requests?ownerId=${encodeURIComponent(ownerId)}`
       ).catch(() => ({ success: false, data: [] as unknown[] })),
+      apiRequest<{ success: boolean; data?: unknown[] }>(
+        `${PLATFORM_GCP_CLOUD_API_PREFIX}/requests?ownerId=${encodeURIComponent(ownerId)}`
+      ).catch(() => ({ success: false, data: [] as unknown[] })),
     ]),
     walletLinks.length > 0
       ? hydrateFromWalletLinks(walletLinks)
       : Promise.resolve({
           azure: [] as CustomerCloudLabRequest[],
           aws: [] as CustomerCloudLabRequest[],
+          gcp: [] as CustomerCloudLabRequest[],
         }),
   ]);
 
-  const [azureRes, awsRes] = ownerLists;
+  const [azureRes, awsRes, gcpRes] = ownerLists;
 
   const azureOwned = (azureRes.data ?? [])
     .map(normalizeAzureRequest)
@@ -326,13 +409,18 @@ export async function fetchCloudLabsForOwner(
     .map(normalizeAwsRequest)
     .filter((row) => row.id && (!row.ownerId || ownerMatches(row.ownerId, ownerId)));
 
+  const gcpOwned = (gcpRes.data ?? [])
+    .map(normalizeGcpRequest)
+    .filter((row) => row.id && (!row.ownerId || ownerMatches(row.ownerId, ownerId)));
+
   const unlinkedAzure = unlinkedWalletLabs.filter((r) => r.provider === 'azure');
   const unlinkedAws = unlinkedWalletLabs.filter((r) => r.provider === 'aws');
+  const unlinkedGcp = unlinkedWalletLabs.filter((r) => r.provider === 'gcp');
 
   return {
     azure: mergeById(mergeById(walletHydrated.azure, azureOwned), unlinkedAzure),
     aws: mergeById(mergeById(walletHydrated.aws, awsOwned), unlinkedAws),
-    gcp: [],
+    gcp: mergeById(mergeById(walletHydrated.gcp, gcpOwned), unlinkedGcp),
   };
 }
 

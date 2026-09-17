@@ -38,6 +38,31 @@ const ACCESS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 6;
 
+/**
+ * Portal links/sessions should remain valid until the lab ends, not a fixed 7-day window.
+ * Falls back to 7 days when the request has no future lab end date.
+ */
+const resolvePortalTokenExpiresAt = (request) => {
+  const now = Date.now();
+  const fallback = new Date(now + ACCESS_TOKEN_TTL_MS);
+
+  const candidates = [request?.expires_at, request?.expiry_date]
+    .map((value) => {
+      if (!value) return null;
+      const parsed = value instanceof Date ? value : new Date(value);
+      return Number.isFinite(parsed.getTime()) ? parsed : null;
+    })
+    .filter(Boolean)
+    .filter((date) => date.getTime() > now);
+
+  if (candidates.length === 0) {
+    return fallback;
+  }
+
+  // Prefer precise expires_at (usually later than expiry_date midnight).
+  return candidates.sort((left, right) => right.getTime() - left.getTime())[0];
+};
+
 const isResourceGroupScope = (scope) => /\/resourceGroups\//i.test(String(scope || ''));
 
 const scopeMatchesDeletedResourceGroup = (scope, resourceGroupNames) => {
@@ -310,6 +335,7 @@ const getRequestContext = async (requestId) => {
       r.id,
       r.customer_email,
       r.expiry_date,
+      r.expires_at,
       r.status,
       r.racko_user_id,
       r.portal_base_url,
@@ -328,6 +354,7 @@ const getRequestContext = async (requestId) => {
       r.id,
       r.customer_email,
       r.expiry_date,
+      r.expires_at,
       r.status,
       r.racko_user_id,
       COUNT(u.id) AS user_count
@@ -686,7 +713,7 @@ const issueAccessPortalTokenForRequest = async (requestId) => {
 
   const rawToken = crypto.randomUUID();
   const tokenHash = sha256Hex(rawToken);
-  const expiresAt = new Date(Date.now() + ACCESS_TOKEN_TTL_MS);
+  const expiresAt = resolvePortalTokenExpiresAt(request);
   const adminCredentials = await adminAuthService.issueTemporaryAdminCredentials({
     email: request.customer_email,
     name: request.customer_email
@@ -705,7 +732,7 @@ const issueAccessPortalTokenForRequest = async (requestId) => {
       $1,
       $2,
       $3,
-      NOW() + INTERVAL '7 days'
+      $4
     )
     RETURNING id
   `;
@@ -713,7 +740,8 @@ const issueAccessPortalTokenForRequest = async (requestId) => {
   await db.query(tokenInsert, [
     request.id,
     request.customer_email,
-    tokenHash
+    tokenHash,
+    expiresAt
   ]);
 
   // Record audit log using separate connection to ensure transaction safety
@@ -2433,6 +2461,7 @@ module.exports = {
   listPortalUsers,
   renewUserBudget,
   requireSession,
+  resolvePortalTokenExpiresAt,
   triggerUserCleanup,
   updatePortalUserRoles,
   updatePortalUserRolesByOrgAdmin,

@@ -7,6 +7,7 @@ import {
   Calculator,
   Database,
   IndianRupee,
+  LifeBuoy,
   Monitor,
   MonitorCheck,
   Plus,
@@ -14,6 +15,7 @@ import {
   Server,
   Shield,
   Upload,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import { ServiceTileCard } from '@/components/super-admin-console/ServiceTileCard';
@@ -86,10 +88,36 @@ const productServices: ServiceTile[] = [
     description: 'Oversee AWS lab requests, manage users, budgets and cleanup',
     anyOf: ['aws.manage'],
   },
+  {
+    id: 'gcp',
+    name: 'GCP Lab Management',
+    href: '/super-admin-console/gcp/org-admin',
+    icon: Cloud,
+    description: 'Oversee GCP lab requests, manage users, IAM roles and cleanup',
+    anyOf: ['gcp.manage'],
+  },
 ];
 
 /** Platform / ops tools — not sold product entitlements (utilities & admin). */
 const platformTools: ServiceTile[] = [
+  {
+    id: 'vm-inventory',
+    name: 'VM Inventory',
+    href: '/super-admin-console/vm-inventory',
+    icon: Database,
+    description:
+      'Unified inventory across VPS, VM Catalog, dedicated and inventory servers, merged by IP',
+    anyOf: ['vm_inventory.read'],
+  },
+  {
+    id: 'server-assign',
+    name: 'Server Assign',
+    href: '/super-admin-console/server-assign',
+    icon: UserPlus,
+    description:
+      'Bulk-assign inventory VM logins to a tenant or admin with a generated user series and access hours',
+    anyOf: ['vm_inventory.write'],
+  },
   {
     id: 'vm-pricing-calculator',
     name: 'VM Pricing Calculator',
@@ -115,23 +143,6 @@ const platformTools: ServiceTile[] = [
     anyOf: ['machine_manager.manage'],
   },
   {
-    id: 'vm-inventory',
-    name: 'VM Inventory',
-    href: '/super-admin-console/vm-inventory',
-    icon: Database,
-    description: 'Unified inventory across VPS, VM Catalog, and imported servers',
-    anyOf: ['vm_inventory.read'],
-  },
-  {
-    id: 'elastic-servers',
-    name: 'Server Import & Assign',
-    href: '/super-admin-console/elastic-servers',
-    icon: Upload,
-    description:
-      'Bulk import external servers and assign to tenants/users with schedules',
-    anyOf: ['elastic_servers.superadmin'],
-  },
-  {
     id: 'white-labelling',
     name: 'White Labelling Service',
     href: '/super-admin-console/white-labelling',
@@ -147,6 +158,13 @@ const platformTools: ServiceTile[] = [
     description:
       'Individual and organization customers, tenants, wallets, services, and org access requests',
     anyOf: ['admin_users.manage'],
+  },
+  {
+    id: 'support',
+    name: 'Support System',
+    href: '/super-admin-console/support',
+    icon: LifeBuoy,
+    description: 'Manage support tickets, agents, and queue distribution across tenants.',
   },
   {
     id: 'access-control',

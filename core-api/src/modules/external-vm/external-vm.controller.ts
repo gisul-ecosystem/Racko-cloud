@@ -248,6 +248,118 @@ export class ExternalVMController {
       next(err);
     }
   }
+
+  /** POST /api/v1/external-vms/:id/console/close */
+  async closeConsole(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const userId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const data = await externalVMService.closeConsoleSessionForActor(
+        id,
+        userId,
+        authReq.user.role
+      );
+      success(res, 'External VM console session closed.', data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/external-vms/sessions/end-by-token — public, no auth needed */
+  async endConsoleSessionByToken(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { endToken } = req.body as { endToken?: string };
+      if (!endToken) {
+        res.status(400).json({ success: false, message: 'endToken required.' });
+        return;
+      }
+      const { consoleSessionService } = await import('./consoleSession.service');
+      await consoleSessionService.endSessionByToken(endToken);
+      success(res, 'Console session ended.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/external-vms/sessions/start */
+  async startConsoleSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const userId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { serverId } = req.body as { serverId: string };
+      const { consoleSessionService } = await import('./consoleSession.service');
+      const result = await consoleSessionService.startSession(
+        new mongoose.Types.ObjectId(serverId),
+        userId
+      );
+      success(res, 'Console session started.', result, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/external-vms/sessions/:sessionId/heartbeat */
+  async heartbeatConsoleSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const userId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const sessionId = new mongoose.Types.ObjectId(req.params['sessionId'] as string);
+      const { consoleSessionService } = await import('./consoleSession.service');
+      await consoleSessionService.heartbeat(sessionId, userId);
+      success(res, 'Heartbeat received.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/external-vms/sessions/:sessionId/end */
+  async endConsoleSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const userId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const sessionId = new mongoose.Types.ObjectId(req.params['sessionId'] as string);
+      const { consoleSessionService } = await import('./consoleSession.service');
+      await consoleSessionService.endSession(sessionId, userId);
+      success(res, 'Console session ended.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** GET /api/v1/external-vms/sessions */
+  async listConsoleSessions(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { consoleSessionService } = await import('./consoleSession.service');
+      const result = await consoleSessionService.listSessions(adminId, {
+        userId: req.query['userId'] as string | undefined,
+        serverId: req.query['serverId'] as string | undefined,
+        from: req.query['from'] as string | undefined,
+        to: req.query['to'] as string | undefined,
+        page: req.query['page'] ? parseInt(req.query['page'] as string, 10) : undefined,
+        limit: req.query['limit'] ? parseInt(req.query['limit'] as string, 10) : undefined,
+      });
+      success(res, 'Console sessions retrieved.', result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** DELETE /api/v1/external-vms/sessions/bulk */
+  async bulkDeleteConsoleSessions(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { ids } = req.body as { ids: string[] };
+      const { consoleSessionService } = await import('./consoleSession.service');
+      const result = await consoleSessionService.bulkDeleteSessions(adminId, ids);
+      success(res, `${result.deleted} session(s) deleted.`, result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const externalVMController = new ExternalVMController();

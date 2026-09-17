@@ -27,6 +27,12 @@ export interface IMachine {
   };
   agentVersion?: string;
   rackoAppVersion?: string;
+  lastReset?: {
+    status: 'pending' | 'success' | 'failed';
+    success?: boolean;
+    error?: string;
+    completedAt?: string;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,6 +63,8 @@ export interface ISoftwareCatalog {
   chocoName?: string;
   fileUrl?: string;
   fileName?: string;
+  zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
   uploadedBy: string;
   createdAt: string;
@@ -90,6 +98,8 @@ export interface CreateSoftwareCatalogDto {
   chocoName?: string;
   fileUrl?: string;
   fileName?: string;
+  zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
 }
 
@@ -177,6 +187,14 @@ export async function fetchJobs(): Promise<IJob[]> {
   return res.data.jobs;
 }
 
+/** Fetch jobs scoped to a single machine — faster than fetchJobs() for the detail page. */
+export async function fetchMachineJobs(machineId: string): Promise<IJob[]> {
+  const res = await apiRequest<ApiResponse<{ jobs: IJob[]; total: number }>>(
+    `/api/v1/machines/${machineId}/jobs`
+  );
+  return res.data.jobs;
+}
+
 export async function fetchJob(id: string): Promise<IJob> {
   const res = await apiRequest<ApiResponse<{ job: IJob }>>(`/api/v1/machines/jobs/${id}`);
   return res.data.job;
@@ -209,8 +227,106 @@ export async function createSoftwareCatalogEntry(
   return res.data.software;
 }
 
+export async function updateSoftwareCatalogEntry(
+  id: string,
+  dto: Partial<CreateSoftwareCatalogDto>
+): Promise<ISoftwareCatalog> {
+  const res = await apiRequest<ApiResponse<{ software: ISoftwareCatalog }>>(
+    `/api/v1/software-catalog/${id}`,
+    { method: 'PATCH', body: JSON.stringify(dto) }
+  );
+  return res.data.software;
+}
+
 export async function deleteSoftwareCatalogEntry(id: string): Promise<void> {
   await apiRequest(`/api/v1/software-catalog/${id}`, { method: 'DELETE' });
+}
+
+// ─── Job clear API ────────────────────────────────────────────────────────────
+
+/** Deletes ALL jobs for the logged-in admin. Used by Jobs & Status page. */
+export async function clearAllJobs(): Promise<{ deleted: number }> {
+  const res = await apiRequest<ApiResponse<{ deleted: number }>>(
+    '/api/v1/machines/jobs',
+    { method: 'DELETE' }
+  );
+  return res.data;
+}
+
+/** Deletes all jobs for a specific machine. Used by machine detail + list pages. */
+export async function clearMachineJobs(machineId: string): Promise<{ deleted: number }> {
+  const res = await apiRequest<ApiResponse<{ deleted: number }>>(
+    `/api/v1/machines/${machineId}/jobs`,
+    { method: 'DELETE' }
+  );
+  return res.data;
+}
+
+/**
+ * Issues a presigned PUT URL so the browser can upload a software installer
+ * directly to SeaweedFS without routing the file bytes through the API server.
+ * Returns the storageRef to save as fileUrl in the catalog entry.
+ */
+export async function issueSoftwareCatalogUploadUrl(
+  fileName: string,
+  mimeType: string
+): Promise<{ presignedUrl: string; storageRef: string; expiresIn: number }> {
+  const res = await apiRequest<ApiResponse<{ presignedUrl: string; storageRef: string; expiresIn: number }>>(
+    '/api/v1/software-catalog/upload-url',
+    { method: 'POST', body: JSON.stringify({ fileName, mimeType }) }
+  );
+  return res.data;
+}
+
+// ─── Multipart upload API ─────────────────────────────────────────────────────
+
+/** Step 1: Initiate a multipart upload. Returns uploadId + storageRef. */
+export async function startSoftwareCatalogMultipartUpload(
+  fileName: string,
+  mimeType: string
+): Promise<{ uploadId: string; storageRef: string }> {
+  const res = await apiRequest<ApiResponse<{ uploadId: string; storageRef: string }>>(
+    '/api/v1/software-catalog/upload-url/multipart/start',
+    { method: 'POST', body: JSON.stringify({ fileName, mimeType }) }
+  );
+  return res.data;
+}
+
+/** Step 2: Get a presigned PUT URL for a single part. */
+export async function getSoftwareCatalogPartUrl(
+  storageRef: string,
+  uploadId: string,
+  partNumber: number
+): Promise<{ presignedUrl: string }> {
+  const res = await apiRequest<ApiResponse<{ presignedUrl: string }>>(
+    '/api/v1/software-catalog/upload-url/multipart/part',
+    { method: 'POST', body: JSON.stringify({ storageRef, uploadId, partNumber }) }
+  );
+  return res.data;
+}
+
+/** Step 3: Complete the multipart upload with all part ETags. */
+export async function completeSoftwareCatalogMultipartUpload(
+  storageRef: string,
+  uploadId: string,
+  parts: Array<{ PartNumber: number; ETag: string }>
+): Promise<{ storageRef: string }> {
+  const res = await apiRequest<ApiResponse<{ storageRef: string }>>(
+    '/api/v1/software-catalog/upload-url/multipart/complete',
+    { method: 'POST', body: JSON.stringify({ storageRef, uploadId, parts }) }
+  );
+  return res.data;
+}
+
+/** Abort a multipart upload on error. */
+export async function abortSoftwareCatalogMultipartUpload(
+  storageRef: string,
+  uploadId: string
+): Promise<void> {
+  await apiRequest(
+    '/api/v1/software-catalog/upload-url/multipart/abort',
+    { method: 'POST', body: JSON.stringify({ storageRef, uploadId }) }
+  );
 }
 
 // ─── VM Push API ──────────────────────────────────────────────────────────────
@@ -336,6 +452,22 @@ export function getEnrollmentAgentDownloadUrl(os: MachineOS): string {
 
 // ─── Reset API ────────────────────────────────────────────────────────────────
 
+/**
+ * One event off the reset stream.
+ *
+ * `reset_progress` carries the phase the agent is on; `reset_complete` carries
+ * the outcome and, on failure, the script output.
+ */
+export interface ResetStreamEvent {
+  type: string;
+  machineId?: string;
+  machineName?: string;
+  phase?: number;
+  message?: string;
+  success?: boolean;
+  error?: string;
+}
+
 export async function resetMachines(
   machineIds: string[],
   sessionId: string
@@ -385,7 +517,7 @@ export function openResetStatusStream(
 export function openResetStatusStreamWithReconnect(
   sessionId: string,
   streamToken: string,
-  onEvent: (event: { type: string; machineId?: string; success?: boolean; error?: string }) => void,
+  onEvent: (event: ResetStreamEvent) => void,
   onTerminal: () => void,
   onGiveUp: () => void,
   expectedCount: number = 1,
@@ -438,12 +570,7 @@ export function openResetStatusStreamWithReconnect(
             if (!raw) continue;
 
             try {
-              const event = JSON.parse(raw) as {
-                type: string;
-                machineId?: string;
-                success?: boolean;
-                error?: string;
-              };
+              const event = JSON.parse(raw) as ResetStreamEvent;
 
               if (event.type === 'reset_complete' && event.machineId) {
                 // Deduplicate — on reconnect the server replays all persisted results.

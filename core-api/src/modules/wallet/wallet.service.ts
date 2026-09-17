@@ -180,7 +180,7 @@ export class WalletService {
     tenantId: string,
     amountUsd: number,
     relatedRequestId: string | null = null,
-    provider: 'azure' | 'aws' = 'azure',
+    provider: 'azure' | 'aws' | 'gcp' = 'azure',
     attribution?: {
       projectId?: string | null;
       serviceKey?: AdminServiceKey | null;
@@ -191,14 +191,15 @@ export class WalletService {
     chargedInr: number;
     amountUsd: number;
     usdToInrRate: number;
-    provider: 'azure' | 'aws';
+    provider: 'azure' | 'aws' | 'gcp';
   }> {
     if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
       throw new AppError('Estimated amount must be a positive number.', 400, 'VALIDATION_ERROR');
     }
 
     const serviceKey: AdminServiceKey =
-      attribution?.serviceKey || (provider === 'aws' ? 'aws' : 'azure');
+      attribution?.serviceKey ||
+      (provider === 'aws' ? 'aws' : provider === 'gcp' ? 'gcp' : 'azure');
     let projectId: string | null = attribution?.projectId ?? null;
 
     if (projectId) {
@@ -212,7 +213,12 @@ export class WalletService {
 
     const usdToInrRate = this.getUsdToInrRate();
     const chargedInr = this.usdToInr(amountUsd);
-    const reason = provider === 'aws' ? 'aws_lab_request' : 'azure_lab_request';
+    const reason =
+      provider === 'aws'
+        ? 'aws_lab_request'
+        : provider === 'gcp'
+          ? 'gcp_lab_request'
+          : 'azure_lab_request';
     const externalReference = relatedRequestId
       ? `cloud_request:${provider}:${relatedRequestId}`
       : null;
@@ -243,13 +249,18 @@ export class WalletService {
     tenantId: string,
     amountInr: number,
     relatedRequestId: string | null = null,
-    provider: 'azure' | 'aws' = 'azure'
+    provider: 'azure' | 'aws' | 'gcp' = 'azure'
   ): Promise<{ balance: number; currency: string }> {
     if (!Number.isFinite(amountInr) || amountInr <= 0) {
       throw new AppError('Refund amount must be a positive number.', 400, 'VALIDATION_ERROR');
     }
 
-    const reason = provider === 'aws' ? 'aws_lab_request_refund' : 'azure_lab_request_refund';
+    const reason =
+      provider === 'aws'
+        ? 'aws_lab_request_refund'
+        : provider === 'gcp'
+          ? 'gcp_lab_request_refund'
+          : 'azure_lab_request_refund';
     return this.creditWallet(tenantId, amountInr, reason, {
       externalReference: relatedRequestId
         ? `cloud_request_refund:${provider}:${relatedRequestId}`
@@ -260,10 +271,15 @@ export class WalletService {
   async linkCloudRequestCharge(
     tenantId: string,
     relatedRequestId: string,
-    provider: 'azure' | 'aws' = 'azure'
+    provider: 'azure' | 'aws' | 'gcp' = 'azure'
   ): Promise<void> {
     const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
-    const reason = provider === 'aws' ? 'aws_lab_request' : 'azure_lab_request';
+    const reason =
+      provider === 'aws'
+        ? 'aws_lab_request'
+        : provider === 'gcp'
+          ? 'gcp_lab_request'
+          : 'azure_lab_request';
     await WalletTransaction.findOneAndUpdate(
       {
         tenantId: tenantObjectId,

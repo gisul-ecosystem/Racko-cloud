@@ -27,6 +27,27 @@ export interface CatalogVmResponse {
   machineId?: string;
   postReadyStatus?: 'none' | 'pending' | 'running' | 'done' | 'failed';
   postReadyError?: string;
+  postReadyJobTotal?: number;
+  postReadyJobDone?: number;
+  postReadyJobFailed?: number;
+  postReadyJobRunning?: number;
+  postReadyJobPending?: number;
+  postReadyStage?:
+    | 'not_requested'
+    | 'agent_pushing'
+    | 'agent_waiting_online'
+    | 'agent_online'
+    | 'software_queued'
+    | 'software_installing'
+    | 'software_done'
+    | 'failed';
+  postReadyStageLabel?: string;
+  postReadyMachineStatus?: 'pending' | 'online' | 'offline';
+  postReadyAgentConnected?: boolean;
+  postReadyRunningSoftware?: string[];
+  postReadyPendingSoftware?: string[];
+  /** Customer-safe hint for which power UI to show (no infra leak). */
+  powerControlMode?: 'webyne' | 'azure';
   /** Omitted for admin-role callers (provider leak guard). */
   provider?: VmCatalogProvider;
   category: VmCatalogCategory;
@@ -61,6 +82,8 @@ export interface CatalogVmResponse {
   region?: string;
   /** Super-admin only */
   providerInstanceId?: string;
+  /** Super-admin only */
+  azureResourceGroup?: string;
   expiresAt?: string;
   autoProvisioned?: boolean;
   /** Super-admin only */
@@ -116,7 +139,9 @@ export interface CreateCatalogVmRequestDto {
 }
 
 export interface CatalogVmRequesterGroup {
+  /** Platform admin user id, or tenant id when kind is tenant. */
   adminId: string;
+  kind: 'admin' | 'tenant';
   adminEmail: string;
   pendingCount: number;
   totalCount: number;

@@ -2,20 +2,19 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { fetchExternalVM, type IExternalVM } from '../../../../../lib/externalVmApi';
 import { ApiError } from '../../../../../lib/apiClient';
 import { ChevronLeft, Monitor, Loader2, Server, Globe } from 'lucide-react';
+import { openGuacamoleConsolePage } from '../../../../../lib/consoleLaunch';
 
 export default function UserExternalServerPage() {
   const params = useParams();
-  const router = useRouter();
   const serverId = params.serverId as string;
 
   const [server, setServer] = useState<IExternalVM | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [consoleLoading, setConsoleLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -34,13 +33,8 @@ export default function UserExternalServerPage() {
     void load();
   }, [load]);
 
-  async function openConsole() {
-    setConsoleLoading(true);
-    try {
-      router.push(`/dashboard/user/servers/${serverId}/console`);
-    } finally {
-      setConsoleLoading(false);
-    }
+  function openConsole() {
+    openGuacamoleConsolePage(`/dashboard/user/servers/${serverId}/console`);
   }
 
   if (loading) {
@@ -73,10 +67,8 @@ export default function UserExternalServerPage() {
             <p className="text-sm text-gray-500 mt-0.5">Elastic Server Import</p>
           </div>
           <button
-            onClick={() => void openConsole()}
-            disabled={
-              consoleLoading || Boolean(server.myAccess && !server.myAccess.allowedNow)
-            }
+            onClick={openConsole}
+            disabled={Boolean(server.myAccess && !server.myAccess.allowedNow)}
             className="inline-flex items-center gap-2 px-4 py-2 bg-[#B91C1C] hover:bg-red-700 text-white text-sm font-medium rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
             title={
               server.myAccess && !server.myAccess.allowedNow
@@ -86,7 +78,7 @@ export default function UserExternalServerPage() {
                 : 'Open console'
             }
           >
-            {consoleLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Monitor className="w-4 h-4" />}
+            <Monitor className="w-4 h-4" />
             Open Console
           </button>
         </div>

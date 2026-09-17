@@ -10,6 +10,7 @@ import React, {
 import { useRouter } from 'next/navigation';
 import {
   clearTenantAccessToken,
+  consumeTenantTabHandoff,
   loadTenantSession,
   persistTenantSession,
   TENANT_SESSION_EXPIRED_EVENT,
@@ -51,12 +52,26 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
     // the browser's same-origin sessionStorage cloning behavior. Consume it
     // before the normal sessionStorage check so it takes effect immediately,
     // then strip it from the URL so it never lingers in history/bookmarks.
+    let expectingHandoff = false;
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
+      const handoffId = urlParams.get('_h');
+      if (handoffId) {
+        expectingHandoff = true;
+        const session = consumeTenantTabHandoff(handoffId);
+        if (session) {
+          persistTenantSession(session);
+        }
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete('_h');
+        window.history.replaceState({}, '', newUrl.toString());
+      }
+
       const sessionParam = urlParams.get('_s');
       if (sessionParam) {
+        expectingHandoff = true;
         try {
-          const raw = decodeURIComponent(atob(sessionParam));
+          const raw = decodeURIComponent(atob(decodeURIComponent(sessionParam)));
           const session = JSON.parse(raw);
           if (session.accessToken && session.tenantUser) {
             persistTenantSession(session);
@@ -84,6 +99,7 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
     // sessionStorage may not be cloned yet in a new tab opened via
     // window.open() — retry once after a short delay before concluding
     // the user is unauthenticated.
+    const retryMs = expectingHandoff ? 600 : 200;
     const timer = setTimeout(() => {
       const retrySession = loadTenantSession();
       if (retrySession) {
@@ -95,7 +111,7 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
       } else {
         setState({ tenantUser: null, isLoading: false, isAuthenticated: false });
       }
-    }, 200);
+    }, retryMs);
 
     return () => clearTimeout(timer);
   }, []);
@@ -133,9 +149,19 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
       }
     };
 
-    void tick();
+    // Delay the first access-check by 5 seconds so a console tab opened via
+    // window.open() (which restores session from _s on mount) has time to
+    // fully settle before the check fires. The immediate void tick() was
+    // causing a race: session restored from _s → check fires before API
+    // confirms the session → 401 → logout → /console/login → /login.
+    // The 5s delay is invisible to users and still catches schedule expiry
+    // within the first polling cycle.
+    const firstCheckTimer = window.setTimeout(() => void tick(), 5_000);
     const id = window.setInterval(() => void tick(), 60_000);
-    return () => window.clearInterval(id);
+    return () => {
+      window.clearTimeout(firstCheckTimer);
+      window.clearInterval(id);
+    };
   }, [
     state.isAuthenticated,
     state.tenantUser?.role,

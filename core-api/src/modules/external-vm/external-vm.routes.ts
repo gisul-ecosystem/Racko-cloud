@@ -10,9 +10,17 @@ import {
   userIdParamSchema,
   assignExternalVMsSchema,
   bulkAssignExternalPairsSchema,
+  bulkDeleteSessionsSchema,
 } from './external-vm.validation';
 
 const router = Router();
+
+// POST /api/v1/external-vms/sessions/end-by-token — public (no auth)
+// sendBeacon cannot send auth headers; the endToken in the body IS the auth.
+router.post(
+  '/sessions/end-by-token',
+  (req, res, next) => externalVMController.endConsoleSessionByToken(req, res, next)
+);
 
 router.use(requireAuth);
 
@@ -87,6 +95,44 @@ router.get(
   (req, res, next) => externalVMController.getMyAssigned(req, res, next)
 );
 
+// ─── Console Session routes ───────────────────────────────────────────────────
+
+// POST /api/v1/external-vms/sessions/start
+router.post(
+  '/sessions/start',
+  requireRole('admin', 'super_admin', 'user'),
+  (req, res, next) => externalVMController.startConsoleSession(req, res, next)
+);
+
+// POST /api/v1/external-vms/sessions/:sessionId/heartbeat
+router.post(
+  '/sessions/:sessionId/heartbeat',
+  requireRole('admin', 'super_admin', 'user'),
+  (req, res, next) => externalVMController.heartbeatConsoleSession(req, res, next)
+);
+
+// POST /api/v1/external-vms/sessions/:sessionId/end
+router.post(
+  '/sessions/:sessionId/end',
+  requireRole('admin', 'super_admin', 'user'),
+  (req, res, next) => externalVMController.endConsoleSession(req, res, next)
+);
+
+// GET /api/v1/external-vms/sessions — admin analytics
+router.get(
+  '/sessions',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => externalVMController.listConsoleSessions(req, res, next)
+);
+
+// DELETE /api/v1/external-vms/sessions/bulk — bulk delete completed sessions
+router.delete(
+  '/sessions/bulk',
+  requireRole('admin', 'super_admin'),
+  validateRequest(bulkDeleteSessionsSchema),
+  (req, res, next) => externalVMController.bulkDeleteConsoleSessions(req, res, next)
+);
+
 // GET /api/v1/external-vms — list my external VMs (admin)
 router.get(
   '/',
@@ -100,6 +146,14 @@ router.get(
   requireRole('admin', 'super_admin', 'user'),
   validateRequest(externalVMIdParamSchema),
   (req, res, next) => externalVMController.openConsole(req, res, next)
+);
+
+// POST /api/v1/external-vms/:id/console/close
+router.post(
+  '/:id/console/close',
+  requireRole('admin', 'super_admin', 'user'),
+  validateRequest(externalVMIdParamSchema),
+  (req, res, next) => externalVMController.closeConsole(req, res, next)
 );
 
 // GET /api/v1/external-vms/:id — single external VM

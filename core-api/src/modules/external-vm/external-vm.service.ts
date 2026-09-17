@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { User } from '../../models/user.model';
 import { TenantUser } from '../../models/tenantUser.model';
-import { ExternalVMModel, type IExternalVM } from './external-vm.model';
+import { ExternalVMModel, type IExternalVM, defaultPortForExternalVm, defaultUsernameFor } from './external-vm.model';
 import type {
   BulkAssignExternalPairsDto,
   BulkAssignExternalPairsResult,
@@ -15,10 +15,10 @@ import type {
 } from './external-vm.types';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { guacamoleClient } from '../../utils/guacamoleClient';
-import { AccessWindowDeniedError, NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
+import { AccessWindowDeniedError, ConflictError, NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { managedUsersService } from '../managedUsers/managedUsers.service';
-import { tenantUserService } from '../tenantUser/tenantUser.service';
+import { tenantUserService, buildTenantUserEmail } from '../tenantUser/tenantUser.service';
 import type { TenantUserRole } from '../../middleware/requireTenantAuth.middleware';
 import {
   accessSchedulePublicView,
@@ -27,12 +27,14 @@ import {
 } from '../vmAccessSchedule/accessScheduleParse';
 import {
   cancelSchedule,
+  hasActiveAccessOverride,
   unblockUserSession,
 } from '../vmAccessSchedule/scheduleManager';
 import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
 import { ExternalVmUserAssignmentModel } from '../../models/externalVmUserAssignment.model';
 import {
   createExternalVmTenantAssignments,
+  createSingleExternalVmTenantAssignment,
   getAssignmentCountsByTenantUser,
   getAssignmentMapForExternalVms,
   getExternalVmIdsForTenantUser,
@@ -45,16 +47,26 @@ import {
 } from './externalVmTenantAssignment.service';
 import {
   getNextAllowedAccessHint,
+  hasActiveAssignmentAccessOverride,
   isAccessAllowedNow,
   type AssignmentSchedule,
 } from './schedule.types';
 
-type PlatformActorRole = 'admin' | 'super_admin' | 'staff' | 'user';
+type PlatformActorRole = 'admin' | 'super_admin' | 'staff' | 'support_agent' | 'user';
 
 interface TenantExternalVmActor {
   id: string;
   tenantId: string;
   role: TenantUserRole;
+}
+
+function canAssignToTenantEndUser(
+  user: { createdBy?: mongoose.Types.ObjectId | null },
+  actor: TenantExternalVmActor
+): boolean {
+  if (actor.role === 'tenant_admin') return true;
+  const actorId = new mongoose.Types.ObjectId(actor.id);
+  return Boolean(user.createdBy && user.createdBy.toString() === actorId.toString());
 }
 
 function toAccessScheduleView(doc: IExternalVM): NonNullable<ExternalVMResponse['accessSchedule']> {
@@ -91,13 +103,34 @@ function toSchedulePublic(
   };
 }
 
-function toMyAccess(schedule?: AssignmentSchedule | null): ExternalVmMyAccess {
+function toMyAccess(
+  assignment?: {
+    schedule?: AssignmentSchedule | null;
+    accessOverride?: boolean;
+    accessOverrideUntil?: Date | null;
+  } | null,
+  vmDoc?: Pick<IExternalVM, 'accessOverride' | 'accessOverrideUntil'>
+): ExternalVmMyAccess {
+  const assignmentOverride = Boolean(assignment && hasActiveAssignmentAccessOverride(assignment));
+  const vmOverride = Boolean(vmDoc && hasActiveAccessOverride(vmDoc));
+  const overrideActive = assignmentOverride || vmOverride;
+  const schedule = assignment?.schedule ?? null;
+  const allowedNow = overrideActive || isAccessAllowedNow(schedule);
   const pub = toSchedulePublic(schedule);
-  const allowedNow = isAccessAllowedNow(schedule ?? null);
+  const overrideUntil = assignmentOverride
+    ? assignment?.accessOverrideUntil
+      ? new Date(assignment.accessOverrideUntil).toISOString()
+      : null
+    : vmOverride && vmDoc?.accessOverrideUntil
+      ? new Date(vmDoc.accessOverrideUntil).toISOString()
+      : null;
+
   return {
     allowedNow,
     schedule: pub,
-    nextWindow: allowedNow ? null : getNextAllowedAccessHint(schedule ?? null),
+    nextWindow: allowedNow ? null : getNextAllowedAccessHint(schedule),
+    overrideActive,
+    overrideUntil,
   };
 }
 
@@ -265,7 +298,14 @@ class ExternalVMService {
     );
     const summaries = await this.loadTenantAssignmentSummaries(tenantId, docs);
 
-    let myScheduleByVm = new Map<string, AssignmentSchedule | null>();
+    let myAssignmentByVm = new Map<
+      string,
+      {
+        schedule?: AssignmentSchedule | null;
+        accessOverride?: boolean;
+        accessOverrideUntil?: Date | null;
+      }
+    >();
     if (options?.forTenantUserId) {
       const mine = await ExternalVmTenantAssignmentModel.find({
         tenantId,
@@ -273,18 +313,16 @@ class ExternalVMService {
         externalVmId: { $in: docs.map((d) => d._id) },
         $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
       })
-        .select('externalVmId schedule')
+        .select('externalVmId schedule accessOverride accessOverrideUntil')
         .lean();
-      myScheduleByVm = new Map(
-        mine.map((r) => [r.externalVmId.toString(), r.schedule ?? null] as const)
-      );
+      myAssignmentByVm = new Map(mine.map((r) => [r.externalVmId.toString(), r]));
     }
 
     return docs.map((doc) => {
       const vmId = doc._id.toString();
       const assignments = summaries.get(vmId) ?? [];
       const myAccess = options?.forTenantUserId
-        ? toMyAccess(myScheduleByVm.get(vmId) ?? null)
+        ? toMyAccess(myAssignmentByVm.get(vmId) ?? null, doc)
         : undefined;
       return this.toResponse(doc, {
         ...options,
@@ -296,7 +334,11 @@ class ExternalVMService {
   }
 
   /** Deny when outside the assignment's schedule window (no schedule → allow). */
-  private assertAssignmentScheduleWindow(schedule?: AssignmentSchedule | null): void {
+  private assertAssignmentScheduleWindow(
+    schedule?: AssignmentSchedule | null,
+    override?: { accessOverride?: boolean; accessOverrideUntil?: Date | null }
+  ): void {
+    if (override && hasActiveAssignmentAccessOverride(override)) return;
     if (isAccessAllowedNow(schedule)) return;
     const next = getNextAllowedAccessHint(schedule);
     throw new AccessWindowDeniedError(
@@ -324,14 +366,14 @@ class ExternalVMService {
         externalVmId: doc._id,
         userId,
       })
-        .select('schedule status')
+        .select('schedule status accessOverride accessOverrideUntil')
         .lean();
 
       if (assignment) {
         if (!this.isAssignmentStatusActive(assignment.status)) {
           throw new ForbiddenError('You do not have permission to access this external VM.');
         }
-        this.assertAssignmentScheduleWindow(assignment.schedule ?? null);
+        this.assertAssignmentScheduleWindow(assignment.schedule ?? null, assignment);
         return;
       }
 
@@ -352,26 +394,37 @@ class ExternalVMService {
       throw new ForbiddenError('You do not have permission to access this external VM.');
     }
     if (actor.role === 'tenant_user') {
+      if (hasActiveAccessOverride(doc)) return;
+
       const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
       const tenantUserId = new mongoose.Types.ObjectId(actor.id);
+      const activeAssignmentFilter = {
+        $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+      };
       const assignment = await ExternalVmTenantAssignmentModel.findOne({
         tenantId,
         externalVmId: doc._id,
         tenantUserId,
+        ...activeAssignmentFilter,
       })
-        .select('schedule status')
+        .select('schedule status accessOverride accessOverrideUntil')
         .lean();
 
       if (assignment) {
-        if (!this.isAssignmentStatusActive(assignment.status)) {
-          throw new ForbiddenError('You do not have permission to access this external VM.');
-        }
-        this.assertAssignmentScheduleWindow(assignment.schedule ?? null);
+        this.assertAssignmentScheduleWindow(assignment.schedule ?? null, assignment);
         return;
       }
 
-      // Legacy path: ExternalVM.assignedTenantUserId only (no junction row yet).
+      // Legacy path: ExternalVM.assignedTenantUserId (self-heal junction if missing).
       if (doc.assignedTenantUserId && doc.assignedTenantUserId.toString() === actor.id) {
+        await ExternalVmTenantAssignmentModel.updateOne(
+          { tenantId, externalVmId: doc._id, tenantUserId },
+          {
+            $set: { status: 'active' },
+            $setOnInsert: { createdAt: new Date() },
+          },
+          { upsert: true }
+        );
         return;
       }
 
@@ -398,6 +451,7 @@ class ExternalVMService {
       name: dto.name,
       ipAddress: dto.ipAddress,
       protocol: dto.protocol,
+      ...(dto.port != null ? { port: dto.port } : {}),
       username: dto.username,
       password: encrypt(dto.password),
       source: 'admin_import',
@@ -427,7 +481,13 @@ class ExternalVMService {
   }
 
   async listExternalVMs(adminId: mongoose.Types.ObjectId): Promise<ExternalVMResponse[]> {
-    const docs = await ExternalVMModel.find({ adminId, source: { $in: ['admin_import', 'tenant_import'] } }).sort({ createdAt: -1 });
+    // Elastic Servers is the admin's own import surface. Servers attached via
+    // super-admin Server Assign (source: superadmin_bulk) belong on My VM
+    // Dashboard instead — never mix the two lists.
+    const docs = await ExternalVMModel.find({
+      adminId,
+      source: { $in: ['admin_import', 'tenant_import'] },
+    }).sort({ createdAt: -1 });
     const summaries = await this.loadPlatformAssignmentSummaries(docs);
     return docs.map((doc) =>
       this.toResponse(doc, {
@@ -464,9 +524,9 @@ class ExternalVMService {
         userId: requestingUserId,
         $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
       })
-        .select('schedule')
+        .select('schedule accessOverride accessOverrideUntil')
         .lean();
-      myAccess = toMyAccess(assignment?.schedule ?? null);
+      myAccess = toMyAccess(assignment ?? null, doc);
     }
 
     return this.toResponse(doc, { includePassword, myAccess });
@@ -477,6 +537,9 @@ class ExternalVMService {
     adminId: mongoose.Types.ObjectId
   ): Promise<void> {
     const doc = await this.findOwnedByAdmin(id, adminId);
+    if (doc.inventoryLocked) {
+      throw new ConflictError('VM is locked and cannot be deleted from inventory.');
+    }
     await doc.deleteOne();
 
     logger.info('[ExternalVM] Deleted external VM', {
@@ -513,6 +576,17 @@ class ExternalVMService {
     );
   }
 
+  async closeConsoleSessionForActor(
+    id: mongoose.Types.ObjectId,
+    requestingUserId: mongoose.Types.ObjectId,
+    requestingRole: PlatformActorRole
+  ): Promise<{ killed: number }> {
+    const doc = await ExternalVMModel.findById(id);
+    if (!doc) throw new NotFoundError('External VM not found.');
+    await this.assertPlatformAccess(doc, requestingUserId.toString(), requestingRole);
+    return this.killGuacamoleSessionsForExternalVm(doc._id);
+  }
+
   async getMyAssignedExternalVMs(
     userId: mongoose.Types.ObjectId
   ): Promise<ExternalVMResponse[]> {
@@ -520,11 +594,11 @@ class ExternalVMService {
       userId,
       $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
     })
-      .select('externalVmId schedule')
+      .select('externalVmId schedule accessOverride accessOverrideUntil')
       .lean();
 
-    const byVmSchedule = new Map(
-      junction.map((j) => [j.externalVmId.toString(), j.schedule ?? null] as const)
+    const byVmAssignment = new Map(
+      junction.map((j) => [j.externalVmId.toString(), j] as const)
     );
 
     const fromJunction = junction.map((j) => j.externalVmId);
@@ -533,32 +607,69 @@ class ExternalVMService {
     }).sort({ createdAt: -1 });
 
     return docs.map((doc) => {
-      const schedule =
-        byVmSchedule.get(doc._id.toString()) ??
-        // Legacy assignedTo with no junction schedule → always-on
-        null;
+      const assignment = byVmAssignment.get(doc._id.toString()) ?? null;
       return this.toResponse(doc, {
         includePassword: false,
-        myAccess: toMyAccess(schedule),
+        myAccess: toMyAccess(assignment, doc),
       });
     });
   }
 
   async getAssignedCounts(adminId: mongoose.Types.ObjectId): Promise<Record<string, number>> {
-    const results = await ExternalVMModel.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
-      { $match: { adminId, assignedTo: { $ne: null } } },
+    // Prefer the junction table (inventory mirrors + multi-assign). Fall back to
+    // the legacy ExternalVM.assignedTo field only for VMs that have no junction
+    // row yet, so a VM that still has both fields is not double-counted.
+    const activeStatus = {
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    };
+    const [junction, junctionVmIds] = await Promise.all([
+      ExternalVmUserAssignmentModel.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
+        { $match: { adminId, ...activeStatus } },
+        { $group: { _id: '$userId', count: { $sum: 1 } } },
+      ]),
+      ExternalVmUserAssignmentModel.distinct('externalVmId', { adminId, ...activeStatus }),
+    ]);
+
+    const legacy = await ExternalVMModel.aggregate<{
+      _id: mongoose.Types.ObjectId;
+      count: number;
+    }>([
+      {
+        $match: {
+          adminId,
+          assignedTo: { $ne: null },
+          _id: { $nin: junctionVmIds },
+        },
+      },
       { $group: { _id: '$assignedTo', count: { $sum: 1 } } },
     ]);
 
     const map: Record<string, number> = {};
-    for (const r of results) {
+    for (const r of junction) {
       map[r._id.toString()] = r.count;
+    }
+    for (const r of legacy) {
+      const key = r._id.toString();
+      map[key] = (map[key] ?? 0) + r.count;
     }
     return map;
   }
 
   async getAvailableExternalVMs(adminId: mongoose.Types.ObjectId): Promise<ExternalVMResponse[]> {
-    const docs = await ExternalVMModel.find({ adminId, assignedTo: null }).sort({ createdAt: -1 });
+    // Inventory mirrors are owned by Server Assign / VM Inventory — keep them out
+    // of the elastic-server "available to assign" pool so admins don't re-grant
+    // them through the legacy path. Also skip anything already granted via the
+    // junction (assignedTo alone misses inventory mirrors).
+    const takenIds = await ExternalVmUserAssignmentModel.distinct('externalVmId', {
+      adminId,
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    });
+    const docs = await ExternalVMModel.find({
+      adminId,
+      assignedTo: null,
+      source: { $in: ['admin_import', 'tenant_import'] },
+      _id: { $nin: takenIds },
+    }).sort({ createdAt: -1 });
     return docs.map((doc) => this.toResponse(doc));
   }
 
@@ -572,7 +683,21 @@ class ExternalVMService {
       throw new ForbiddenError('You can only manage users you created.');
     }
 
-    const docs = await ExternalVMModel.find({ adminId, assignedTo: targetUserId }).sort({ createdAt: -1 });
+    // Inventory mirrors write ExternalVmUserAssignment and leave assignedTo null,
+    // so the junction is the primary source; legacy assignedTo covers older rows.
+    const junction = await ExternalVmUserAssignmentModel.find({
+      adminId,
+      userId: targetUserId,
+      $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+    })
+      .select('externalVmId')
+      .lean();
+    const fromJunction = junction.map((j) => j.externalVmId);
+
+    const docs = await ExternalVMModel.find({
+      adminId,
+      $or: [{ assignedTo: targetUserId }, { _id: { $in: fromJunction } }],
+    }).sort({ createdAt: -1 });
     return docs.map((doc) => this.toResponse(doc));
   }
 
@@ -773,6 +898,7 @@ class ExternalVMService {
       name: dto.name,
       ipAddress: dto.ipAddress,
       protocol: dto.protocol,
+      ...(dto.port != null ? { port: dto.port } : {}),
       username: dto.username,
       password: encrypt(dto.password),
       source: 'tenant_import',
@@ -809,10 +935,10 @@ class ExternalVMService {
     const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
     await migrateLegacyExternalVmAssignments(tenantId);
 
-    const query: Record<string, unknown> = {
-      tenantId,
-      source: { $in: ['admin_import', 'tenant_import', 'superadmin_bulk'] },
-    };
+    // Tenant admins manage VMs they imported themselves. End users see every
+    // server assigned to them, including super-admin Server Assign mirrors
+    // (source is not filtered — assignment membership is the access check).
+    const query: Record<string, unknown> = { tenantId };
     if (actor.role === 'tenant_user') {
       const assignedIds = await getExternalVmIdsForTenantUser(
         tenantId,
@@ -820,6 +946,8 @@ class ExternalVMService {
       );
       if (assignedIds.length === 0) return [];
       query['_id'] = { $in: assignedIds };
+    } else {
+      query['source'] = { $in: ['admin_import', 'tenant_import'] };
     }
 
     const docs = await ExternalVMModel.find(query).sort({ createdAt: -1 });
@@ -851,6 +979,9 @@ class ExternalVMService {
     tenantId: mongoose.Types.ObjectId
   ): Promise<void> {
     const doc = await this.findOwnedByTenant(id, tenantId);
+    if (doc.inventoryLocked) {
+      throw new ConflictError('VM is locked and cannot be deleted from inventory.');
+    }
     await doc.deleteOne();
     await removeAllExternalVmAssignmentsForVms(tenantId, [id]);
 
@@ -871,6 +1002,7 @@ class ExternalVMService {
     const result = await ExternalVMModel.deleteMany({
       _id: { $in: ids },
       tenantId,
+      inventoryLocked: { $ne: true },
     });
 
     await removeAllExternalVmAssignmentsForVms(tenantId, ids);
@@ -889,13 +1021,26 @@ class ExternalVMService {
     actor: TenantExternalVmActor,
     dimensions?: { width?: number; height?: number }
   ): Promise<ExternalVMConsoleSession> {
-    const doc = await this.findOwnedByTenant(id, new mongoose.Types.ObjectId(actor.tenantId));
+    const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
+    await migrateLegacyExternalVmAssignments(tenantId);
+    const doc = await this.findOwnedByTenant(id, tenantId);
     await this.assertTenantAccess(doc, actor);
     return this.openGuacamole(
       doc,
       { tenantId: actor.tenantId, tenantUserId: actor.id },
       dimensions
     );
+  }
+
+  async closeTenantConsoleSession(
+    id: mongoose.Types.ObjectId,
+    actor: TenantExternalVmActor
+  ): Promise<{ killed: number }> {
+    const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
+    await migrateLegacyExternalVmAssignments(tenantId);
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    await this.assertTenantAccess(doc, actor);
+    return this.killGuacamoleSessionsForExternalVm(doc._id);
   }
 
   async getTenantAssignedCounts(tenantId: mongoose.Types.ObjectId): Promise<Record<string, number>> {
@@ -949,7 +1094,7 @@ class ExternalVMService {
     externalVmIds: mongoose.Types.ObjectId[],
     targetUserId: mongoose.Types.ObjectId,
     tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId,
+    actor: TenantExternalVmActor,
     accessSchedule?: AccessScheduleInput
   ): Promise<{ assigned: number; skipped: number }> {
     if (externalVmIds.length === 0) throw new ValidationError('No servers specified.');
@@ -957,11 +1102,18 @@ class ExternalVMService {
 
     await migrateLegacyExternalVmAssignments(tenantId);
 
-    const user = await TenantUser.findOne({ _id: targetUserId, tenantId, role: 'tenant_user' });
+    const user = await TenantUser.findOne({
+      _id: targetUserId,
+      tenantId,
+      role: 'tenant_user',
+      isConsoleOperator: { $ne: true },
+    });
     if (!user) throw new NotFoundError('Tenant user not found.');
-    if (!user.createdBy || user.createdBy.toString() !== createdBy.toString()) {
+    if (!canAssignToTenantEndUser(user, actor)) {
       throw new ForbiddenError('You can only assign servers to tenant users you created.');
     }
+
+    const assignedBy = new mongoose.Types.ObjectId(actor.id);
 
     const docs = await ExternalVMModel.find({ _id: { $in: externalVmIds }, tenantId });
     if (docs.length !== externalVmIds.length) {
@@ -996,7 +1148,7 @@ class ExternalVMService {
       tenantId,
       externalVmIds: toAssign,
       tenantUserId: targetUserId,
-      assignedByTenantUserId: createdBy,
+      assignedByTenantUserId: assignedBy,
     });
 
     for (const externalVmId of toAssign) {
@@ -1009,13 +1161,14 @@ class ExternalVMService {
   async bulkAssignTenantOneToOne(
     dto: TenantBulkAssignExternalPairsDto,
     tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId
+    actor: TenantExternalVmActor
   ): Promise<BulkAssignExternalPairsResult> {
     await migrateLegacyExternalVmAssignments(tenantId);
 
     const schedulePatch = parseAccessScheduleInput(dto.accessSchedule);
     const externalVmObjectIds = dto.externalVmIds.map((id) => new mongoose.Types.ObjectId(id));
     const pairs: BulkAssignExternalPairsResult['pairs'] = [];
+    const assignedBy = new mongoose.Types.ObjectId(actor.id);
 
     const docs = await ExternalVMModel.find({
       _id: { $in: externalVmObjectIds },
@@ -1029,44 +1182,71 @@ class ExternalVMService {
       throw new ValidationError('One or more servers were not found for this tenant.');
     }
 
-    type UserSlot = { userId?: mongoose.Types.ObjectId; email: string; password?: string };
+    type UserSlot = {
+      userId?: mongoose.Types.ObjectId;
+      email: string;
+      password?: string;
+      error?: string;
+    };
     const userSlots: UserSlot[] = [];
 
     if (dto.mode === 'create') {
-      const bulkResult = await tenantUserService.createBulk(
-        {
-          emailPrefix: dto.emailPrefix!,
-          count: dto.externalVmIds.length,
-          password: dto.passwordMode === 'shared' ? dto.sharedPassword : undefined,
-        },
-        tenantId,
-        createdBy
-      );
+      const normalizedPrefix = dto.emailPrefix!.toLowerCase().trim();
+      const passwordMode = dto.passwordMode ?? 'auto';
 
-      for (const row of bulkResult.users) {
-        if (row.status !== 'created') {
-          userSlots.push({ email: row.email, password: row.password });
+      for (let i = 1; i <= dto.externalVmIds.length; i++) {
+        const email = buildTenantUserEmail(normalizedPrefix, i);
+        const onboard = await tenantUserService.createOneForOnboard(
+          email,
+          passwordMode,
+          dto.sharedPassword,
+          tenantId,
+          assignedBy
+        );
+
+        if (onboard.status === 'created' && onboard.userId) {
+          userSlots.push({
+            userId: new mongoose.Types.ObjectId(onboard.userId),
+            email: onboard.email,
+            password: onboard.password,
+          });
           continue;
         }
-        const user = await TenantUser.findOne({
+
+        const existing = await TenantUser.findOne({
           tenantId,
-          email: row.email,
+          email: onboard.email,
           role: 'tenant_user',
-        }).select('_id email');
-        userSlots.push({
-          userId: user?._id,
-          email: row.email,
-          password: row.password,
-        });
+          isConsoleOperator: { $ne: true },
+        }).select('_id createdBy email');
+
+        if (existing && canAssignToTenantEndUser(existing, actor)) {
+          userSlots.push({
+            userId: existing._id,
+            email: onboard.email,
+            password: onboard.password,
+          });
+        } else {
+          userSlots.push({
+            email: onboard.email,
+            password: onboard.password,
+            error: onboard.error ?? 'Tenant user creation failed',
+          });
+        }
       }
     } else {
       const userObjectIds = dto.userIds!.map((id) => new mongoose.Types.ObjectId(id));
-      const users = await TenantUser.find({
+      const userFilter: Record<string, unknown> = {
         _id: { $in: userObjectIds },
         tenantId,
         role: 'tenant_user',
-        createdBy,
-      }).lean();
+        isConsoleOperator: { $ne: true },
+      };
+      if (actor.role !== 'tenant_admin') {
+        userFilter['createdBy'] = assignedBy;
+      }
+
+      const users = await TenantUser.find(userFilter).lean();
       const userById = new Map(users.map((u) => [u._id.toString(), u]));
 
       for (const userId of dto.userIds!) {
@@ -1092,7 +1272,7 @@ class ExternalVMService {
           userEmail: slot.email,
           password: slot.password,
           status: 'failed',
-          error: 'Tenant user creation failed',
+          error: slot.error ?? 'Tenant user creation failed',
         });
         failed++;
         continue;
@@ -1121,14 +1301,14 @@ class ExternalVMService {
         await ExternalVMModel.updateOne({ _id: doc._id, tenantId }, { $set: schedulePatch });
       }
 
-      const created = await createExternalVmTenantAssignments({
+      const assignResult = await createSingleExternalVmTenantAssignment({
         tenantId,
-        externalVmIds: [doc._id],
+        externalVmId: doc._id,
         tenantUserId: slot.userId,
-        assignedByTenantUserId: createdBy,
+        assignedByTenantUserId: assignedBy,
       });
 
-      if (created === 0) {
+      if (!assignResult.ok) {
         pairs.push({
           externalVmId: doc._id.toString(),
           externalVmName: doc.name,
@@ -1136,7 +1316,7 @@ class ExternalVMService {
           userEmail: slot.email,
           password: slot.password,
           status: 'failed',
-          error: 'Assignment failed',
+          error: assignResult.error ?? 'Assignment failed',
         });
         failed++;
         continue;
@@ -1275,18 +1455,35 @@ class ExternalVMService {
     return { updated, results };
   }
 
+  private async killGuacamoleSessionsForExternalVm(
+    externalVmId: mongoose.Types.ObjectId
+  ): Promise<{ killed: number }> {
+    const connectionName = `externalvm-${externalVmId.toString()}`;
+    const killed = await guacamoleClient.killSessionsForConnectionNameWithRetry(connectionName, {
+      throwOnPersistentFailure: false,
+    });
+    logger.info('[ExternalVM] Guacamole sessions closed', {
+      externalVmId: externalVmId.toString(),
+      connectionName,
+      killed,
+    });
+    return { killed };
+  }
+
   private async openGuacamole(
     doc: IExternalVM,
     logContext: Record<string, string>,
     dimensions?: { width?: number; height?: number }
   ): Promise<ExternalVMConsoleSession> {
     const password = decrypt(doc.password);
-    const port = doc.protocol === 'rdp' ? 3389 : 22;
+    const port = defaultPortForExternalVm(doc.protocol, doc.port);
+    const guacUsername = doc.username?.trim() || defaultUsernameFor(doc.protocol);
 
     logger.info('[ExternalVM] Opening Guacamole session', {
       externalVmId: doc._id.toString(),
       protocol: doc.protocol,
       hostname: doc.ipAddress,
+      port,
       ...logContext,
     });
 
@@ -1296,12 +1493,21 @@ class ExternalVMService {
       {
         hostname: doc.ipAddress,
         port,
-        username: doc.username,
+        username: guacUsername,
         password,
-        ignoreCert: true,
-        securityMode: 'any',
-        width: dimensions?.width,
-        height: dimensions?.height,
+        ...(doc.protocol === 'rdp'
+          ? {
+              ignoreCert: true,
+              securityMode: 'any' as const,
+              width: dimensions?.width,
+              height: dimensions?.height,
+            }
+          : doc.protocol === 'vnc'
+            ? {
+                width: dimensions?.width,
+                height: dimensions?.height,
+              }
+            : {}),
       }
     );
 

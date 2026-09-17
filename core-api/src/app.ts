@@ -16,11 +16,13 @@ import userRoutes from './modules/user/user.routes';
 import proxmoxRoutes from './modules/proxmox/proxmox.routes';
 import vmRoutes from './modules/vm/vm.routes';
 import externalVmRoutes from './modules/external-vm/external-vm.routes';
-import superAdminExternalVmRoutes from './modules/external-vm/superAdminExternalVm.routes';
+import superAdminTargetsRoutes from './modules/superAdmin/superAdminTargets.routes';
+import vmInventoryRoutes from './modules/vmInventory/vmInventory.routes';
 import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
 import softwareRoutes from './modules/software/software.routes';
 import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
 import notificationRoutes from './modules/notification/notification.routes';
+import supportRoutes from './modules/support/support.routes';
 import adminVmTemplateRoutes from './modules/adminVmTemplate/adminVmTemplate.routes';
 import { machineRouter, agentRouter } from './modules/machine-manager/machine-manager.routes';
 import { agentSharedFilesRouter, adminSharedFilesRouter } from './modules/shared-files/shared-files.routes';
@@ -42,6 +44,7 @@ import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconc
 import { startVmAutomationScheduler } from './modules/vmAutomation/vmAutomationScheduler';
 import tenantPlanRoutes from './modules/tenantPlan/tenantPlan.routes';
 import tenantNotificationRoutes from './modules/tenantNotification/tenantNotification.routes';
+import tenantSupportRoutes from './modules/support/tenantSupport.routes';
 import tenantUserRoutes from './modules/tenantUser/tenantUser.routes';
 import tenantVmRoutes from './modules/tenantVm/tenantVm.routes';
 import tenantExternalVmRoutes from './modules/tenantExternalVm/tenantExternalVm.routes';
@@ -50,6 +53,9 @@ import tenantDedicatedServerRoutes from './modules/tenantDedicatedServer/tenantD
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 import { startCatalogVmExpiryScheduler } from './modules/vmCatalog/catalogVmExpiryScheduler';
+import { startProjectExpiryScheduler } from './modules/projects/projectExpiryScheduler';
+import { startProviderExpiryScheduler } from './modules/vmInventory/providerExpiryScheduler';
+import { startStaleSessionCloser } from './jobs/staleSessionCloser';
 import { rescheduleFromDb } from './modules/vmAccessSchedule/scheduleManager';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
@@ -70,7 +76,10 @@ import tenantOverviewRoutes from './modules/tenantOverview/tenantOverview.routes
 import otpRoutes from './modules/otp/otp.routes';
 import myVmDashboardRoutes from './modules/myVmDashboard/myVmDashboard.routes';
 import tenantMyVmDashboardRoutes from './modules/myVmDashboard/tenantMyVmDashboard.routes';
-import superAdminVmInventoryRoutes from './modules/superAdmin/superAdminVmInventory.routes';
+import apiCredentialsRoutes from './modules/apiCredentials/apiCredentials.routes';
+import oauthRoutes from './modules/oauth/oauth.routes';
+import publicApiRoutes from './modules/publicApi/publicApi.routes';
+import healthRoutes from './routes/health.routes';
 
 const app = express();
 
@@ -167,10 +176,8 @@ app.use(
   })
 );
 
-// Health check
-app.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', service: 'core-api' });
-});
+// Health check — public, no auth; Mongo ping in health.routes.ts
+app.use(healthRoutes);
 
 // Routes
 app.use('/internal/tenants', internalTenantRoutes);
@@ -179,8 +186,8 @@ app.use('/api/v1/tenant-branding', tenantBrandingRoutes);
 app.use('/api/v1/tenant-services', tenantPortalServicesRoutes);
 app.use('/api/v1/tenant-auth', tenantAuthRoutes);
 // More-specific mount before /super-admin so white_labelling.manage does not gate this route.
-app.use('/api/v1/super-admin/external-vms', superAdminExternalVmRoutes);
-app.use('/api/v1/super-admin/vm-inventory', superAdminVmInventoryRoutes);
+app.use('/api/v1/super-admin/targets', superAdminTargetsRoutes);
+app.use('/api/v1/super-admin/vm-inventory', vmInventoryRoutes);
 app.use('/api/v1/super-admin', superAdminRoutes);
 app.use('/api/v1/super-admin/orders', superAdminOrderRoutes);
 app.use('/api/v1/tenant-wallet', walletRoutes);
@@ -197,6 +204,8 @@ app.use('/api/v1/tenant-overview', tenantOverviewRoutes);
 app.use('/api/v1/my-vms', myVmDashboardRoutes);
 app.use('/api/v1/tenant-my-vms', tenantMyVmDashboardRoutes);
 app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/oauth', oauthRoutes);
+app.use('/api/v1/public', publicApiRoutes);
 app.use('/api/v1/otp', otpRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
@@ -206,6 +215,8 @@ app.use('/api/v1/managed-users', managedUsersRoutes);
 app.use('/api/v1/software', softwareRoutes);
 app.use('/api/v1/vm-automations', vmAutomationRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/support', supportRoutes);
+app.use('/api/v1/tenant/support', tenantSupportRoutes);
 app.use('/api/v1/admin-vm-templates', adminVmTemplateRoutes);
 app.use('/api/v1/machines', machineRouter);
 app.use('/api/v1/agent', agentRouter);
@@ -230,6 +241,7 @@ app.use('/api/v1/account-vm-pricing', accountVmPricingRoutes);
   app.use('/api/v1/platform-rbac', platformRbacRoutes);
   app.use('/api/v1/tenant-rbac', tenantRbacRoutes);
 app.use('/api/v1/customer-onboarding', customerOnboardingRoutes);
+app.use('/api/v1/api-credentials', apiCredentialsRoutes);
 
 // Start background services
 startNodeMonitoring();
@@ -239,6 +251,9 @@ startVmAutomationScheduler();
 startPlanExpiryScheduler();
 startPlanExpiryWarningScheduler();
 startCatalogVmExpiryScheduler();
+startProjectExpiryScheduler();
+startProviderExpiryScheduler();
+startStaleSessionCloser();
 void rescheduleFromDb().catch((err) => {
   logger.error('[accessSchedule] rescheduleFromDb failed', {
     error: err instanceof Error ? err.message : String(err),

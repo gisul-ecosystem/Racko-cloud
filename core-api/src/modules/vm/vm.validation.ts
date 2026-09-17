@@ -181,6 +181,12 @@ export const vmConsoleSchema = z.object({
   }),
 });
 
+export const vmConsoleCloseSchema = z.object({
+  params: z.object({
+    vmId: mongoObjectId,
+  }),
+});
+
 // ─── Alert history query ──────────────────────────────────────────────────────
 
 export const alertHistoryQuerySchema = z.object({

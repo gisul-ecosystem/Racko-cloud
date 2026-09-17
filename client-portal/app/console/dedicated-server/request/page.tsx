@@ -19,6 +19,7 @@ import { type IDedicatedPlan } from '@/lib/dedicatedServerApi';
 import { dedicatedPlanCheckoutTotals } from '@/lib/dedicatedServerSellPrice';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { ProjectSelect } from '@/components/console/ProjectSelect';
+import { CreateProjectModal } from '@/components/console/CreateProjectModal';
 
 function formatInr(n: number | null | undefined): string {
   if (n == null || Number.isNaN(Number(n))) return '—';
@@ -48,6 +49,8 @@ export default function DedicatedRequestPage() {
   const [selected, setSelected] = useState<IDedicatedPlan | null>(null);
   const [notes, setNotes] = useState('');
   const [projectId, setProjectId] = useState('');
+  const [projectRefreshKey, setProjectRefreshKey] = useState(0);
+  const [cpOpen, setCpOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {
@@ -334,6 +337,8 @@ export default function DedicatedRequestPage() {
                 onChange={setProjectId}
                 disabled={submitting}
                 portal={projectPortal}
+                onCreateProject={() => setCpOpen(true)}
+                refreshKey={projectRefreshKey}
               />
 
               <div>
@@ -379,6 +384,18 @@ export default function DedicatedRequestPage() {
           </div>
         </div>
       ) : null}
+
+      <CreateProjectModal
+        open={cpOpen}
+        onClose={() => setCpOpen(false)}
+        portal={projectPortal}
+        preselectedServices={['dedicated-server']}
+        lockServices
+        onCreated={(project) => {
+          setProjectId(project.id);
+          setProjectRefreshKey((k) => k + 1);
+        }}
+      />
     </div>
   );
 }

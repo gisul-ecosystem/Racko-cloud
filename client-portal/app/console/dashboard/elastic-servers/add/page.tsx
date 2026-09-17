@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { ApiError } from '@/lib/apiClient';
+import { defaultExternalVmUsername } from '@/lib/externalVmApi';
 import {
   createTenantExternalVM,
   type CreateExternalVMDto,
@@ -15,6 +16,7 @@ import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 import { ChevronLeft, Eye, EyeOff } from 'lucide-react';
 import { ProjectSelect } from '@/components/console/ProjectSelect';
+import { CreateProjectModal } from '@/components/console/CreateProjectModal';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-2 focus:ring-[var(--cloud-accent,#B91C1C)]';
@@ -32,6 +34,8 @@ export default function TenantAddServerPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [projectId, setProjectId] = useState('');
+  const [projectRefreshKey, setProjectRefreshKey] = useState(0);
+  const [cpOpen, setCpOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const canSubmit =
@@ -102,6 +106,7 @@ export default function TenantAddServerPage() {
             >
               <option value="rdp">RDP</option>
               <option value="ssh">SSH</option>
+              <option value="vnc">VNC</option>
             </select>
           </div>
           <div>
@@ -110,7 +115,7 @@ export default function TenantAddServerPage() {
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Administrator"
+              placeholder={defaultExternalVmUsername(protocol)}
               className={inputClass}
             />
           </div>
@@ -140,6 +145,8 @@ export default function TenantAddServerPage() {
             onChange={setProjectId}
             disabled={submitting}
             portal="tenant"
+            onCreateProject={() => setCpOpen(true)}
+            refreshKey={projectRefreshKey}
           />
         </div>
 
@@ -163,6 +170,19 @@ export default function TenantAddServerPage() {
           </button>
         </div>
       </div>
+
+      <CreateProjectModal
+        open={cpOpen}
+        onClose={() => setCpOpen(false)}
+        portal="tenant"
+        preselectedServices={['elastic-servers']}
+        lockServices
+        accentColor={accentColor}
+        onCreated={(project) => {
+          setProjectId(project.id);
+          setProjectRefreshKey((k) => k + 1);
+        }}
+      />
     </div>
   );
 }

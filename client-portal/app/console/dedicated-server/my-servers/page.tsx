@@ -14,6 +14,7 @@ import { fetchProjects, type OrgProject } from '@/lib/projectsApi';
 import { fetchTenantProjects } from '@/lib/tenantProjectsApi';
 import { useIsTenantPortal } from '@/lib/portalMode';
 import { ErrorState } from '@/components/dashboard/ErrorState';
+import { openGuacamoleConsolePage } from '@/lib/consoleLaunch';
 
 function formatInr(n: number) {
   return `₹ ${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
@@ -167,9 +168,7 @@ export default function MyDedicatedServersPage() {
                             <div className="inline-flex gap-2">
                               <button
                                 type="button"
-                                onClick={() =>
-                                  router.push(routes.console(s._id))
-                                }
+                                onClick={() => openGuacamoleConsolePage(routes.console(s._id))}
                                 className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white"
                               >
                                 <Monitor className="h-3.5 w-3.5" />

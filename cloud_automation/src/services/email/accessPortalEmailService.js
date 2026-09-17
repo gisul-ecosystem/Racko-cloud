@@ -8,6 +8,19 @@ const escapeHtml = (value) =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 
+const formatPortalExpiryText = (expiresAt) => {
+  if (!expiresAt) {
+    return 'Link expires in 7 days.';
+  }
+
+  const parsed = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+  if (!Number.isFinite(parsed.getTime())) {
+    return 'Link expires in 7 days.';
+  }
+
+  return `Link expires on ${parsed.toUTCString()} (when the lab ends).`;
+};
+
 const buildAccessPortalEmailHtml = ({ requestId, manageUrl, expiresAt }) => `
   <!doctype html>
   <html>
@@ -20,7 +33,7 @@ const buildAccessPortalEmailHtml = ({ requestId, manageUrl, expiresAt }) => `
           <a href="${escapeHtml(manageUrl)}" style="color: #2563eb; word-break: break-all;">${escapeHtml(manageUrl)}</a>
         </p>
         <p style="margin: 0; font-size: 13px; color: #6b7280;">
-          Link expires in 7 days${expiresAt ? ` on ${escapeHtml(expiresAt)}` : ''}.
+          ${escapeHtml(formatPortalExpiryText(expiresAt))}
         </p>
       </div>
     </body>

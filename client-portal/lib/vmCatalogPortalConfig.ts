@@ -5,11 +5,16 @@ import {
   fetchVmCatalogSoftwareOptions,
   fetchVmCatalogVms,
   getCatalogVmConsole,
+  ownedCatalogVmPowerAction,
   submitCatalogVmRequest,
   submitSuperAdminCatalogVmRequest,
+  extendCatalogVmExpiry,
+  deleteCatalogVm,
+  type DeleteCatalogVmResult,
   type CatalogSoftwareOption,
   type CatalogVmConsoleSession,
   type CatalogVmOverview,
+  type CatalogVmPowerAction,
   type CreateCatalogVmRequestDto,
   type ICatalogVm,
   type IVmCatalogPlan,
@@ -22,6 +27,7 @@ import {
   fetchTenantVmCatalogVms,
   getTenantCatalogVmConsole,
   submitTenantCatalogVmRequest,
+  tenantCatalogVmPowerAction,
 } from './tenantVmCatalogApi';
 import { TENANT_CONSOLE, tenantConsole } from './tenantAdminRoutes';
 
@@ -44,6 +50,20 @@ export interface VmCatalogPortalApi {
     id: string,
     dimensions?: { width?: number; height?: number; instanceId?: string }
   ) => Promise<CatalogVmConsoleSession>;
+  powerAction: (
+    id: string,
+    action: CatalogVmPowerAction,
+    instanceId?: string
+  ) => Promise<{ action: CatalogVmPowerAction; panelUrl?: string; vm: ICatalogVm }>;
+  /**
+   * Provider term upkeep. Only the super-admin portal supplies these, so the
+   * org and tenant portals render the shared My VM page without the actions.
+   */
+  extendExpiry?: (id: string, expiresAt: string) => Promise<ICatalogVm>;
+  deleteVm?: (
+    id: string,
+    confirmTerminatedAtProvider: boolean
+  ) => Promise<DeleteCatalogVmResult>;
 }
 
 export interface VmCatalogPortalConfig {
@@ -75,6 +95,10 @@ const adminApi: VmCatalogPortalApi = {
   fetchSoftwareOptions: fetchVmCatalogSoftwareOptions,
   submitRequest: submitCatalogVmRequest,
   getConsole: getCatalogVmConsole,
+  powerAction: async (id, action, instanceId) => {
+    const result = await ownedCatalogVmPowerAction(id, action, instanceId);
+    return { action: result.action, panelUrl: result.panelUrl, vm: result.vm };
+  },
 };
 
 const tenantApi: VmCatalogPortalApi = {
@@ -85,6 +109,7 @@ const tenantApi: VmCatalogPortalApi = {
   fetchSoftwareOptions: fetchTenantVmCatalogSoftwareOptions,
   submitRequest: submitTenantCatalogVmRequest,
   getConsole: getTenantCatalogVmConsole,
+  powerAction: tenantCatalogVmPowerAction,
 };
 
 export const adminVmCatalogPortalConfig: VmCatalogPortalConfig = {
@@ -108,6 +133,12 @@ const superAdminApi: VmCatalogPortalApi = {
   fetchSoftwareOptions: fetchVmCatalogSoftwareOptions,
   submitRequest: submitSuperAdminCatalogVmRequest,
   getConsole: getCatalogVmConsole,
+  powerAction: async (id, action, instanceId) => {
+    const result = await ownedCatalogVmPowerAction(id, action, instanceId);
+    return { action: result.action, panelUrl: result.panelUrl, vm: result.vm };
+  },
+  extendExpiry: extendCatalogVmExpiry,
+  deleteVm: deleteCatalogVm,
 };
 
 export const superAdminVmCatalogPortalConfig: VmCatalogPortalConfig = {

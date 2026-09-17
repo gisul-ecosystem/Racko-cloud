@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type { AuthenticatedRequest } from '../../types';
 import { isAdminServiceKey } from '../../constants/adminServiceCatalog';
 import { ValidationError } from '../../utils/errors';
+import { previewNextSupportAgent } from '../support/support.service';
 import { projectsService } from './projects.service';
 import type {
   AddProjectServicesInput,
@@ -63,6 +64,23 @@ async function getById(req: Request, res: Response, next: NextFunction): Promise
   }
 }
 
+async function listElasticResources(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const resources = await projectsService.listElasticResources(
+      authReq.user.userId,
+      String(req.params['id'])
+    );
+    success(res, 'Project resources retrieved.', { resources, total: resources.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function create(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = req as AuthenticatedRequest;
@@ -84,6 +102,47 @@ async function update(req: Request, res: Response, next: NextFunction): Promise<
       body
     );
     success(res, 'Project updated.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSupportAgents(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const agents = await projectsService.listSupportAgentsForOrgOwner(authReq.user.userId);
+    success(res, 'Support agents retrieved.', { agents });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function supportAgentPreview(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const agent = await previewNextSupportAgent();
+    success(res, 'Support agent preview retrieved.', { agent });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function supportAgentsList(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const agents = await projectsService.listSupportAgentsListForSuperAdmin();
+    success(res, 'Support agents retrieved.', { agents });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSupportTickets(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const tickets = await projectsService.listSupportTicketsForProject(
+      authReq.user.userId,
+      String(req.params['id'])
+    );
+    success(res, 'Support tickets retrieved.', { tickets });
   } catch (err) {
     next(err);
   }
@@ -126,6 +185,19 @@ async function archive(req: Request, res: Response, next: NextFunction): Promise
       String(req.params['id'])
     );
     success(res, 'Project archived.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function unarchive(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const project = await projectsService.unarchive(
+      authReq.user.userId,
+      String(req.params['id'])
+    );
+    success(res, 'Project restored.', { project });
   } catch (err) {
     next(err);
   }
@@ -261,6 +333,124 @@ async function addServicesForTenantSuperAdmin(
   }
 }
 
+async function getByIdForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const project = await projectsService.getByIdForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project retrieved.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const body = req.body as UpdateProjectInput;
+    const project = await projectsService.updateForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId']),
+      body
+    );
+    success(res, 'Project updated.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function archiveForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const project = await projectsService.archiveForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project archived.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function unarchiveForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const project = await projectsService.unarchiveForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project restored.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const result = await projectsService.deleteForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project deleted.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function archiveForAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const project = await projectsService.archiveForAdmin(
+      String(req.params['adminId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project archived.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function unarchiveForAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const project = await projectsService.unarchiveForAdmin(
+      String(req.params['adminId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project restored.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteForAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await projectsService.deleteForAdmin(
+      String(req.params['adminId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project deleted.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function listForTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const projects = await projectsService.listForTenantBySuperAdmin(
@@ -313,22 +503,67 @@ async function createForTenant(req: Request, res: Response, next: NextFunction):
   }
 }
 
+async function updateForAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const body = req.body as UpdateProjectInput;
+    const project = await projectsService.updateForAdminBySuperAdmin(
+      String(req.params['adminId']),
+      String(req.params['projectId']),
+      body
+    );
+    success(res, 'Project updated.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listClientNames(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const clientNames = await projectsService.distinctClientNames(authReq.user.userId);
+    success(res, 'Client names retrieved.', { clientNames });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listClientNamesForTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const clientNames = await projectsService.distinctClientNamesForTenant(String(req.params['tenantId']));
+    success(res, 'Client names retrieved.', { clientNames });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export const projectsController = {
   previewName,
   list,
   listForService,
   getById,
+  listElasticResources,
   create,
   update,
+  listSupportAgents,
+  supportAgentPreview,
+  supportAgentsList,
+  listSupportTickets,
   addServices,
   removeService,
   archive,
+  unarchive,
   reportByProject,
   reportByService,
+  listClientNames,
+  listClientNamesForTenant,
   listForAdmin,
   previewNameForAdmin,
   listEligibleServicesForAdmin,
   createForAdmin,
+  updateForAdmin,
+  archiveForAdmin,
+  unarchiveForAdmin,
+  deleteForAdmin,
   addServicesForAdmin,
   getByIdForAdmin,
   reportByServiceForAdmin,
@@ -336,5 +571,10 @@ export const projectsController = {
   previewNameForTenant,
   listEligibleServicesForTenant,
   createForTenant,
+  getByIdForTenantSuperAdmin,
+  updateForTenantSuperAdmin,
+  archiveForTenantSuperAdmin,
+  unarchiveForTenantSuperAdmin,
+  deleteForTenantSuperAdmin,
   addServicesForTenantSuperAdmin,
 };

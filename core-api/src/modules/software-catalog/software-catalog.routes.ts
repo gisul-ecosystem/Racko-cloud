@@ -5,6 +5,7 @@ import { requirePermission, requireRoleOrPermission } from '../../middleware/req
 import { validateRequest } from '../../middleware/validate.middleware';
 import {
   createSoftwareCatalogSchema,
+  updateSoftwareCatalogSchema,
   softwareCatalogIdParamSchema,
 } from './software-catalog.validation';
 
@@ -27,12 +28,55 @@ router.get(
   (req, res, next) => softwareCatalogController.getOne(req, res, next)
 );
 
+// POST /api/v1/software-catalog/upload-url — issue presigned PUT URL (must be before /:id)
+router.post(
+  '/upload-url',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.issueUploadUrl(req, res, next)
+);
+
+// POST /api/v1/software-catalog/upload-url/multipart/start
+router.post(
+  '/upload-url/multipart/start',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.startMultipartUpload(req, res, next)
+);
+
+// POST /api/v1/software-catalog/upload-url/multipart/part
+router.post(
+  '/upload-url/multipart/part',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.getMultipartPartUrl(req, res, next)
+);
+
+// POST /api/v1/software-catalog/upload-url/multipart/complete
+router.post(
+  '/upload-url/multipart/complete',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.completeMultipartUpload(req, res, next)
+);
+
+// POST /api/v1/software-catalog/upload-url/multipart/abort
+router.post(
+  '/upload-url/multipart/abort',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.abortMultipartUpload(req, res, next)
+);
+
 // POST /api/v1/software-catalog — super_admin only
 router.post(
   '/',
   requirePermission('machine_manager.manage'),
   validateRequest(createSoftwareCatalogSchema),
   (req, res, next) => softwareCatalogController.create(req, res, next)
+);
+
+// PATCH /api/v1/software-catalog/:id — super_admin only
+router.patch(
+  '/:id',
+  requirePermission('machine_manager.manage'),
+  validateRequest(updateSoftwareCatalogSchema),
+  (req, res, next) => softwareCatalogController.update(req, res, next)
 );
 
 // DELETE /api/v1/software-catalog/:id — super_admin only

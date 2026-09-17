@@ -18,3 +18,19 @@ export function parseServiceDateTime(value, timezone = 'Asia/Kolkata') {
   const fallback = new Date(raw);
   return Number.isNaN(fallback.getTime()) ? null : fallback;
 }
+
+export function formatServiceDateTime(date, timezone = 'Asia/Kolkata') {
+  if (!date) {
+    return '';
+  }
+
+  const parsed = DateTime.fromJSDate(date instanceof Date ? date : new Date(date), {
+    zone: 'utc',
+  }).setZone(timezone);
+
+  if (!parsed.isValid) {
+    return new Date(date).toLocaleString();
+  }
+
+  return parsed.toLocaleString(DateTime.DATETIME_MED_WITH_SECONDS);
+}

@@ -72,7 +72,6 @@ const phoneOtpSchema = new Schema<IPhoneOtp>(
     cleanupAt: {
       type: Date,
       required: true,
-      index: true,
     },
   },
   {

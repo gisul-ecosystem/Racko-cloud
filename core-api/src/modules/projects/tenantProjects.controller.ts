@@ -83,6 +83,23 @@ async function getById(req: Request, res: Response, next: NextFunction): Promise
   }
 }
 
+async function listElasticResources(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = tenantAuth(req);
+    const resources = await projectsService.listElasticResourcesForTenant(
+      authReq.tenantUser.tenantId,
+      String(req.params['id'])
+    );
+    success(res, 'Project resources retrieved.', { resources, total: resources.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function create(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = tenantAuth(req);
@@ -110,7 +127,17 @@ async function update(req: Request, res: Response, next: NextFunction): Promise<
     next(err);
   }
 }
-
+async function listClientNames(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as TenantAuthenticatedRequest;
+    const clientNames = await projectsService.distinctClientNamesForTenant(
+      authReq.tenantUser.tenantId
+    );
+    success(res, 'Client names retrieved.', { clientNames });
+  } catch (err) {
+    next(err);
+  }
+}
 async function addServices(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = tenantAuth(req);
@@ -152,11 +179,34 @@ async function archive(req: Request, res: Response, next: NextFunction): Promise
   }
 }
 
+async function unarchive(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = tenantAuth(req);
+    const project = await projectsService.unarchiveForTenant(
+      authReq.tenantUser.tenantId,
+      String(req.params['id'])
+    );
+    success(res, 'Project restored.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function reportByProject(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = tenantAuth(req);
     const rows = await projectsService.reportByProjectForTenant(authReq.tenantUser.tenantId);
     success(res, 'Project cost report retrieved.', { rows });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listSupportAgents(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = tenantAuth(req);
+    const agents = await projectsService.listSupportAgentsForTenantAdmin(authReq.tenantUser.role);
+    success(res, 'Support agents retrieved.', { agents });
   } catch (err) {
     next(err);
   }
@@ -179,15 +229,19 @@ async function reportByService(req: Request, res: Response, next: NextFunction):
 
 export const tenantProjectsController = {
   list,
+  listSupportAgents,
   previewName,
+  listClientNames,
   listEligibleServices,
   listForService,
   getById,
+  listElasticResources,
   create,
   update,
   addServices,
   removeService,
   archive,
+  unarchive,
   reportByProject,
   reportByService,
 };

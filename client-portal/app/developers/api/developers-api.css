@@ -1,0 +1,13 @@
+/* Full-bleed Redoc host — avoid clipping sticky sidebar / panels */
+.developers-redoc-host {
+  min-height: calc(100vh - 7rem);
+  width: 100%;
+}
+
+.developers-redoc-host .redoc-wrap {
+  border: none;
+}
+
+.developers-redoc-host api-info {
+  margin-top: 0;
+}

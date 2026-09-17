@@ -55,7 +55,7 @@ export const SERVICE_CATALOG_SEED: readonly ServiceCatalogSeedRow[] = [
   {
     key: 'my-vms',
     label: 'My VM Dashboard',
-    description: 'Read-only dashboard of all assigned external servers',
+    description: 'Unified hub for all VMs with console access across VPS, Catalog, and Elastic imports',
     kind: 'product',
     scopes: ['admin', 'tenant'],
     status: 'active',

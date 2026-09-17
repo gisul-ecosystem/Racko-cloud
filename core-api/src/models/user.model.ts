@@ -34,6 +34,10 @@ export interface IUser extends Document {
   enrollmentKey: string;                // used for VM template agent auto-registration
   /** Platform admin service entitlements were initialized (defaults or full catalog). */
   adminServicesSeeded?: boolean;
+  /** Round-robin counter for project support-agent assignment. */
+  assignedProjectCount: number;
+  /** Round-robin counter for ticket support-agent assignment. */
+  ticketCount: number;
   // MFA_SLOT: mfaEnabled: boolean (default: false)
   // MFA_SLOT: mfaSecret?: string
   createdAt: Date;
@@ -80,7 +84,7 @@ const userSchema = new Schema<IUser, IUserModel>(
     },
     role: {
       type: String,
-      enum: ['super_admin', 'staff', 'admin', 'user'],
+      enum: ['super_admin', 'staff', 'admin', 'support_agent', 'user'],
       default: 'admin',
       required: true,
     },
@@ -167,6 +171,14 @@ const userSchema = new Schema<IUser, IUserModel>(
     adminServicesSeeded: {
       type: Boolean,
       default: false,
+    },
+    assignedProjectCount: {
+      type: Number,
+      default: 0,
+    },
+    ticketCount: {
+      type: Number,
+      default: 0,
     },
   },
   {
