@@ -645,6 +645,32 @@ export default function MyMachinesPage() {
     return () => clearInterval(interval);
   }, []);
 
+  // Hydrate resetById from DB on every machines refresh — same pattern as jobs.
+  // Active SSE states (pending/resetting) take priority over the DB snapshot.
+  useEffect(() => {
+    if (!machines.length) return;
+    setResetById((prev) => {
+      const next: typeof prev = {};
+      // Seed from DB (lastReset within 15 min comes from the server)
+      for (const m of machines) {
+        if (m.lastReset) {
+          next[m._id] = {
+            phase: m.lastReset.success ? 'success' : 'failed',
+            error: m.lastReset.error,
+            clearedAt: m.lastReset.success ? new Date(m.lastReset.completedAt).getTime() : undefined,
+          };
+        }
+      }
+      // Active SSE states take priority — don't overwrite in-progress resets
+      for (const [id, state] of Object.entries(prev)) {
+        if (state.phase === 'pending' || state.phase === 'resetting') {
+          next[id] = state;
+        }
+      }
+      return next;
+    });
+  }, [machines]);
+
   const handleRefresh = () => { refetch(); void loadJobs(); };
 
   const handleDelete = async () => {
