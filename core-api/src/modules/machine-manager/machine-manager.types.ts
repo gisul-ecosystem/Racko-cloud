@@ -37,6 +37,7 @@ export interface MachineResponse {
     success?: boolean;
     error?: string;
     completedAt?: string;
+    sessionId: string;
   } | null;
   createdAt: string;
   updatedAt: string;

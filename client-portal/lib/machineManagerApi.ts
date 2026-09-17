@@ -32,6 +32,7 @@ export interface IMachine {
     success?: boolean;
     error?: string;
     completedAt?: string;
+    sessionId: string;
   } | null;
   createdAt: string;
   updatedAt: string;
