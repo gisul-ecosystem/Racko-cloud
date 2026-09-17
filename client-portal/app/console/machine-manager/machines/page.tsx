@@ -8,7 +8,7 @@ import { ConfirmModal } from '../../../../components/ui/ConfirmModal';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
-  deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStreamWithReconnect,
+  deleteMachine, fetchJobs, resetMachines,
   bulkDeleteMachines, createJobs, execCommand, clearMachineJobs,
   type IMachine, type MachineStatus, type IJob, type JobStatus, type ISoftwareCatalog,
 } from '../../../../lib/machineManagerApi';
@@ -147,37 +147,50 @@ function SoftwareProgress({ jobs, isAuthenticated }: { jobs: IJob[]; isAuthentic
   );
 }
 
-// ─── Reset Status Cell — reads directly from machine.lastReset (DB-driven) ────
-function ResetStatusCell({ lastReset }: { lastReset: IMachine['lastReset'] }) {
+import { useResetStream } from '../../../../hooks/useResetStream';
+
+// ─── Reset Status Cell — uses per-machine SSE stream (mirrors useJobStream) ──
+function ResetStatusCell({ lastReset, onComplete }: {
+  lastReset: IMachine['lastReset'];
+  onComplete: () => void;
+}) {
+  const resetState = useResetStream(
+    lastReset?.sessionId ?? '',
+    lastReset?.status ?? 'failed',
+    onComplete,
+  );
+
   if (!lastReset) {
     return <span className="text-xs text-gray-400">—</span>;
   }
-  switch (lastReset.status) {
-    case 'pending':
-      return (
-        <span className="inline-flex items-center gap-1.5 text-xs text-blue-600 font-medium">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Resetting…
-        </span>
-      );
-    case 'success':
-      return (
-        <span className="inline-flex items-center gap-1.5 text-xs text-green-600 font-medium">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Complete
-        </span>
-      );
-    case 'failed':
-      return (
-        <span
-          className="inline-flex items-center gap-1.5 text-xs text-red-600 font-medium cursor-help"
-          title={lastReset.error ?? 'Reset failed'}
-        >
-          <XCircle className="h-3.5 w-3.5" />
-          Failed
-        </span>
-      );
+
+  const status = resetState.status;
+
+  if (status === 'pending') {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-blue-600 font-medium">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Resetting…
+      </span>
+    );
   }
+  if (status === 'success') {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-green-600 font-medium">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        Complete
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-xs text-red-600 font-medium cursor-help"
+      title={resetState.error ?? 'Reset failed'}
+    >
+      <XCircle className="h-3.5 w-3.5" />
+      Failed
+    </span>
+  );
 }
 
 // ─── Bulk Install Modal ────────────────────────────────────────────────────────
@@ -577,7 +590,6 @@ export default function MyMachinesPage() {
   // Reset confirm + status
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const sseRef = useRef<(() => void) | null>(null);
 
   // Jobs keyed by machineId
   const [jobsByMachine, setJobsByMachine] = useState<Record<string, IJob[]>>({});
@@ -597,12 +609,9 @@ export default function MyMachinesPage() {
 
   useEffect(() => { void loadJobs(); }, [loadJobs, machines]);
 
-  // Stable ref so SSE closures always call the latest refetch
+  // Stable ref so SSE closures in ResetStatusCell always call the latest refetch
   const refetchRef = useRef(refetch);
   useEffect(() => { refetchRef.current = refetch; }, [refetch]);
-
-  // Cleanup SSE on unmount
-  useEffect(() => () => { sseRef.current?.(); }, []);
 
   const handleRefresh = () => { refetch(); void loadJobs(); };
 
@@ -691,35 +700,11 @@ export default function MyMachinesPage() {
 
     try {
       const sessionId = `reset-${Date.now()}`;
-      const result = await resetMachines(selectedMachines.map((m) => m._id), sessionId);
+      await resetMachines(selectedMachines.map((m) => m._id), sessionId);
 
-      // Immediately refetch so the DB 'pending' record shows the spinner
+      // Refetch immediately so lastReset.status = 'pending' appears in the row.
+      // The ResetStatusCell will then open its own SSE stream per machine.
       refetchRef.current();
-
-      if (result.accepted.length > 0) {
-        const ticket = await issueResetStreamTicket(sessionId);
-
-        const stop = openResetStatusStreamWithReconnect(
-          sessionId,
-          ticket.streamToken,
-          // On any terminal event, refetch machines — DB is updated, UI reads from it
-          (event) => {
-            if (event.type === 'reset_complete') {
-              refetchRef.current();
-            }
-          },
-          () => { sseRef.current = null; },
-          () => {
-            // Give-up: all retries exhausted — refetch to get latest DB state
-            sseRef.current = null;
-            refetchRef.current();
-          },
-          result.accepted.length,
-        );
-
-        sseRef.current = stop;
-      }
-
       setSelectedIds(new Set());
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to initiate reset.');
@@ -954,7 +939,7 @@ export default function MyMachinesPage() {
                           <SoftwareProgress jobs={jobsByMachine[m._id] ?? []} isAuthenticated={isAuthenticated} />
                         </td>
                         <td className="px-5 py-3">
-                          <ResetStatusCell lastReset={m.lastReset ?? null} />
+                          <ResetStatusCell lastReset={m.lastReset ?? null} onComplete={() => refetchRef.current()} />
                         </td>
                         <td className="px-5 py-3 text-xs text-gray-400">
                           {m.lastSeen ? new Date(m.lastSeen).toLocaleString() : '—'}

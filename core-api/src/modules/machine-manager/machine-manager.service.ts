@@ -51,7 +51,7 @@ setInterval(() => {
 class MachineManagerService {
   // ─── Mappers ───────────────────────────────────────────────────────────────
 
-  private toMachineResponse(doc: IMachine, lastReset?: { status: 'pending' | 'success' | 'failed'; success?: boolean; error?: string; completedAt?: string } | null): MachineResponse {
+  private toMachineResponse(doc: IMachine, lastReset?: { status: 'pending' | 'success' | 'failed'; success?: boolean; error?: string; completedAt?: string; sessionId: string } | null): MachineResponse {
     return {
       _id: doc._id.toString(),
       name: doc.name,
@@ -141,7 +141,7 @@ class MachineManagerService {
     }).sort({ createdAt: -1 }).lean();
 
     // Build machineId -> latest result map (already sorted desc so first wins)
-    const resetByMachineId = new Map<string, { status: 'pending' | 'success' | 'failed'; success?: boolean; error?: string; completedAt?: string }>();
+    const resetByMachineId = new Map<string, { status: 'pending' | 'success' | 'failed'; success?: boolean; error?: string; completedAt?: string; sessionId: string }>();
     for (const r of resetResults) {
       const key = r.machineId.toString();
       if (!resetByMachineId.has(key)) {
@@ -150,6 +150,7 @@ class MachineManagerService {
           success: r.success,
           error: r.error,
           completedAt: r.completedAt?.toISOString(),
+          sessionId: r.sessionId,
         });
       }
     }
