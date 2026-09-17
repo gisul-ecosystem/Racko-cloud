@@ -651,13 +651,20 @@ export default function MyMachinesPage() {
     if (!machines.length) return;
     setResetById((prev) => {
       const next: typeof prev = {};
-      // Seed from DB (lastReset within 15 min comes from the server)
+      // Seed from DB (lastReset comes from the server — pending/success/failed)
       for (const m of machines) {
         if (m.lastReset) {
+          const phase = m.lastReset.status === 'pending'
+            ? 'resetting'
+            : m.lastReset.status === 'success'
+              ? 'success'
+              : 'failed';
           next[m._id] = {
-            phase: m.lastReset.success ? 'success' : 'failed',
+            phase,
             error: m.lastReset.error,
-            clearedAt: m.lastReset.success ? new Date(m.lastReset.completedAt).getTime() : undefined,
+            clearedAt: phase === 'success' && m.lastReset.completedAt
+              ? new Date(m.lastReset.completedAt).getTime()
+              : undefined,
           };
         }
       }

@@ -51,7 +51,7 @@ setInterval(() => {
 class MachineManagerService {
   // ─── Mappers ───────────────────────────────────────────────────────────────
 
-  private toMachineResponse(doc: IMachine, lastReset?: { success: boolean; error?: string; completedAt: string } | null): MachineResponse {
+  private toMachineResponse(doc: IMachine, lastReset?: { status: string; success?: boolean; error?: string; completedAt?: string } | null): MachineResponse {
     return {
       _id: doc._id.toString(),
       name: doc.name,
@@ -134,18 +134,22 @@ class MachineManagerService {
     const machineIds = docs.map((d) => d._id);
     const resetResults = await ResetResultModel.find({
       machineId: { $in: machineIds },
-      completedAt: { $gte: recentCutoff },
-    }).sort({ completedAt: -1 }).lean();
+      $or: [
+        { status: 'pending' },
+        { completedAt: { $gte: recentCutoff } },
+      ],
+    }).sort({ completedAt: -1, createdAt: -1 }).lean();
 
     // Build machineId -> latest result map (already sorted desc so first wins)
-    const resetByMachineId = new Map<string, { success: boolean; error?: string; completedAt: string }>();
+    const resetByMachineId = new Map<string, { status: string; success?: boolean; error?: string; completedAt?: string }>();
     for (const r of resetResults) {
       const key = r.machineId.toString();
       if (!resetByMachineId.has(key)) {
         resetByMachineId.set(key, {
+          status: r.status,
           success: r.success,
           error: r.error,
-          completedAt: r.completedAt.toISOString(),
+          completedAt: r.completedAt?.toISOString(),
         });
       }
     }
@@ -1228,6 +1232,23 @@ class MachineManagerService {
     wsManager.sendReset(doc.agentId, sessionId);
     await JobModel.deleteMany({ machineId: doc._id });
 
+    // Write pending record immediately so F5 during reset shows the spinner
+    const { ResetResultModel } = await import('../../models/resetResult.model');
+    await ResetResultModel.findOneAndUpdate(
+      { sessionId, machineId: doc._id },
+      {
+        sessionId,
+        machineId:   doc._id,
+        machineName: doc.name,
+        agentId:     doc.agentId,
+        status:      'pending',
+        success:     undefined,
+        error:       undefined,
+        completedAt: undefined,
+      },
+      { upsert: true, new: true }
+    );
+
     logger.info('[MachineManager] Reset initiated', {
       machineId,
       agentId: doc.agentId,
@@ -1269,6 +1290,7 @@ class MachineManagerService {
         machineId:   machine._id,
         machineName: machine.name,
         agentId:     dto.agentId,
+        status:      dto.success ? 'success' : 'failed',
         success:     dto.success,
         error:       dto.error,
         completedAt: new Date(),
