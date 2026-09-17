@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
-import { NotFoundError, ForbiddenError } from '../../utils/errors';
+import { User } from '../../models/user.model';
+import { ProjectModel } from '../../models/project.model';
+import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import {
   Ticket,
   type ITicket,
@@ -8,8 +10,27 @@ import {
   type TicketType,
   type TicketCommentAuthorRole,
 } from './support.model';
-import { supportQueueService, type IQueueAgent } from './support.queue';
+import {
+  assignTicketAgent,
+  loadPlatformAssignee,
+  resolveProjectForTenantUser,
+} from './support.service';
 import { sendNewTicketAcknowledgementEmail, sendTicketEscalatedEmail } from './support.email';
+
+async function assertTenantProjectId(tenantId: string, projectId: string): Promise<string> {
+  if (!mongoose.Types.ObjectId.isValid(projectId)) {
+    throw new ValidationError('Invalid project id.');
+  }
+  const project = await ProjectModel.findOne({
+    _id: new mongoose.Types.ObjectId(projectId),
+    tenantId,
+    ownerType: 'tenant',
+  }).select('_id');
+  if (!project) {
+    throw new ValidationError('Project not found.');
+  }
+  return project._id.toString();
+}
 
 async function nextTicketNumber(): Promise<string> {
   const count = await Ticket.countDocuments();
@@ -21,6 +42,7 @@ export interface CreateTenantTicketPayload {
   subject: string;
   description: string;
   priority?: TicketPriority;
+  projectId?: string;
   vmCpu?: string;
   vmRam?: string;
   vmStorage?: string;
@@ -30,6 +52,7 @@ export interface CreateTenantTicketPayload {
 
 export interface ListTenantTicketsFilters {
   status?: TicketStatus;
+  projectId?: string;
   skip?: number;
   limit?: number;
 }
@@ -43,6 +66,15 @@ export class TenantSupportService {
     requesterPhone: string | undefined,
     payload: CreateTenantTicketPayload
   ): Promise<ITicket> {
+    let projectId: string | null;
+    if (payload.projectId) {
+      projectId = await assertTenantProjectId(tenantId, payload.projectId);
+    } else {
+      projectId = await resolveProjectForTenantUser(tenantId, tenantUserId);
+    }
+    const agentId = await assignTicketAgent(tenantId, projectId);
+    const assignee = agentId ? await loadPlatformAssignee(agentId) : null;
+
     const ticket = await Ticket.create({
       ticketNumber: await nextTicketNumber(),
       tenantId: new mongoose.Types.ObjectId(tenantId),
@@ -56,6 +88,13 @@ export class TenantSupportService {
       priority: payload.priority ?? 'medium',
       source: 'web',
       status: 'open',
+      projectId: projectId ? new mongoose.Types.ObjectId(projectId) : null,
+      ...(assignee
+        ? {
+            platformAssigneeId: assignee.platformAssigneeId,
+            platformAssigneeName: assignee.platformAssigneeName,
+          }
+        : {}),
       ...(payload.type === 'vm_request'
         ? {
             vmDetails: {
@@ -94,6 +133,11 @@ export class TenantSupportService {
 
     if (filters.status) {
       query['status'] = filters.status;
+    }
+
+    if (filters.projectId) {
+      const projectObjectId = await assertTenantProjectId(tenantId, filters.projectId);
+      query['projectId'] = new mongoose.Types.ObjectId(projectObjectId);
     }
 
     const skip = filters.skip ?? 0;
@@ -178,7 +222,6 @@ export class TenantSupportService {
     ticketId: string,
     escalatedByTenantUserId: string,
     escalatedByName: string,
-    agents: IQueueAgent[],
     note?: string
   ): Promise<ITicket> {
     const ticket = await Ticket.findOne({
@@ -191,16 +234,32 @@ export class TenantSupportService {
       throw new NotFoundError('Ticket not found.');
     }
 
-    const agent = await supportQueueService.nextAgent(agents);
+    const projectId =
+      ticket.projectId?.toString() ??
+      (ticket.submittedByTenantUserId
+        ? await resolveProjectForTenantUser(tenantId, ticket.submittedByTenantUserId.toString())
+        : null);
+
+    if (!ticket.projectId && projectId) {
+      ticket.projectId = new mongoose.Types.ObjectId(projectId);
+    }
+
+    const agentId = await assignTicketAgent(tenantId, projectId);
 
     ticket.status = 'platform_assigned';
     ticket.escalatedAt = new Date();
     ticket.escalatedByTenantUserId = new mongoose.Types.ObjectId(escalatedByTenantUserId);
     ticket.escalatedByName = escalatedByName;
 
-    if (agent) {
-      ticket.platformAssigneeId = new mongoose.Types.ObjectId(String(agent._id));
-      ticket.platformAssigneeName = agent.name;
+    let agentEmail: string | undefined;
+    let agentName: string | undefined;
+    if (agentId) {
+      const assignee = await loadPlatformAssignee(agentId);
+      ticket.platformAssigneeId = assignee.platformAssigneeId;
+      ticket.platformAssigneeName = assignee.platformAssigneeName;
+      const agent = await User.findById(agentId).select('email name').lean();
+      agentEmail = agent?.email;
+      agentName = assignee.platformAssigneeName;
     }
 
     if (note) {
@@ -217,10 +276,10 @@ export class TenantSupportService {
 
     await ticket.save();
 
-    if (agent) {
+    if (agentEmail && agentName) {
       void sendTicketEscalatedEmail({
-        agentEmail: agent.email,
-        agentName: agent.name,
+        agentEmail,
+        agentName,
         ticketNumber: ticket.ticketNumber,
         subject: ticket.subject,
         escalatedByName,

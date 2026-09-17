@@ -20,6 +20,13 @@ function isTenantWorkspacePath(pathname: string): boolean {
   );
 }
 
+/** Tenant console tabs carry JWT via `_h` / `_s` instead of platform refresh cookies. */
+function hasTenantTabSessionHandoff(search: string): boolean {
+  if (!search) return false;
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  return params.has('_h') || params.has('_s');
+}
+
 /** Map legacy /tenant/* URLs to /console/* equivalents. */
 function mapLegacyTenantPath(pathname: string): string | null {
   if (pathname === '/tenant' || pathname === '/tenant/') {
@@ -133,7 +140,7 @@ export function middleware(request: NextRequest) {
       pathname.startsWith('/status/')) &&
     !isTenantWorkspacePath(pathname)
   ) {
-    if (!hasSession) {
+    if (!hasSession && !hasTenantTabSessionHandoff(search)) {
       const loginUrl = new URL('/login', request.url);
       // Keep query string (e.g. fromTestRequest + purchaseToken) across login.
       loginUrl.searchParams.set('redirect', `${pathname}${search || ''}`);

@@ -21,6 +21,7 @@ import {
   ownerQuerySchema,
   pushAgentSchema,
   resolveLoginsSchema,
+  seriesPreviewSchema,
   serverIdParamSchema,
   setLockSchema,
   setOverrideSchema,
@@ -53,6 +54,10 @@ router.get('/assignees', validateRequest(ownerQuerySchema), (req, res, next) =>
 
 router.get('/projects', validateRequest(ownerQuerySchema), (req, res, next) =>
   vmInventoryController.listProjects(req, res, next)
+);
+
+router.get('/series-preview', validateRequest(seriesPreviewSchema), (req, res, next) =>
+  vmInventoryController.seriesPreview(req, res, next)
 );
 
 router.get('/notification-settings', (req, res, next) =>

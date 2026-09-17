@@ -7,6 +7,7 @@ export type NotificationType =
   | 'catalog_vm_request'
   | 'dedicated_server_request'
   | 'project_expiring_soon'
+  | 'project_grace_period'
   | 'project_archived';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
@@ -42,6 +43,7 @@ const notificationSchema = new Schema<INotification>(
         'catalog_vm_request',
         'dedicated_server_request',
         'project_expiring_soon',
+        'project_grace_period',
         'project_archived',
       ],
       required: true,

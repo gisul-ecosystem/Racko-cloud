@@ -7,6 +7,7 @@ import {
   Layers,
   Plus,
   Server,
+  KeyRound,
   Shield,
   UserCheck,
   Users,
@@ -65,6 +66,11 @@ const navLinks = [
     href: '/dashboard/admin/vms/restricted',
     label: 'Restricted VMs',
     icon: <Shield className="h-4 w-4" />,
+  },
+  {
+    href: '/dashboard/admin/developers',
+    label: 'API Credentials',
+    icon: <KeyRound className="h-4 w-4" />,
   },
 ];
 

@@ -8,8 +8,8 @@ import { formatAssignmentHolders } from '@/lib/externalVmAssignmentFormat';
 import type { CatalogVmPowerAction, ICatalogVm } from '@/lib/vmCatalogApi';
 import { CatalogVmDashboardDetails } from '@/components/my-vm-dashboard/CatalogVmDashboardDetails';
 import { CatalogVmPowerControls } from '@/components/create-vm/CatalogVmPowerControls';
-import Link from 'next/link';
-import { ChevronDown, ChevronUp, Monitor, ExternalLink } from 'lucide-react';
+import { openGuacamoleConsolePage } from '@/lib/consoleLaunch';
+import { ChevronDown, ChevronUp, Monitor } from 'lucide-react';
 
 const SOURCE_BADGE_STYLES: Record<MyVmOriginServiceLabel, string> = {
   'VPS Hosting': 'border-red-200 bg-red-50 text-red-700',
@@ -47,6 +47,34 @@ function SourceBadge({ label }: { label: MyVmOriginServiceLabel }) {
       {label}
     </span>
   );
+}
+
+/** Local part of an address: "aiuser1@gmail.com" → "aiuser1". */
+function emailLocalPart(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const trimmed = email.trim();
+  if (!trimmed) return null;
+  const at = trimmed.indexOf('@');
+  const local = at > 0 ? trimmed.slice(0, at) : trimmed;
+  return local || null;
+}
+
+/**
+ * Prefer the assigned end-user (aiuser1) over the VM login (Administrator@IP).
+ * Several holders on one box are listed, unique, in assignment order.
+ */
+function vmColumnTitle(row: MyVmDashboardRow): string {
+  const locals: string[] = [];
+  const seen = new Set<string>();
+  for (const assignment of row.assignments) {
+    const local = emailLocalPart(assignment.email);
+    if (!local) continue;
+    const key = local.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    locals.push(local);
+  }
+  return locals.length > 0 ? locals.join(', ') : row.name;
 }
 
 function ScheduleCell({ row }: { row: MyVmDashboardRow }) {
@@ -139,13 +167,14 @@ function ActionButtons({
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {row.canConsole && row.consolePath ? (
-        <Link
-          href={row.consolePath}
+        <button
+          type="button"
+          onClick={() => openGuacamoleConsolePage(row.consolePath!)}
           className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717]"
         >
           <Monitor className="h-3.5 w-3.5" />
           Console
-        </Link>
+        </button>
       ) : (
         <span
           className="inline-flex items-center rounded-md border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-400"
@@ -164,14 +193,6 @@ function ActionButtons({
           {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           {isExpanded ? 'Hide' : 'Details'}
         </button>
-      ) : row.managePath ? (
-        <Link
-          href={row.managePath}
-          className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          Open
-        </Link>
       ) : null}
     </div>
   );
@@ -218,14 +239,8 @@ export function MyVmDashboardTable({
                 <Fragment key={key}>
                   <tr className="transition hover:bg-gray-50">
                     <td className="px-4 py-3">
-                      <p className="font-medium text-gray-900">{row.name}</p>
+                      <p className="font-medium text-gray-900">{vmColumnTitle(row)}</p>
                       <p className="font-mono text-xs text-gray-500">{row.ipAddress || '—'}</p>
-                      {row.username ? (
-                        <p className="text-xs text-gray-400">
-                          {row.protocol ? `${row.protocol.toUpperCase()} · ` : ''}
-                          {row.username}
-                        </p>
-                      ) : null}
                     </td>
                     <td className="px-4 py-3">
                       <ProtocolBadge protocol={row.protocol} />

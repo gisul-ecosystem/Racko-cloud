@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import { config } from '../../config';
 import { ServerModel } from '../../models/server.model';
 import { ServerCredentialModel } from '../../models/serverCredential.model';
 import { CredentialAssignmentModel } from '../../models/credentialAssignment.model';
@@ -10,7 +9,7 @@ import { User } from '../../models/user.model';
 import { CatalogVmModel } from '../../models/catalogVm.model';
 import { CatalogVmInstanceModel } from '../../models/catalogVmInstance.model';
 import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
-import { getVmInventorySettings } from '../../models/vmInventorySettings.model';
+import { getVmInventorySettings, resolveProviderExpiryWarningDays } from '../../models/vmInventorySettings.model';
 import { InstallRunModel } from '../../models/installRun.model';
 import { VM } from '../vm/vm.model';
 import { SoftwareCatalogModel } from '../software-catalog/software-catalog.model';
@@ -18,6 +17,8 @@ import { decrypt, encrypt } from '../../utils/crypto';
 import { NotFoundError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { inventoryExternalVmMirrorService } from './inventoryExternalVmMirror.service';
+import { runProviderExpiryCheck } from './providerExpiryScheduler';
+import { isSameUtcDay } from '../projects/projectExpiryDates';
 import type { PushVmInput } from '../machine-manager/machine-manager.service';
 import type { JobResponse } from '../machine-manager/machine-manager.types';
 import type {
@@ -880,6 +881,14 @@ class VmInventoryService {
       throw new ValidationError('providerStartDate must be on or before providerEndDate.');
     }
 
+    if (body.providerEndDate !== undefined) {
+      const prev = server.providerEndDate ?? null;
+      const next = body.providerEndDate;
+      if (!prev || !next || !isSameUtcDay(prev, next)) {
+        server.providerExpiryAlertSentFor = null;
+      }
+    }
+
     Object.assign(server, body);
     await server.save();
   }
@@ -1470,13 +1479,14 @@ class VmInventoryService {
     const settings = await getVmInventorySettings();
     return {
       providerExpiryRecipients: settings.providerExpiryRecipients,
-      warningDays: config.INVENTORY_PROVIDER_EXPIRY_WARNING_DAYS,
+      warningDays: resolveProviderExpiryWarningDays(settings.warningDays),
     };
   }
 
   async updateNotificationSettings(
     recipients: string[],
-    updatedBy: mongoose.Types.ObjectId
+    updatedBy: mongoose.Types.ObjectId,
+    warningDays?: number
   ): Promise<InventoryNotificationSettings> {
     // Case and order are noise here; a duplicate address would just mail twice.
     const cleaned = [
@@ -1484,13 +1494,38 @@ class VmInventoryService {
     ].sort();
 
     const settings = await getVmInventorySettings();
+    const previousRecipients = [
+      ...new Set(
+        settings.providerExpiryRecipients.map((e) => e.trim().toLowerCase()).filter(Boolean)
+      ),
+    ].sort();
+    const previousDays = resolveProviderExpiryWarningDays(settings.warningDays);
     settings.providerExpiryRecipients = cleaned;
+    if (warningDays !== undefined) {
+      settings.warningDays = warningDays;
+    }
     settings.updatedBy = updatedBy;
     await settings.save();
 
+    const nextDays = resolveProviderExpiryWarningDays(settings.warningDays);
+    const recipientsChanged = previousRecipients.join('\0') !== cleaned.join('\0');
+    const daysChanged = warningDays !== undefined && previousDays !== nextDays;
+
+    let dispatch: InventoryNotificationSettings['dispatch'];
+    if (recipientsChanged || daysChanged) {
+      const result = await runProviderExpiryCheck({ force: true });
+      dispatch = {
+        projectsSent: result.projectsSent,
+        vmsMarked: result.vmsMarked,
+        vmsInWindow: result.vmsInWindow,
+        skipped: result.skipped,
+      };
+    }
+
     return {
       providerExpiryRecipients: cleaned,
-      warningDays: config.INVENTORY_PROVIDER_EXPIRY_WARNING_DAYS,
+      warningDays: nextDays,
+      ...(dispatch ? { dispatch } : {}),
     };
   }
 }

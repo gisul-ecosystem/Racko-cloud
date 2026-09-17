@@ -1,10 +1,10 @@
-# ============================================================
-# RACKO VM RESET SCRIPT — Production Ready v9
+﻿# ============================================================
+# RACKO VM RESET SCRIPT â€” Production Ready v9
 # Removes ALL user-installed software dynamically.
 # Windows user account is NEVER touched (only its data is cleaned).
 # ============================================================
 
-# ── Helper: remove a folder with retry for locked files ─────
+# â”€â”€ Helper: remove a folder with retry for locked files â”€â”€â”€â”€â”€
 function Remove-FolderWithRetry {
     param([string]$Path, [int]$MaxAttempts = 3, [int]$DelaySeconds = 2)
     if (-not $Path) { return }
@@ -14,9 +14,16 @@ function Remove-FolderWithRetry {
         if (-not (Test-Path $Path)) { return }
         if ($i -lt $MaxAttempts) {
             $folderName = Split-Path $Path -Leaf
+            # Kill by folder name match (catches most processes)
             Get-Process | Where-Object {
                 try { $_.MainModule.FileName -like "*$folderName*" } catch { $false }
             } | Stop-Process -Force -ErrorAction SilentlyContinue
+            # Kill known container/orchestration tools by name that may hold locks
+            foreach ($procName in @('kubectl','kubelet','kubeadm','kube-apiserver','kube-proxy',
+                                    'kube-scheduler','kube-controller','helm','etcd','containerd',
+                                    'dockerd','docker','minikube')) {
+                Get-Process -Name $procName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            }
             Start-Sleep -Seconds $DelaySeconds
         }
     }
@@ -25,7 +32,7 @@ function Remove-FolderWithRetry {
     }
 }
 
-# ── Helper: split "exe" args style uninstall strings correctly ──
+# â”€â”€ Helper: split "exe" args style uninstall strings correctly â”€â”€
 function Split-UninstallCommand {
     param([string]$Raw)
     $s = $Raw.Trim()
@@ -38,7 +45,7 @@ function Split-UninstallCommand {
     }
 }
 
-# ── Helper: run an uninstaller with a hard timeout ───────────
+# â”€â”€ Helper: run an uninstaller with a hard timeout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function Invoke-UninstallerWithTimeout {
     param(
         [string]$FilePath,
@@ -66,7 +73,7 @@ function Invoke-UninstallerWithTimeout {
     }
 }
 
-# ── Helper: uninstall logic shared by HKLM/HKCU/per-user hive scans ──
+# â”€â”€ Helper: uninstall logic shared by HKLM/HKCU/per-user hive scans â”€â”€
 function Invoke-UninstallEntry {
     param($app)
     $name = $app.DisplayName
@@ -76,17 +83,21 @@ function Invoke-UninstallEntry {
         $uninst = if ($app.UninstallString)      { $app.UninstallString.Trim()      } else { '' }
 
         if ($quiet -ne '') {
-            # Split QuietUninstallString into exe + args array — handles double spaces correctly
+            # Split QuietUninstallString into exe + args array â€” handles double spaces correctly
             $qcmd = Split-UninstallCommand $quiet
             $qargs = $qcmd.Args -split '\s+' | Where-Object { $_ -ne '' }
             Invoke-UninstallerWithTimeout -FilePath $qcmd.Exe -Arguments $qargs -TimeoutSeconds 120
+        } elseif ($uninst -match 'OneDriveSetup') {
+            # OneDrive uses /uninstall flag â€” generic fallback would pass /S which silently fails
+            $cmd = Split-UninstallCommand $uninst
+            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('/uninstall') -TimeoutSeconds 120
         } elseif ($uninst -match 'msedgewebview|EdgeWebView') {
             $cmd = Split-UninstallCommand $uninst
             Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('--uninstall','--msedgewebview','--system-level','--force-uninstall') -TimeoutSeconds 90
         } elseif ($uninst -match 'MsiExec') {
             $guid = [regex]::Match($uninst, '\{[A-F0-9\-]+\}', 'IgnoreCase').Value
             if ($guid) {
-                Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X$guid",'/quiet','/norestart') -TimeoutSeconds 180
+                Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X$guid",'/qn','/norestart') -TimeoutSeconds 180
             }
         } elseif ($uninst -match 'Docker Desktop Installer') {
             $cmd = Split-UninstallCommand $uninst
@@ -109,7 +120,7 @@ function Invoke-UninstallEntry {
             } elseif ($cmd.Exe -match '[\\\/]uninstall\.exe$') {
                 Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('-q') -TimeoutSeconds 120
             } else {
-                # Generic fallback — split any args from UninstallString
+                # Generic fallback â€” split any args from UninstallString
                 $uargs = $cmd.Args -split '\s+' | Where-Object { $_ -ne '' }
                 if ($uargs) {
                     Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments $uargs -TimeoutSeconds 120
@@ -130,10 +141,24 @@ function Invoke-UninstallEntry {
     }
 }
 
-# ── PROTECTED: never uninstall these ────────────────────────
-$skipExact   = @('Microsoft Edge', 'RackoAgent', 'Racko Agent')
-$skipLike    = @('Cloudbase-Init*', 'Virtio-win*', 'QEMU*', 'VMware*')
-$skipPattern = '^(Microsoft Visual C\+\+|Python Launcher|Windows SDK|Windows Desktop|Windows App|Windows Mobile|Windows IoT|Windows Team|WinRT|SDK ARM|Universal CRT|Universal General|vs_|vcp|vcpp|Kits |MsiDev|DiagnosticsHub|Application Verifier|vs[_ ])'
+# â”€â”€ PROTECTED: never uninstall these â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Exact match â€” only these display names are kept from the template whitelist + agent
+$skipExact = @(
+    'Microsoft Edge',
+    'VMware Tools',
+    'Microsoft Visual C++ 2015-2022 Redistributable (x64) - 14.40.33816',
+    'Microsoft Visual C++ 2015-2022 Redistributable (x86) - 14.40.33816',
+    'Microsoft Visual C++ 2022 X64 Additional Runtime - 14.40.33816',
+    'Microsoft Visual C++ 2022 X64 Minimum Runtime - 14.40.33816',
+    'Microsoft Visual C++ 2022 X86 Additional Runtime - 14.40.33816',
+    'Microsoft Visual C++ 2022 X86 Minimum Runtime - 14.40.33816',
+    'RackoAgent',
+    'Racko Agent'
+)
+# Prefix/wildcard match â€” VMware Tools only, not all VMware products
+$skipLike    = @('Cloudbase-Init*', 'Virtio-win*', 'QEMU*', 'VMware Tools*')
+# Pattern match â€” only VC++ prefix (all versions kept) and genuine Windows runtime noise
+$skipPattern = '^(Microsoft Visual C\+\+|Windows SDK|Windows Desktop|Windows App|Windows Mobile|Windows IoT|Windows Team|WinRT|SDK ARM|Universal CRT|Universal General|Kits |MsiDev|DiagnosticsHub)'
 
 function Test-ShouldUninstall {
     param($entry)
@@ -145,18 +170,24 @@ function Test-ShouldUninstall {
     return $true
 }
 
-# ── Windows-owned Program Files folders (whitelist) ─────────
-$pfSystemFolders = @(
-    'Common Files','Internet Explorer','WindowsPowerShell','Reference Assemblies',
-    'dotnet','IIS Express','MSBuild','ModifiableWindowsApps','WindowsApps',
-    'Windows Defender','Windows Defender Advanced Threat Protection','Windows Mail',
-    'Windows Media Player','Windows NT','Windows Photo Viewer','Windows Security',
-    'Windows Sidebar','Windows Journal','Microsoft','Microsoft.NET',
-    'Microsoft Analysis Services','Microsoft Office','Microsoft SQL Server',
-    'Uninstall Information','Cloudbase Solutions','Qemu-ga','Virtio-Win','VMware','PackageManagement'
+# â”€â”€ Windows-owned Program Files folders (whitelist) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Matches template allowed_program_files â€” only these survive in C:\Program Files
+$pfAllowed = @(
+    'Common Files','Internet Explorer','ModifiableWindowsApps','PackageManagement',
+    'Uninstall Information','VMware','Windows Defender',
+    'Windows Defender Advanced Threat Protection','Windows Mail',
+    'Windows Media Player','Windows NT','Windows Photo Viewer',
+    'Windows Sidebar','WindowsApps','WindowsPowerShell','desktop.ini'
 )
 
-# ── Windows-owned AppData folders (whitelist) ────────────────
+# Matches template allowed_program_files_x86 â€” only these survive in C:\Program Files (x86)
+$pfx86Allowed = @(
+    'Common Files','Internet Explorer','Microsoft','Microsoft.NET',
+    'Windows Defender','Windows Mail','Windows Media Player','Windows NT',
+    'Windows Photo Viewer','Windows Sidebar','WindowsPowerShell','desktop.ini'
+)
+
+# â”€â”€ Windows-owned AppData folders (whitelist) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $appDataSystemFolders = @(
     'Microsoft','Windows','Temp','Packages','PackageStaging',
     'ConnectedDevicesPlatform','CrashDumps','DBG','D3DSCache',
@@ -166,7 +197,7 @@ $appDataSystemFolders = @(
     'nvidia','NVIDIA','AMD','Intel','VMware','Comms'
 )
 
-# ── Windows-owned ProgramData folders (whitelist) ────────────
+# â”€â”€ Windows-owned ProgramData folders (whitelist) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $pdSystemFolders = @(
     'Microsoft*','Windows*','Package Cache','Packages',
     'USOPrivate','USOShared','regid*','ssh',
@@ -174,19 +205,19 @@ $pdSystemFolders = @(
     'racko-agent','RackoAgent','SoftwareDistribution'
 )
 
-# ── Start Menu system folders (whitelist) ────────────────────
+# â”€â”€ Start Menu system folders (whitelist) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $startMenuSystemFolders = @(
     'Microsoft*','Windows*','Accessibility','Administrative Tools',
     'Maintenance','System Tools','Startup'
 )
 
-# ── Desktop shortcuts to keep ────────────────────────────────
+# â”€â”€ Desktop shortcuts to keep â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $keepShortcuts = @('Microsoft Edge.lnk', 'Racko Shared Files.lnk')
 
-# ── Startup entries to keep ──────────────────────────────────
+# â”€â”€ Startup entries to keep â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $keepStartup = @('SecurityHealth','RtkAudUService','racko*','Racko*','BingSvc')
 
-# ── Services to never touch ──────────────────────────────────
+# â”€â”€ Services to never touch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $serviceSkipLike = @(
     'Racko*','Cloudbase*','Qemu*','QEMU*','Virtio*','VMware*',
     'WinDefend','wscsvc','MpsSvc','BFE','Dnscache','Dhcp',
@@ -194,7 +225,7 @@ $serviceSkipLike = @(
     'edgeupdate','edgeupdatem','MicrosoftEdgeElevationService'
 )
 
-# ── Helper: get non-system user profile directories ──────────
+# â”€â”€ Helper: get non-system user profile directories â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Using a function + foreach instead of inline pipeline chains
 # so the script works correctly whether run as a file or any other way.
 function Get-UserProfiles {
@@ -207,17 +238,17 @@ function Get-UserProfiles {
 }
 
 # ============================================================
-# PHASE 0 — Kill all user-launched processes before anything else
+# PHASE 0 â€” Kill all user-launched processes before anything else
 # This ensures no file locks during uninstall/folder deletion.
 # ============================================================
 Write-Host "`n=== PHASE 0: KILLING USER PROCESSES ===" -ForegroundColor Cyan
 
-# Processes that must never be killed — Windows core + our agent
+# Processes that must never be killed â€” Windows core + our agent
 $processSkip = @(
     # Windows kernel / session core
     'System','Registry','smss','csrss','wininit','winlogon','lsass','lsm',
     'services','svchost','dwm','fontdrvhost','LogonUI','conhost',
-    'Idle',                              # CPU idle process — PID 0
+    'Idle',                              # CPU idle process â€” PID 0
     'Secure System',                     # Windows kernel security
     'AggregatorHost',                    # Windows system aggregator
     'WUDFHost',                          # Windows Driver Foundation host
@@ -228,7 +259,7 @@ $processSkip = @(
     'RuntimeBroker','ApplicationFrameHost','spoolsv',
     # Windows Defender / Security
     'MsMpEng','NisSrv','SecurityHealthService','SecurityHealthSystray',
-    'MpDefenderCoreService',             # Defender core — killing drops security subsystem
+    'MpDefenderCoreService',             # Defender core â€” killing drops security subsystem
     # System infrastructure
     'WmiPrvSE','dllhost','msdtc','TrustedInstaller','TiWorker',
     'audiodg','TabTip','TabTip32','TextInputHost',
@@ -239,7 +270,7 @@ $processSkip = @(
     # VM guest tools
     'vmtoolsd','vm3dservice','VGAuthService',
     'cloudbase-init','QemuGuestAgent',
-    # Hyper-V / VM infrastructure — killing these drops the RDP session on VMs
+    # Hyper-V / VM infrastructure â€” killing these drops the RDP session on VMs
     'vmcompute',                         # Hyper-V compute service
     'vmms',                              # Hyper-V VM management
     'vmwp',                              # VM worker process
@@ -250,7 +281,7 @@ $processSkip = @(
     'mstsc','tstheme'
 )
 
-$currentPid = $PID  # our own PowerShell process — never kill self
+$currentPid = $PID  # our own PowerShell process â€” never kill self
 
 $killed = 0
 foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
@@ -263,7 +294,7 @@ foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
     if ($skip) { continue }
 
     Write-Host "  Killing: $($proc.Name) (PID $($proc.Id))" -ForegroundColor DarkYellow
-    # Use taskkill instead of Stop-Process — works cross-session (Session 0 → Session 2+)
+    # Use taskkill instead of Stop-Process â€” works cross-session (Session 0 â†’ Session 2+)
     # /F = force, /T = kill process tree (children too), /PID = target by PID
     taskkill /F /T /PID $proc.Id 2>$null | Out-Null
     $killed++
@@ -277,7 +308,35 @@ if ($killed -gt 0) {
 }
 
 # ============================================================
-# PHASE 1 — Registry-driven uninstall (HKLM + HKCU + all per-user hives)
+# PHASE 0.5 â€” C:\ root sweep (template allowed_root_names)
+# Removes any top-level folder/file on C:\ not in the template whitelist.
+# Catches user-created folders like C:\kubernetes, C:\work, C:\mahi etc.
+# ============================================================
+Write-Host "`n=== PHASE 0.5: C:\ ROOT SWEEP ===" -ForegroundColor Cyan
+
+$allowedRootNames = @(
+    '$Recycle.Bin','$WinREAgent','Config.Msi','Documents and Settings',
+    'inetpub','PerfLogs','Program Files','Program Files (x86)','ProgramData',
+    'Recovery','sysprep1009','System Volume Information','Users','Windows',
+    'bootTel.dat','DumpStack.log.tmp','pagefile.sys','swapfile.sys','hiberfil.sys'
+)
+
+foreach ($item in (Get-ChildItem 'C:\' -Force -ErrorAction SilentlyContinue)) {
+    $isAllowed = $false
+    foreach ($a in $allowedRootNames) {
+        if ($item.Name -eq $a) { $isAllowed = $true; break }
+    }
+    if ($isAllowed) { continue }
+    Write-Host "Removing from C:\ root: $($item.FullName)" -ForegroundColor Yellow
+    Remove-FolderWithRetry -Path $item.FullName
+    if (-not (Test-Path $item.FullName)) {
+        Write-Host "Removed: $($item.FullName)" -ForegroundColor Green
+    }
+}
+Write-Host "C:\ root sweep complete." -ForegroundColor Green
+
+# ============================================================
+# PHASE 1 â€” Registry-driven uninstall (HKLM + HKCU + all per-user hives)
 # ============================================================
 Write-Host "`n=== PHASE 1: UNINSTALLING VIA REGISTRY ===" -ForegroundColor Cyan
 
@@ -291,10 +350,10 @@ $toUninstall = $all | Where-Object { Test-ShouldUninstall $_ } | Sort-Object Dis
 Write-Host "Found $($toUninstall.Count) apps to uninstall (current session hive)" -ForegroundColor Yellow
 foreach ($app in $toUninstall) { Invoke-UninstallEntry $app }
 
-# ── Scan HKEY_USERS for all currently logged-in users ─────────────────────────
+# â”€â”€ Scan HKEY_USERS for all currently logged-in users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # When running as LocalSystem, HKCU:\  only covers LocalSystem's own hive.
 # Logged-in users' hives are already mounted under HKEY_USERS\<SID> and
-# readable by LocalSystem — no NTUSER.DAT load needed, no file locking issues.
+# readable by LocalSystem â€” no NTUSER.DAT load needed, no file locking issues.
 if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
     New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS | Out-Null
 }
@@ -312,7 +371,7 @@ Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | Where-Object {
     }
 }
 
-# ── Scan every OTHER local user's registry hive for per-user installs ──
+# â”€â”€ Scan every OTHER local user's registry hive for per-user installs â”€â”€
 if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
     New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS | Out-Null
 }
@@ -346,7 +405,7 @@ foreach ($userDir in (Get-UserProfiles)) {
 }
 
 # ============================================================
-# PHASE 1b — Python dedicated uninstall (MSI components)
+# PHASE 1b â€” Python dedicated uninstall (MSI components)
 # Phase 1 generic handler often times out on Python's multi-component
 # MSI install. This pass targets Python 3.x specifically with a longer
 # timeout and also force-removes known Python install folders.
@@ -376,7 +435,7 @@ foreach ($entry in $pythonEntries) {
         continue
     }
     Write-Host "Uninstalling Python component: $name ($guid)" -ForegroundColor Yellow
-    Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X$guid", '/quiet', '/norestart') -TimeoutSeconds 300
+    Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X", $guid, '/qn', '/norestart') -TimeoutSeconds 300
     Write-Host "Done: $name" -ForegroundColor Green
 }
 
@@ -414,7 +473,7 @@ foreach ($regPath in @(
 }
 
 # ============================================================
-# PHASE 1c — Google Chrome registry cleanup
+# PHASE 1c â€” Google Chrome registry cleanup
 # The Chrome MSI leaves behind Google Update registry keys even after
 # a successful uninstall. These orphaned keys cause msiexec to return
 # exit code 1603 (fatal error) on any subsequent Chrome MSI install
@@ -472,9 +531,9 @@ foreach ($userDir in (Get-UserProfiles)) {
 Write-Host "Google Chrome registry cleanup complete." -ForegroundColor Green
 
 # ============================================================
-# PHASE 1d — MSIX / AppX package removal (all users)
+# PHASE 1d â€” MSIX / AppX package removal (all users)
 # Apps installed via MSIX (Claude, some Teams builds, etc.) are NOT
-# registered in the standard Uninstall registry keys — Phase 1 misses them.
+# registered in the standard Uninstall registry keys â€” Phase 1 misses them.
 # This phase removes all non-system AppX/MSIX packages for all users.
 # ============================================================
 Write-Host "`n=== PHASE 1d: MSIX/APPX PACKAGE REMOVAL ===" -ForegroundColor Cyan
@@ -536,17 +595,37 @@ try {
     foreach ($pkg in $provisioned) {
         if (Test-IsSystemMsixPackage $pkg.DisplayName) { continue }
         Write-Host "Removing provisioned MSIX: $($pkg.DisplayName)" -ForegroundColor Yellow
-        Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction SilentlyContinue | Out-Null
-        Write-Host "Removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
+        try {
+            Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction Stop | Out-Null
+            Write-Host "Removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
+        } catch {
+            Write-Host "  PowerShell failed for provisioned $($pkg.DisplayName): $_ -- trying DISM" -ForegroundColor DarkYellow
+            $dismOut = & dism.exe /Online /Remove-ProvisionedAppxPackage /PackageName:$($pkg.PackageName) 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  DISM removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
+            } else {
+                Write-Host "  DISM also failed for $($pkg.DisplayName): $dismOut" -ForegroundColor Red
+            }
+        }
     }
 
-    # Remove per-user packages for all users
+    # Remove per-user packages for all users (includes user-scoped installs not caught by provisioned removal)
     $allPackages = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue
     foreach ($pkg in $allPackages) {
         if (Test-IsSystemMsixPackage $pkg.Name) { continue }
         Write-Host "Removing MSIX package: $($pkg.Name)" -ForegroundColor Yellow
-        Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction SilentlyContinue
-        Write-Host "Removed: $($pkg.Name)" -ForegroundColor Green
+        try {
+            Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop
+            Write-Host "Removed: $($pkg.Name)" -ForegroundColor Green
+        } catch {
+            Write-Host "  Remove-AppxPackage failed for $($pkg.Name): $_" -ForegroundColor Red
+            $dismOut = & dism.exe /Online /Remove-ProvisionedAppxPackage /PackageName:$($pkg.PackageFullName) 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  DISM removed: $($pkg.Name)" -ForegroundColor Green
+            } else {
+                Write-Host "  DISM also failed for $($pkg.Name)" -ForegroundColor DarkYellow
+            }
+        }
     }
 } catch {
     Write-Host "  MSIX cleanup error (non-fatal): $_" -ForegroundColor DarkYellow
@@ -554,13 +633,37 @@ try {
 Write-Host "MSIX/AppX package cleanup complete." -ForegroundColor Green
 
 
+Write-Host "`n=== PHASE 1e: .NET SDK REMOVAL ===" -ForegroundColor Cyan
+
+$dotnetSdkEntries = @()
+foreach ($regPath in @(
+    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)) {
+    $dotnetSdkEntries += Get-ItemProperty $regPath -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like '*.NET SDK*' -or $_.DisplayName -like '*Microsoft .NET SDK*' }
+}
+$dotnetSdkEntries = $dotnetSdkEntries | Sort-Object DisplayName -Unique
+Write-Host "Found $($dotnetSdkEntries.Count) .NET SDK components to uninstall" -ForegroundColor Yellow
+foreach ($entry in $dotnetSdkEntries) {
+    $uninst = if ($entry.UninstallString) { $entry.UninstallString.Trim() } else { '' }
+    $guid = [regex]::Match($uninst, '\{[A-F0-9\-]+\}', 'IgnoreCase').Value
+    if ($guid) {
+        Write-Host "Uninstalling: $($entry.DisplayName)" -ForegroundColor Yellow
+        Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @('/X', $guid, '/qn', '/norestart') -TimeoutSeconds 300
+        Write-Host "Done: $($entry.DisplayName)" -ForegroundColor Green
+    }
+}
+
 Write-Host "`n=== PHASE 2: PROGRAM FILES WHITELIST SWEEP ===" -ForegroundColor Cyan
 
 foreach ($pf in @('C:\Program Files', 'C:\Program Files (x86)')) {
     if (-not (Test-Path $pf)) { continue }
+    # Use the correct whitelist per folder â€” template defines them separately
+    $whitelist = if ($pf -eq 'C:\Program Files') { $pfAllowed } else { $pfx86Allowed }
     foreach ($dir in (Get-ChildItem $pf -Directory -ErrorAction SilentlyContinue)) {
         $isSystem = $false
-        foreach ($s in $pfSystemFolders) {
+        foreach ($s in $whitelist) {
             if ($dir.Name -eq $s -or $dir.Name -like "$s*") { $isSystem = $true; break }
         }
         if ($isSystem) { continue }
@@ -571,7 +674,7 @@ foreach ($pf in @('C:\Program Files', 'C:\Program Files (x86)')) {
 }
 
 # ============================================================
-# PHASE 3 — C:\tools sweep
+# PHASE 3 â€” C:\tools sweep
 # ============================================================
 Write-Host "`n=== PHASE 3: C:\TOOLS SWEEP ===" -ForegroundColor Cyan
 
@@ -587,7 +690,7 @@ if (Test-Path 'C:\tools') {
 }
 
 # ============================================================
-# PHASE 4 — AppData whitelist sweep (all users) + browser/credential wipe
+# PHASE 4 â€” AppData whitelist sweep (all users) + browser/credential wipe
 # ============================================================
 Write-Host "`n=== PHASE 4: APPDATA WHITELIST SWEEP + BROWSER/CREDENTIAL WIPE ===" -ForegroundColor Cyan
 
@@ -641,7 +744,7 @@ foreach ($userDir in (Get-UserProfiles)) {
         }
     }
 
-    # UWP Packages — remove non-system app data folders
+    # UWP Packages â€” remove non-system app data folders
     $packagesPath = Join-Path $userProfile 'AppData\Local\Packages'
     if (Test-Path $packagesPath) {
         foreach ($pkg in (Get-ChildItem $packagesPath -Directory -ErrorAction SilentlyContinue)) {
@@ -683,7 +786,7 @@ try {
 } catch { }
 
 # ============================================================
-# PHASE 5 — ProgramData sweep
+# PHASE 5 â€” ProgramData sweep
 # ============================================================
 Write-Host "`n=== PHASE 5: PROGRAMDATA SWEEP ===" -ForegroundColor Cyan
 
@@ -718,7 +821,7 @@ foreach ($aPath in $anacondaPaths) {
 }
 
 # ============================================================
-# PHASE 6 — Stale registry cleanup (HKLM + HKCU)
+# PHASE 6 â€” Stale registry cleanup (HKLM + HKCU)
 # ============================================================
 Write-Host "`n=== PHASE 6: STALE REGISTRY CLEANUP ===" -ForegroundColor Cyan
 
@@ -740,9 +843,9 @@ foreach ($base in @(
     }
 }
 
-# ── Clean stale HKEY_USERS entries for all logged-in users ─────────────────
+# â”€â”€ Clean stale HKEY_USERS entries for all logged-in users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # HKCU:\  under LocalSystem only covers LocalSystem's hive.
-# Logged-in users' hives are mounted at HKEY_USERS\<SID> — readable by LocalSystem.
+# Logged-in users' hives are mounted at HKEY_USERS\<SID> â€” readable by LocalSystem.
 # Remove any entry whose uninstaller exe no longer exists on disk.
 if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
     New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS | Out-Null
@@ -770,7 +873,7 @@ Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | Where-Object {
 }
 
 # ============================================================
-# PHASE 7 — Desktop / Documents / Pictures / Videos cleanup
+# PHASE 7 â€” Desktop / Documents / Pictures / Videos cleanup
 # ============================================================
 Write-Host "`n=== PHASE 7: USER DATA FOLDERS CLEANUP ===" -ForegroundColor Cyan
 
@@ -799,7 +902,7 @@ if (Test-Path 'C:\Users\Public\Desktop') {
 }
 
 # ============================================================
-# PHASE 8 — Start Menu shortcut cleanup (all users + system)
+# PHASE 8 â€” Start Menu shortcut cleanup (all users + system)
 # ============================================================
 Write-Host "`n=== PHASE 8: START MENU CLEANUP ===" -ForegroundColor Cyan
 
@@ -846,7 +949,7 @@ if (Test-Path $sysStartMenu) {
 }
 
 # ============================================================
-# PHASE 9 — Downloads folder cleanup (all users + Public)
+# PHASE 9 â€” Downloads folder cleanup (all users + Public)
 # ============================================================
 Write-Host "`n=== PHASE 9: DOWNLOADS CLEANUP ===" -ForegroundColor Cyan
 
@@ -868,7 +971,7 @@ if (Test-Path 'C:\Users\Public\Downloads') {
 }
 
 # ============================================================
-# PHASE 10 — WSL distro cleanup (registry-based)
+# PHASE 10 â€” WSL distro cleanup (registry-based)
 # ============================================================
 Write-Host "`n=== PHASE 10: WSL DISTRO CLEANUP ===" -ForegroundColor Cyan
 
@@ -894,7 +997,7 @@ if (Test-Path $wslRegPath) {
 }
 
 # ============================================================
-# PHASE 11 — Stale PATH cleanup (system + user)
+# PHASE 11 â€” Stale PATH cleanup (system + user)
 # ============================================================
 Write-Host "`n=== PHASE 11: STALE PATH CLEANUP ===" -ForegroundColor Cyan
 
@@ -909,7 +1012,7 @@ $cleanUser = $userPaths | Where-Object { Test-Path $_ }
 Write-Host "  User PATH: $($userPaths.Count) entries -> $($cleanUser.Count) valid" -ForegroundColor DarkGray
 
 # ============================================================
-# PHASE 12 — Non-system scheduled tasks cleanup
+# PHASE 12 â€” Non-system scheduled tasks cleanup
 # ============================================================
 Write-Host "`n=== PHASE 12: SCHEDULED TASKS CLEANUP ===" -ForegroundColor Cyan
 
@@ -930,7 +1033,7 @@ foreach ($task in $tasksToRemove) {
 }
 
 # ============================================================
-# PHASE 13 — Chocolatey installed packages cleanup
+# PHASE 13 â€” Chocolatey installed packages cleanup
 # ============================================================
 Write-Host "`n=== PHASE 13: CHOCOLATEY PACKAGES CLEANUP ===" -ForegroundColor Cyan
 
@@ -977,7 +1080,7 @@ foreach ($scope in @('Machine', 'User')) {
 }
 
 # ============================================================
-# PHASE 14 — Startup registry entries cleanup (HKCU + HKLM)
+# PHASE 14 â€” Startup registry entries cleanup (HKCU + HKLM)
 # ============================================================
 Write-Host "`n=== PHASE 14: STARTUP ENTRIES CLEANUP ===" -ForegroundColor Cyan
 
@@ -999,7 +1102,7 @@ foreach ($key in @(
 }
 
 # ============================================================
-# PHASE 15 — Orphaned services cleanup
+# PHASE 15 â€” Orphaned services cleanup
 # ============================================================
 Write-Host "`n=== PHASE 15: ORPHANED SERVICES CLEANUP ===" -ForegroundColor Cyan
 
@@ -1021,7 +1124,7 @@ foreach ($svc in (Get-CimInstance Win32_Service -ErrorAction SilentlyContinue)) 
 }
 
 # ============================================================
-# PHASE 16 — Empty Recycle Bin
+# PHASE 16 â€” Empty Recycle Bin
 # ============================================================
 Write-Host "`n=== PHASE 16: EMPTYING RECYCLE BIN ===" -ForegroundColor Cyan
 
@@ -1046,11 +1149,11 @@ Clear-AllRecycleBins
 Write-Host "  Recycle Bin emptied (all users, all drives)" -ForegroundColor Green
 
 # ============================================================
-# PHASE 17 — Trace / activity / network / system cleanup
+# PHASE 17 â€” Trace / activity / network / system cleanup
 # ============================================================
 Write-Host "`n=== PHASE 17: TRACE & ACTIVITY CLEANUP ===" -ForegroundColor Cyan
 
-# ── Helper: run a scriptblock against every local user's hive ──
+# â”€â”€ Helper: run a scriptblock against every local user's hive â”€â”€
 function Invoke-ForEachUserHive {
     param([scriptblock]$Action)
     & $Action 'HKCU:'
@@ -1179,7 +1282,7 @@ try {
 # Strategy:
 #   1. Remove user-added app pins from the TaskBar folder (keep Edge + File Explorer .lnk files)
 #   2. Recreate Edge + File Explorer .lnk files if they are missing (e.g. from a previous bad reset)
-#   3. TaskBand registry key is NOT touched — it holds the pin order/state
+#   3. TaskBand registry key is NOT touched â€” it holds the pin order/state
 Write-Host "-- Taskbar pins --" -ForegroundColor Cyan
 
 # Shortcuts to always keep / recreate
@@ -1196,7 +1299,7 @@ foreach ($userDir in (Get-UserProfiles)) {
         New-Item -ItemType Directory -Path $pinnedDir -Force -ErrorAction SilentlyContinue | Out-Null
     }
 
-    # Remove user-added pinned shortcuts — skip Edge and File Explorer
+    # Remove user-added pinned shortcuts â€” skip Edge and File Explorer
     foreach ($file in (Get-ChildItem $pinnedDir -File -ErrorAction SilentlyContinue)) {
         if ($keepTaskbarPins -contains $file.Name) {
             Write-Host "  Keeping taskbar pin: $($file.Name)" -ForegroundColor DarkGray
@@ -1207,7 +1310,7 @@ foreach ($userDir in (Get-UserProfiles)) {
     }
 
     # Recreate File Explorer.lnk if missing
-    # File Explorer is a shell special item — no TargetPath, uses shell AppID
+    # File Explorer is a shell special item â€” no TargetPath, uses shell AppID
     $feLink = Join-Path $pinnedDir 'File Explorer.lnk'
     if (-not (Test-Path $feLink)) {
         try {
@@ -1224,7 +1327,7 @@ foreach ($userDir in (Get-UserProfiles)) {
 
     # Always recreate Microsoft Edge.lnk with IconLocation pointing to msedge.exe.
     # The default pin created by Windows sets IconLocation to a profile .ico file inside
-    # AppData\Local\Microsoft\Edge\User Data\Default\ — which Phase 4 deletes.
+    # AppData\Local\Microsoft\Edge\User Data\Default\ â€” which Phase 4 deletes.
     # Using the exe as the icon source means it always exists regardless of reset state.
     $edgeExe = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
     if (-not (Test-Path $edgeExe)) {
@@ -1261,7 +1364,7 @@ foreach ($userDir in (Get-UserProfiles)) {
     # These are stale cache files that cause removed apps (Teams, Outlook, Claude, etc.)
     # to still appear in "Recently added" after uninstall. Windows rebuilds them
     # automatically on next user login from what is actually installed on disk.
-    # The cversions.*.db files are NOT touched — they are version tracking files,
+    # The cversions.*.db files are NOT touched â€” they are version tracking files,
     # not app-list databases, and rebuilding them causes unrelated UI issues.
     $startMenuCaches = Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Caches'
     if (Test-Path $startMenuCaches) {
@@ -1336,12 +1439,12 @@ try {
     }
 
     # Delete saved desktop icon positions so Windows auto-arranges all icons
-    # to top-left grid on Explorer restart — resets any layout the user had.
-    # NOTE: must happen AFTER Explorer is stopped — Explorer writes positions back
+    # to top-left grid on Explorer restart â€” resets any layout the user had.
+    # NOTE: must happen AFTER Explorer is stopped â€” Explorer writes positions back
     # to registry during shutdown, so deleting before stop gets overwritten.
 
     # Delete icon cache BEFORE stopping Explorer so there are no file locks.
-    # Explorer rebuilds the cache fresh on restart — fixes stale/blank icons for
+    # Explorer rebuilds the cache fresh on restart â€” fixes stale/blank icons for
     # Edge, File Explorer, and any other taskbar/desktop shortcuts.
     foreach ($userDir in (Get-UserProfiles)) {
         $localApp = Join-Path $userDir.FullName 'AppData\Local'
@@ -1371,7 +1474,7 @@ try {
     # Start Explorer as the shell (desktop only, no folder window)
     $shell = New-Object -ComObject Shell.Application -ErrorAction SilentlyContinue
     if ($shell) {
-        # Use shell automation to restart — this starts the desktop shell without opening a window
+        # Use shell automation to restart â€” this starts the desktop shell without opening a window
         Start-Process 'explorer.exe' -ArgumentList 'shell:::{26EE0668-A00A-44D7-9371-BEB064C98683}' -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
         # Close that control panel window that opened
@@ -1400,15 +1503,15 @@ Write-Host "`n=== PHASE 18: DRIVE ROOT SWEEP (user-created folders on all drives
 # Dynamically detect all fixed drives on this VM and delete any top-level folder
 # that is not a known Windows system folder.
 # This catches folders like C:\mahi, C:\work, D:\projects etc. that users create
-# directly on a drive root — these are not covered by any other phase.
+# directly on a drive root â€” these are not covered by any other phase.
 
-# System folders that must never be deleted — per drive letter
-# C:\ has many more protected folders than other drives
+# System folders that must never be deleted â€” per drive letter
+# C:\ uses template's allowed_root_names (same as Phase 0.5)
 $cSystemFolders = @(
-    'Windows','Users','Program Files','Program Files (x86)','ProgramData',
-    'inetpub','PerfLogs','sysprep1007','$Recycle.Bin','$WinREAgent',
-    'Config.Msi','Recovery','System Volume Information','$SysReset',
-    'OneDriveTemp','MSOCache'
+    '$Recycle.Bin','$WinREAgent','Config.Msi','Documents and Settings',
+    'inetpub','PerfLogs','Program Files','Program Files (x86)','ProgramData',
+    'Recovery','sysprep1009','System Volume Information','Users','Windows',
+    'bootTel.dat','DumpStack.log.tmp','pagefile.sys','swapfile.sys','hiberfil.sys'
 )
 # For non-C drives, only Windows metadata folders are protected
 $otherDriveSystemFolders = @(

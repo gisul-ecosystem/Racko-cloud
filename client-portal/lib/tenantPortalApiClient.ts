@@ -4,6 +4,10 @@ import type { TenantPortalUser } from '../types/tenantPortal';
 
 const TENANT_SESSION_STORAGE_KEY = 'racko_tenant_session';
 
+/** One-time localStorage handoff for new tabs (avoids huge / fragile `_s` URLs). */
+export const TENANT_TAB_HANDOFF_PREFIX = 'racko_tenant_tab_handoff:';
+const TENANT_TAB_HANDOFF_TTL_MS = 120_000;
+
 export interface StoredTenantSession {
   accessToken: string;
   tenantUser: TenantPortalUser;
@@ -73,25 +77,84 @@ export function clearTenantAccessToken(): void {
   }
 }
 
+function getRawTenantSessionForHandoff(): string | null {
+  if (typeof window === 'undefined') return null;
+  const fromStorage = sessionStorage.getItem(TENANT_SESSION_STORAGE_KEY);
+  if (fromStorage) return fromStorage;
+  const loaded = loadTenantSession();
+  if (loaded) return JSON.stringify(loaded);
+  return null;
+}
+
+/** Read and delete a one-time `_h` handoff written by {@link openTenantUrlWithSession}. */
+export function consumeTenantTabHandoff(handoffId: string): StoredTenantSession | null {
+  if (typeof window === 'undefined' || !handoffId) return null;
+
+  const key = `${TENANT_TAB_HANDOFF_PREFIX}${handoffId}`;
+  const expKey = `${key}:exp`;
+  try {
+    const expRaw = localStorage.getItem(expKey);
+    const exp = expRaw ? Number(expRaw) : 0;
+    if (exp && Date.now() > exp) {
+      localStorage.removeItem(key);
+      localStorage.removeItem(expKey);
+      return null;
+    }
+
+    const raw = localStorage.getItem(key);
+    localStorage.removeItem(key);
+    localStorage.removeItem(expKey);
+    if (!raw) return null;
+
+    const session = JSON.parse(raw) as StoredTenantSession;
+    if (!session.accessToken || !session.tenantUser) return null;
+    if (isTokenExpired(session.accessToken)) return null;
+    return session;
+  } catch {
+    localStorage.removeItem(key);
+    localStorage.removeItem(expKey);
+    return null;
+  }
+}
+
+function encodeSessionForUrlParam(rawSession: string): string {
+  const base64 = btoa(encodeURIComponent(rawSession));
+  return encodeURIComponent(base64);
+}
+
 /**
- * Opens `url` in a new tab, carrying the current tenant session along in a
- * one-time `_s` URL param. A plain `window.open(url, '_blank')` loses the
- * session because tenant auth lives in sessionStorage, which browsers only
- * clone into the new tab when an opener relationship is kept — and even
- * then, cloning isn't instant/guaranteed. TenantAuthContext reads `_s` on
- * mount, persists it into its own sessionStorage, and strips it from the URL.
+ * Opens `url` in a new tab, carrying the current tenant session.
+ * Prefer a short `_h` localStorage handoff; fall back to `_s` when needed.
  */
 export function openTenantUrlWithSession(url: string): void {
   if (typeof window === 'undefined') {
     return;
   }
 
-  const rawSession = sessionStorage.getItem(TENANT_SESSION_STORAGE_KEY);
-  const sessionParam = rawSession ? btoa(encodeURIComponent(rawSession)) : '';
+  const rawSession = getRawTenantSessionForHandoff();
   const separator = url.includes('?') ? '&' : '?';
-  const finalUrl = sessionParam ? `${url}${separator}_s=${sessionParam}` : url;
 
-  window.open(finalUrl, '_blank');
+  if (!rawSession) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+
+  try {
+    const handoffId =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const key = `${TENANT_TAB_HANDOFF_PREFIX}${handoffId}`;
+    localStorage.setItem(key, rawSession);
+    localStorage.setItem(`${key}:exp`, String(Date.now() + TENANT_TAB_HANDOFF_TTL_MS));
+    window.open(`${url}${separator}_h=${encodeURIComponent(handoffId)}`, '_blank', 'noopener,noreferrer');
+    return;
+  } catch {
+    // localStorage full / private mode — fall back to `_s`
+  }
+
+  const sessionParam = encodeSessionForUrlParam(rawSession);
+  window.open(`${url}${separator}_s=${sessionParam}`, '_blank', 'noopener,noreferrer');
 }
 
 interface TenantRequestOptions extends RequestInit {

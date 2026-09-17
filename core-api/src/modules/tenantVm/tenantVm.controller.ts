@@ -128,6 +128,16 @@ export class TenantVmController {
     }
   }
 
+  async closeConsole(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { vmId } = req.params as { vmId: string };
+      const data = await tenantVmService.closeConsole(actorFromRequest(req), vmId, req);
+      success(res, 'Console session closed.', data);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async getAvailableVms(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as TenantAuthenticatedRequest;

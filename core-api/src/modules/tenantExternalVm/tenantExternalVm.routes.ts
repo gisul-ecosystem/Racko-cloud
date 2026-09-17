@@ -14,10 +14,18 @@ import {
   updateExternalVmScheduleSchema,
   updateExternalVmOverrideSchema,
   bulkUpdateExternalVmOverrideSchema,
+  bulkDeleteSessionsSchema,
 } from '../external-vm/external-vm.validation';
 import { tenantExternalVmController } from './tenantExternalVm.controller';
 
 const router = Router();
+
+// POST /api/v1/tenant-external-vms/sessions/end-by-token — public (no auth)
+// sendBeacon cannot send auth headers; the endToken in the body IS the auth.
+router.post(
+  '/sessions/end-by-token',
+  (req, res, next) => tenantExternalVmController.endConsoleSessionByToken(req, res, next)
+);
 
 router.use(resolveTenantContext);
 router.use(requireTenantAuth);
@@ -110,12 +118,58 @@ router.post(
   (req, res, next) => tenantExternalVmController.create(req, res, next)
 );
 
-router.get('/', (req, res, next) => tenantExternalVmController.list(req, res, next));
+router.get(
+  '/',
+  // List is assignment-based for end users. Super-admin Server Assign mirrors
+  // must appear on My VMs whether or not the Elastic Servers product is enabled.
+  (req, res, next) => tenantExternalVmController.list(req, res, next)
+);
+
+// ─── Console Session routes ───────────────────────────────────────────────────
+
+// POST /api/v1/tenant-external-vms/sessions/start
+router.post(
+  '/sessions/start',
+  (req, res, next) => tenantExternalVmController.startConsoleSession(req, res, next)
+);
+
+// POST /api/v1/tenant-external-vms/sessions/:sessionId/heartbeat
+router.post(
+  '/sessions/:sessionId/heartbeat',
+  (req, res, next) => tenantExternalVmController.heartbeatConsoleSession(req, res, next)
+);
+
+// POST /api/v1/tenant-external-vms/sessions/:sessionId/end
+router.post(
+  '/sessions/:sessionId/end',
+  (req, res, next) => tenantExternalVmController.endConsoleSession(req, res, next)
+);
+
+// GET /api/v1/tenant-external-vms/sessions — tenant admin analytics
+router.get(
+  '/sessions',
+  requireTenantPermission('elastic.manage'),
+  (req, res, next) => tenantExternalVmController.listConsoleSessions(req, res, next)
+);
+
+// DELETE /api/v1/tenant-external-vms/sessions/bulk — bulk delete completed sessions
+router.delete(
+  '/sessions/bulk',
+  requireTenantPermission('elastic.manage'),
+  validateRequest(bulkDeleteSessionsSchema),
+  (req, res, next) => tenantExternalVmController.bulkDeleteConsoleSessions(req, res, next)
+);
 
 router.get(
   '/:id/console',
   validateRequest(externalVMIdParamSchema),
   (req, res, next) => tenantExternalVmController.openConsole(req, res, next)
+);
+
+router.post(
+  '/:id/console/close',
+  validateRequest(externalVMIdParamSchema),
+  (req, res, next) => tenantExternalVmController.closeConsole(req, res, next)
 );
 
 router.get(

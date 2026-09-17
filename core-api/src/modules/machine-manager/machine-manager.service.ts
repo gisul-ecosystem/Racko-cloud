@@ -51,7 +51,7 @@ setInterval(() => {
 class MachineManagerService {
   // ─── Mappers ───────────────────────────────────────────────────────────────
 
-  private toMachineResponse(doc: IMachine): MachineResponse {
+  private toMachineResponse(doc: IMachine, lastReset?: { status: 'pending' | 'success' | 'failed'; success?: boolean; error?: string; completedAt?: string } | null): MachineResponse {
     return {
       _id: doc._id.toString(),
       name: doc.name,
@@ -71,6 +71,7 @@ class MachineManagerService {
       } : undefined,
       agentVersion: doc.agentVersion,
       rackoAppVersion: doc.rackoAppVersion,
+      lastReset: lastReset ?? null,
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };
@@ -125,7 +126,35 @@ class MachineManagerService {
 
   async listMachines(adminId: mongoose.Types.ObjectId): Promise<MachineResponse[]> {
     const docs = await MachineModel.find({ adminId, deleted: { $ne: true } }).sort({ createdAt: -1 });
-    return docs.map((d) => this.toMachineResponse(d));
+
+    // Batch-query the most recent reset result per machine (within 15 minutes)
+    // Same pattern as jobs — source of truth is DB so refresh restores status
+    const { ResetResultModel } = await import('../../models/resetResult.model');
+    const recentCutoff = new Date(Date.now() - 15 * 60 * 1000);
+    const machineIds = docs.map((d) => d._id);
+    const resetResults = await ResetResultModel.find({
+      machineId: { $in: machineIds },
+      $or: [
+        { status: 'pending' },
+        { completedAt: { $gte: recentCutoff } },
+      ],
+    }).sort({ completedAt: -1, createdAt: -1 }).lean();
+
+    // Build machineId -> latest result map (already sorted desc so first wins)
+    const resetByMachineId = new Map<string, { status: 'pending' | 'success' | 'failed'; success?: boolean; error?: string; completedAt?: string }>();
+    for (const r of resetResults) {
+      const key = r.machineId.toString();
+      if (!resetByMachineId.has(key)) {
+        resetByMachineId.set(key, {
+          status: r.status as 'pending' | 'success' | 'failed',
+          success: r.success,
+          error: r.error,
+          completedAt: r.completedAt?.toISOString(),
+        });
+      }
+    }
+
+    return docs.map((d) => this.toMachineResponse(d, resetByMachineId.get(d._id.toString()) ?? null));
   }
 
   async getMachine(
@@ -780,14 +809,14 @@ class MachineManagerService {
         deleted: { $ne: true },
       }).sort({ createdAt: -1 });
 
-      // Retry path: if a prior push created a pending/offline row for same VM,
-      // reuse that row instead of creating another duplicate machine record.
-      if (existing && (!existing.agentId || existing.status !== 'online')) {
+      // Always reuse an existing machine record for the same IP — whether it is
+      // pending, offline, or currently online. The install script on the VM stops
+      // the running agent, overwrites config.json with the same accountToken, and
+      // reinstalls — so no duplicate record is created and the old agent is replaced.
+      if (existing) {
         existing.name = vm.name;
         existing.os = vm.os;
-        if (existing.status !== 'online') {
-          existing.status = 'pending';
-        }
+        existing.status = 'pending';
         await existing.save();
         machines.push(this.toMachineResponse(existing));
 
@@ -795,6 +824,7 @@ class MachineManagerService {
           machineId: existing._id.toString(),
           adminId: adminId.toString(),
           ipAddress: vm.ipAddress,
+          wasStatus: existing.status,
         });
         continue;
       }
@@ -1202,6 +1232,23 @@ class MachineManagerService {
     wsManager.sendReset(doc.agentId, sessionId);
     await JobModel.deleteMany({ machineId: doc._id });
 
+    // Write pending record immediately so F5 during reset shows the spinner
+    const { ResetResultModel } = await import('../../models/resetResult.model');
+    await ResetResultModel.findOneAndUpdate(
+      { sessionId, machineId: doc._id },
+      {
+        sessionId,
+        machineId:   doc._id,
+        machineName: doc.name,
+        agentId:     doc.agentId,
+        status:      'pending',
+        success:     undefined,
+        error:       undefined,
+        completedAt: undefined,
+      },
+      { upsert: true, new: true }
+    );
+
     logger.info('[MachineManager] Reset initiated', {
       machineId,
       agentId: doc.agentId,
@@ -1243,6 +1290,7 @@ class MachineManagerService {
         machineId:   machine._id,
         machineName: machine.name,
         agentId:     dto.agentId,
+        status:      dto.success ? 'success' : 'failed',
         success:     dto.success,
         error:       dto.error,
         completedAt: new Date(),
@@ -1286,7 +1334,7 @@ class MachineManagerService {
     return results.map(r => ({
       machineId:   r.machineId.toString(),
       machineName: r.machineName,
-      success:     r.success,
+      success:     r.success ?? false,
       error:       r.error,
     }));
   }

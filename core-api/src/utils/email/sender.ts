@@ -11,7 +11,17 @@ import { buildStaffInviteTemplate } from './templates/staffInvite';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
 import { buildOrgAdminInviteTemplate } from './templates/orgAdminInvite';
 import { buildProjectExpiryWarningTemplate } from './templates/projectExpiryWarning';
-import { buildProviderExpiryWarningTemplate } from './templates/providerExpiryWarning';
+import { buildProjectExpiryClientWarningTemplate } from './templates/projectExpiryClientWarning';
+import type {
+  ProjectExpiryAgentSummary,
+  ProjectExpiryClientSummary,
+} from '../../modules/projects/projectExpiryResources';
+import { buildProjectExpiryAgentAttachment } from '../../modules/projects/projectExpiryAgentWorkbook';
+import { buildProjectExpiryClientAttachment } from '../../modules/projects/projectExpiryClientWorkbook';
+import {
+  buildProviderExpiryWarningTemplate,
+  type ProviderExpiryResourceRow,
+} from './templates/providerExpiryWarning';
 import {
   buildCatalogVmExpiryWarningTemplate,
   type CatalogVmExpiryAudience,
@@ -194,7 +204,7 @@ async function sendViaZoho(options: EmailOptions): Promise<string | null> {
   }
 }
 
-async function sendEmail(options: EmailOptions): Promise<void> {
+async function sendEmail(options: EmailOptions): Promise<boolean> {
   const provider = config.ZOHO_EMAIL_ENABLED ? 'zoho_zeptomail' : 'resend';
 
   try {
@@ -208,6 +218,7 @@ async function sendEmail(options: EmailOptions): Promise<void> {
       subject: options.subject,
       messageId,
     });
+    return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     logger.error('Failed to send email', {
@@ -217,6 +228,7 @@ async function sendEmail(options: EmailOptions): Promise<void> {
       from: config.EMAIL_FROM_ADDRESS,
       error: message,
     });
+    return false;
   }
 }
 
@@ -368,20 +380,65 @@ export async function sendProjectExpiryWarningEmail(input: {
   clientName: string;
   endDateLabel: string;
   daysRemaining: number;
+  graceHours: number;
   manageUrl: string;
   archiveUrl?: string;
+  agentSummary?: ProjectExpiryAgentSummary;
   brand?: EmailBrand;
 }): Promise<void> {
+  const attachment = input.agentSummary
+    ? buildProjectExpiryAgentAttachment(input.clientName, input.agentSummary.resources)
+    : null;
   const template = buildProjectExpiryWarningTemplate({
     projectName: input.projectName,
     clientName: input.clientName,
     endDateLabel: input.endDateLabel,
     daysRemaining: input.daysRemaining,
+    graceHours: input.graceHours,
     manageUrl: input.manageUrl,
     archiveUrl: input.archiveUrl,
+    agentSummary: input.agentSummary,
+    attachmentFilename: attachment?.filename,
     brand: input.brand,
   });
-  await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });
+  await sendEmail({
+    to: input.to,
+    ...template,
+    fromName: input.brand?.name,
+    ...(attachment ? { attachments: [attachment] } : {}),
+  });
+}
+
+export async function sendProjectExpiryClientWarningEmail(input: {
+  to: string;
+  projectName: string;
+  clientName: string;
+  endDateLabel: string;
+  daysRemaining: number;
+  graceHours: number;
+  clientSummary: ProjectExpiryClientSummary;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const attachment = buildProjectExpiryClientAttachment(
+    input.clientName,
+    input.clientSummary.accessRows
+  );
+  const template = buildProjectExpiryClientWarningTemplate({
+    projectName: input.projectName,
+    clientName: input.clientName,
+    endDateLabel: input.endDateLabel,
+    daysRemaining: input.daysRemaining,
+    graceHours: input.graceHours,
+    clientSummary: input.clientSummary,
+    attachmentFilename: attachment?.filename,
+    brand: input.brand,
+  });
+  await sendEmail({
+    to: input.to,
+    ...template,
+    fromName: input.brand?.name,
+    ...(attachment ? { attachments: [attachment] } : {}),
+  });
 }
 
 /**
@@ -421,32 +478,30 @@ export async function sendCatalogVmExpiryWarningEmail(input: {
 }
 
 /**
- * One alert covering every inventory VM whose provider contract is about to
- * lapse. The machine list travels as a spreadsheet rather than in the body.
+ * Inventory provider-contract alert: IP addresses and their provider end dates.
+ * Project VM-ending mail is a separate template.
  */
 export async function sendProviderExpiryWarningEmail(input: {
   to: string;
-  vmCount: number;
-  loginCount: number;
+  resources: ProviderExpiryResourceRow[];
   soonestDays: number;
   soonestDateLabel: string;
   inventoryUrl: string;
-  attachment: EmailAttachment;
   brand?: EmailBrand;
 }): Promise<void> {
   const template = buildProviderExpiryWarningTemplate({
-    vmCount: input.vmCount,
-    loginCount: input.loginCount,
+    resources: input.resources,
     soonestDays: input.soonestDays,
     soonestDateLabel: input.soonestDateLabel,
-    attachmentName: input.attachment.filename,
     inventoryUrl: input.inventoryUrl,
     brand: input.brand,
   });
-  await sendEmail({
+  const ok = await sendEmail({
     to: input.to,
     ...template,
     fromName: input.brand?.name,
-    attachments: [input.attachment],
   });
+  if (!ok) {
+    throw new Error(`Failed to send provider expiry warning to ${input.to}`);
+  }
 }

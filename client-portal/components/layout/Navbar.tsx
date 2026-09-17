@@ -4,8 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { NAV_LINKS } from "@/lib/constants";
-import { useDemoModal } from "@/components/ui/DemoModalContext";
+import { NAV_LINKS, PRODUCT_NAV_LINKS, SOLUTION_NAV_LINKS } from "@/lib/constants";
 
 const INDUSTRY_LINKS = [
   { label: "EdTech", href: "/industries/edtech" },
@@ -28,6 +27,11 @@ function dropdownForNavLabel(label: string): {
   footer?: NavLinkItem;
 } | null {
   switch (label) {
+    case "Products":
+      return { links: PRODUCT_NAV_LINKS, footer: { label: "View all products", href: "/products" } };
+    case "Solution":
+    case "Solutions":
+      return { links: SOLUTION_NAV_LINKS, footer: { label: "View all solutions", href: "/solutions" } };
     case "Industries":
       return { links: INDUSTRY_LINKS };
     case "Company":
@@ -40,7 +44,8 @@ function dropdownForNavLabel(label: string): {
 function navItemIsActive(pathname: string, label: string, href: string): boolean {
   if (label === "Products") return pathname.startsWith("/products");
   if (label === "CloudLabs") return pathname.startsWith("/cloudlabs");
-  if (label === "Solutions") return pathname.startsWith("/solutions");
+  if (label === "Solution" || label === "Solutions") return pathname.startsWith("/solutions");
+  if (label === "Pricing") return false;
   if (label === "Industries") return pathname.startsWith("/industries");
   if (label === "Platform") return pathname.startsWith("/platform");
   if (label === "Resources") return pathname.startsWith("/resources");
@@ -49,12 +54,13 @@ function navItemIsActive(pathname: string, label: string, href: string): boolean
 }
 
 function wideDropdownClass(label: string): string {
-  return label === "Industries" ? "w-[300px]" : "";
+  if (label === "Products" || label === "Industries") return "w-[280px]";
+  if (label === "Solution" || label === "Solutions") return "w-[280px]";
+  return "";
 }
 
 export default function Navbar() {
   const pathname = usePathname();
-  const { openModal } = useDemoModal();
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState<string | null>(null);
@@ -95,9 +101,9 @@ export default function Navbar() {
   }, []);
 
   return (
-    <header className="fixed inset-x-0 top-0 z-[1000] h-[68px] border-b border-[rgba(255,255,255,0.08)] bg-[#111111]">
-      <div className="mx-auto flex h-full w-full max-w-[1600px] items-center justify-between gap-3 px-4 sm:px-6 xl:px-10">
-        <Link href="/" className="inline-flex min-w-0 shrink items-center gap-2 sm:gap-3">
+    <header className="fixed inset-x-0 top-0 z-[1000] h-[68px] border-b border-[rgba(255,255,255,0.06)] bg-[#050505]/95 backdrop-blur-md">
+      <div className="mx-auto grid h-full w-full max-w-[1600px] grid-cols-[auto_1fr_auto] items-center gap-3 px-4 sm:px-6 xl:px-10">
+        <Link href="/" className="inline-flex min-w-0 shrink items-center gap-2 transition-opacity duration-200 hover:opacity-80 sm:gap-3">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             alt="Racko"
@@ -112,7 +118,7 @@ export default function Navbar() {
           />
         </Link>
 
-        <nav ref={navRef} className="hidden items-center gap-5 lg:flex xl:gap-7">
+        <nav ref={navRef} className="hidden items-center justify-center gap-7 lg:flex xl:gap-9">
           {NAV_LINKS.map((item) => {
             const isActive = navItemIsActive(pathname, item.label, item.href);
             const isDropdownOpen = openDropdown === item.label;
@@ -124,8 +130,8 @@ export default function Navbar() {
                   <button
                     type="button"
                     onClick={() => setOpenDropdown(isDropdownOpen ? null : item.label)}
-                    className={`inline-flex items-center gap-1 text-[14px] font-normal transition-colors duration-150 ${
-                      isDropdownOpen || isActive ? "text-white" : "text-[#6B6B6B] hover:text-white"
+                    className={`inline-flex items-center gap-1 text-[14px] font-medium transition-colors duration-150 ${
+                      isDropdownOpen || isActive ? "text-white" : "text-[#C4C4C4] hover:text-white"
                     }`}
                   >
                     <span>{item.label}</span>
@@ -151,8 +157,8 @@ export default function Navbar() {
                 ) : (
                   <Link
                     href={item.href}
-                    className={`inline-flex items-center gap-1 text-[14px] font-normal transition-colors duration-150 ${
-                      isActive ? "text-white" : "text-[#6B6B6B] hover:text-white"
+                    className={`inline-flex items-center gap-1 text-[14px] font-medium transition-colors duration-150 ${
+                      isActive ? "text-white" : "text-[#C4C4C4] hover:text-white"
                     }`}
                   >
                     {item.label}
@@ -239,45 +245,48 @@ export default function Navbar() {
               </svg>
             )}
           </button>
-          <Link
-            href="/company/contact"
-            className="hidden rounded-[6px] border border-border-strong bg-transparent px-3 py-2 text-xs font-medium text-bg-50 transition-all hover:bg-bg-700 sm:inline-flex lg:hidden"
-          >
-            Contact
-          </Link>
-          <a
-            href="tel:+918197982153"
-            className="hidden items-center gap-2 rounded-[5px] border border-[rgba(255,255,255,0.15)] bg-transparent px-5 py-[10px] font-mono text-[13px] font-medium text-white transition-all duration-150 hover:border-[rgba(255,255,255,0.3)] hover:bg-[rgba(255,255,255,0.04)] lg:flex"
-          >
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ color: "#B91C1C", flexShrink: 0 }}
-            >
-              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+          <span className="hidden items-center gap-2 px-2 text-[14px] font-medium text-[#C4C4C4] lg:inline-flex">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
+              <path
+                d="M3 12h18M12 3c2.5 3 3.8 6 3.8 9s-1.3 6-3.8 9c-2.5-3-3.8-6-3.8-9s1.3-6 3.8-9z"
+                stroke="currentColor"
+                strokeWidth="1.6"
+              />
             </svg>
-            +91 81979 82153
-          </a>
+            India
+          </span>
           <Link
             href="/login"
-            className="hidden items-center gap-2 rounded-[6px] border border-[rgba(255,255,255,0.15)] bg-transparent px-5 py-[10px] text-[13px] font-medium text-white transition-all duration-150 hover:border-[rgba(255,255,255,0.3)] hover:bg-[rgba(255,255,255,0.04)] lg:inline-flex"
+            className="hidden items-center gap-2 rounded-full border border-[rgba(255,255,255,0.18)] bg-transparent px-4 py-[9px] text-[13px] font-medium text-white transition-all duration-200 hover:-translate-y-px hover:border-[rgba(255,255,255,0.4)] hover:bg-[rgba(255,255,255,0.05)] lg:inline-flex"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path
+                d="M10 17l5-5-5-5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path d="M15 12H4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              <path
+                d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
+            Sign In/Create Account
+          </Link>
+          <Link
+            href="/register"
+            className="group hidden items-center gap-2 rounded-full bg-[#DC2626] px-5 py-2.5 text-sm font-medium text-white transition-all duration-200 ease-out hover:-translate-y-px hover:bg-[#EF4444] hover:shadow-[0_10px_24px_rgba(220,38,38,0.35)] lg:inline-flex"
           >
             Get Started
+            <span aria-hidden className="transition-transform duration-200 group-hover:translate-x-0.5">
+              →
+            </span>
           </Link>
-          <button
-            type="button"
-            onClick={openModal}
-            className="hidden items-center gap-2 rounded-[6px] bg-crimson-500 px-5 py-2.5 text-sm font-medium text-white transition-all duration-200 ease-out hover:-translate-y-[1px] hover:bg-crimson-400 lg:inline-flex"
-          >
-            Book a Racko Meet
-            <span aria-hidden>›</span>
-          </button>
         </div>
       </div>
 
@@ -371,52 +380,22 @@ export default function Navbar() {
                 );
               })}
 
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-                <a
-                  href="tel:+918197982153"
-                  onClick={() => setMobileOpen(false)}
-                  className="inline-flex items-center justify-center gap-2 rounded-[6px] border border-[rgba(255,255,255,0.15)] bg-transparent px-4 py-3 font-mono text-[13px] font-medium text-white transition-all duration-150 hover:border-[rgba(255,255,255,0.3)] hover:bg-[rgba(255,255,255,0.04)]"
-                >
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{ color: "#B91C1C", flexShrink: 0 }}
-                  >
-                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
-                  </svg>
-                  +91 81979 82153
-                </a>
-                <Link
-                  href="/company/contact"
-                  onClick={() => setMobileOpen(false)}
-                  className="inline-flex items-center justify-center rounded-[6px] border border-border-strong px-4 py-3 text-sm font-medium text-white hover:bg-bg-700"
-                >
-                  Contact
-                </Link>
+              <div className="mt-6 flex flex-col gap-3">
                 <Link
                   href="/login"
                   onClick={() => setMobileOpen(false)}
-                  className="inline-flex items-center justify-center rounded-[6px] border border-[rgba(255,255,255,0.15)] bg-transparent px-4 py-3 text-sm font-medium text-white hover:bg-[rgba(255,255,255,0.04)]"
+                  className="inline-flex items-center justify-center gap-2 rounded-full border border-[rgba(255,255,255,0.18)] px-4 py-3 text-sm font-medium text-white hover:bg-[rgba(255,255,255,0.04)]"
+                >
+                  Sign In/Create Account
+                </Link>
+                <Link
+                  href="/register"
+                  onClick={() => setMobileOpen(false)}
+                  className="inline-flex items-center justify-center gap-2 rounded-full bg-[#DC2626] px-4 py-3 text-sm font-medium text-white hover:bg-[#EF4444]"
                 >
                   Get Started
+                  <span aria-hidden>→</span>
                 </Link>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMobileOpen(false);
-                    openModal();
-                  }}
-                  className="inline-flex items-center justify-center gap-2 rounded-[6px] bg-crimson-500 px-4 py-3 text-sm font-medium text-white hover:bg-crimson-400"
-                >
-                  Book a Racko Meet
-                  <span aria-hidden>›</span>
-                </button>
               </div>
             </nav>
           </motion.div>

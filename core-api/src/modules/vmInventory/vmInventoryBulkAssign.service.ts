@@ -41,6 +41,54 @@ export function buildSeriesEmail(base: string, index: number): string {
   return `${base.slice(0, at)}${index}${base.slice(at)}`;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Trailing number in a series address, or null when the email is not in the series. */
+export function seriesIndexFromEmail(email: string, base: string): number | null {
+  const at = base.lastIndexOf('@');
+  if (at <= 0) return null;
+  const local = base.slice(0, at).toLowerCase();
+  const domain = base.slice(at).toLowerCase();
+  const value = email.trim().toLowerCase();
+  if (!value.startsWith(local) || !value.endsWith(domain)) return null;
+  const middle = value.slice(local.length, value.length - domain.length);
+  if (!/^[1-9]\d*$/.test(middle)) return null;
+  return Number.parseInt(middle, 10);
+}
+
+/**
+ * Next unused numbered addresses for `base`, continuing after `startAfter`.
+ *
+ * `startAfter` is the highest index already used on this project (0 if none),
+ * so a project that has test1@gmail.com continues at test2@ — it does not jump
+ * to after some other project's test9@. Addresses that are already taken in the
+ * workspace are skipped so we never collide.
+ */
+export function allocateSeriesEmails(
+  base: string,
+  count: number,
+  takenEmails: Iterable<string>,
+  startAfter = 0
+): string[] {
+  if (count <= 0) return [];
+  const taken = new Set(
+    [...takenEmails].map((e) => e.trim().toLowerCase()).filter(Boolean)
+  );
+  const next = Math.max(1, startAfter + 1);
+  const emails: string[] = [];
+  const cap = next + count + taken.size + 1000;
+  for (let i = next; emails.length < count && i < cap; i += 1) {
+    const email = buildSeriesEmail(base, i).toLowerCase();
+    if (!taken.has(email)) emails.push(email);
+  }
+  if (emails.length < count) {
+    throw new ValidationError('Could not allocate enough unused emails in this series.');
+  }
+  return emails;
+}
+
 /** 12 chars, one of each class, crypto-random. Mirrors managedUsers.service. */
 function generateSecurePassword(): string {
   const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -208,9 +256,10 @@ class VmInventoryBulkAssignService {
   /**
    * Generate a numbered user per selected login and grant them one-to-one.
    *
-   * Ordering is positional and stable: `credentialIds[i]` goes to the user built
-   * from index `i + 1`. A row that fails does NOT shift the series, so the
-   * mapping an operator saw in the preview always holds.
+   * Ordering is positional and stable: `credentialIds[i]` goes to the i-th
+   * allocated address (continuing this project's series). A row that fails
+   * does NOT shift the series, so the mapping an operator saw in the preview
+   * always holds.
    *
    * `dryRun` performs every validation and collision check but writes nothing,
    * which matters because there is no rollback: a partially applied batch would
@@ -324,7 +373,12 @@ class VmInventoryBulkAssignService {
 
     const emails = explicitEmails
       ? explicitEmails.map((e) => e.trim().toLowerCase())
-      : credentialIds.map((_, i) => buildSeriesEmail(emailPrefix!, i + 1).toLowerCase());
+      : allocateSeriesEmails(
+          emailPrefix!,
+          credentialIds.length,
+          await this.listTakenSeriesEmails(targetType, adminId, tenantId, emailPrefix!),
+          await this.maxSeriesIndexOnProject(project._id, emailPrefix!)
+        );
 
     // A generated series is unique by construction; explicit input is not.
     if (new Set(emails).size !== emails.length) {
@@ -535,6 +589,116 @@ class VmInventoryBulkAssignService {
     }
 
     return { rows, summary: summary(), projectName: project.name, dryRun, ...(note && { note }) };
+  }
+
+  /** Highest numbered index already granted on this project for `base`, or 0. */
+  private async maxSeriesIndexOnProject(
+    projectId: mongoose.Types.ObjectId,
+    base: string
+  ): Promise<number> {
+    const assignments = await CredentialAssignmentModel.find({
+      projectId,
+      status: 'active',
+    })
+      .select('assigneeType assigneeId')
+      .lean();
+    if (assignments.length === 0) return 0;
+
+    const platformIds: mongoose.Types.ObjectId[] = [];
+    const tenantUserIds: mongoose.Types.ObjectId[] = [];
+    for (const a of assignments) {
+      if (a.assigneeType === 'platform_user') platformIds.push(a.assigneeId);
+      else tenantUserIds.push(a.assigneeId);
+    }
+
+    const emails: string[] = [];
+    if (platformIds.length > 0) {
+      const users = await User.find({ _id: { $in: platformIds } }).select('email').lean();
+      emails.push(...users.map((u) => u.email).filter(Boolean));
+    }
+    if (tenantUserIds.length > 0) {
+      const users = await TenantUser.find({ _id: { $in: tenantUserIds } })
+        .select('email')
+        .lean();
+      emails.push(...users.map((u) => u.email).filter(Boolean));
+    }
+
+    let max = 0;
+    for (const email of emails) {
+      const n = seriesIndexFromEmail(email, base);
+      if (n != null && n > max) max = n;
+    }
+    return max;
+  }
+
+  private async listTakenSeriesEmails(
+    targetType: 'admin' | 'tenant',
+    _adminId: mongoose.Types.ObjectId | null,
+    tenantId: mongoose.Types.ObjectId | null,
+    base: string
+  ): Promise<string[]> {
+    const at = base.lastIndexOf('@');
+    if (at <= 0) return [];
+    const local = base.slice(0, at).toLowerCase();
+    const domain = base.slice(at + 1).toLowerCase();
+    const pattern = `^${escapeRegex(local)}[1-9]\\d*@${escapeRegex(domain)}$`;
+
+    if (targetType === 'admin') {
+      const users = await User.find({ email: { $regex: pattern, $options: 'i' } })
+        .select('email')
+        .lean();
+      return users.map((u) => u.email.toLowerCase());
+    }
+
+    const users = await TenantUser.find({
+      tenantId,
+      email: { $regex: pattern, $options: 'i' },
+    })
+      .select('email')
+      .lean();
+    return users.map((u) => u.email.toLowerCase());
+  }
+
+  async previewSeries(input: {
+    emailPrefix: string;
+    count: number;
+    targetType: 'admin' | 'tenant';
+    targetId: string;
+    projectId: string;
+  }): Promise<{ startIndex: number; emails: string[] }> {
+    const base = input.emailPrefix.trim().toLowerCase();
+    if (!base.includes('@')) throw new ValidationError('emailPrefix must be a valid email address.');
+    if (input.count < 1) return { startIndex: 1, emails: [] };
+
+    if (!mongoose.Types.ObjectId.isValid(input.targetId)) {
+      throw new ValidationError('Invalid targetId.');
+    }
+    if (!mongoose.Types.ObjectId.isValid(input.projectId)) {
+      throw new ValidationError('Invalid projectId.');
+    }
+
+    let adminId: mongoose.Types.ObjectId | null = null;
+    let tenantId: mongoose.Types.ObjectId | null = null;
+    if (input.targetType === 'admin') {
+      const admin = await User.findOne({ _id: input.targetId, role: 'admin' }).select('_id').lean();
+      if (!admin) throw new NotFoundError('Admin not found.');
+      adminId = admin._id;
+    } else {
+      const tenant = await Tenant.findById(input.targetId).select('_id').lean();
+      if (!tenant) throw new NotFoundError('Tenant not found.');
+      tenantId = tenant._id;
+    }
+
+    const project = await ProjectModel.findById(input.projectId).select('_id').lean();
+    if (!project) throw new NotFoundError('Project not found.');
+
+    const [taken, startAfter] = await Promise.all([
+      this.listTakenSeriesEmails(input.targetType, adminId, tenantId, base),
+      this.maxSeriesIndexOnProject(project._id, base),
+    ]);
+    const emails = allocateSeriesEmails(base, input.count, taken, startAfter);
+    const startIndex = seriesIndexFromEmail(emails[0] ?? '', base) ?? startAfter + 1;
+    return { startIndex, emails };
   }
 }
 

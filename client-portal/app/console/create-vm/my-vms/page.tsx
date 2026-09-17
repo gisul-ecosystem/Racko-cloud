@@ -23,6 +23,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { openGuacamoleConsolePage } from '../../../../lib/consoleLaunch';
 import { CatalogVmPowerControls } from '../../../../components/create-vm/CatalogVmPowerControls';
 import {
   CatalogVmTermModal,
@@ -326,7 +327,7 @@ export default function MyVmsPage() {
                             prev === instanceKey ? null : instanceKey
                           )
                         }
-                        onOpenConsole={() => router.push(consoleHref)}
+                        onOpenConsole={() => openGuacamoleConsolePage(consoleHref)}
                         onPowerAction={api.powerAction}
                         onRefresh={refetch}
                         canManageTerm={canManageTerm}

@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import mongoose from 'mongoose';
+
+const mongoObjectId = z
+  .string()
+  .refine((val) => mongoose.Types.ObjectId.isValid(val), { message: 'Invalid ID format' });
 
 export const createTicketSchema = z.object({
   body: z
@@ -13,6 +18,7 @@ export const createTicketSchema = z.object({
       vmStorage: z.string().optional(),
       vmOs: z.string().optional(),
       vmPurpose: z.string().optional(),
+      projectId: mongoObjectId.optional(),
     })
     .superRefine((data, ctx) => {
       if (data.type !== 'vm_request') {
@@ -101,6 +107,7 @@ export const listTicketsSchema = z.object({
     priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
     assigneeId: z.string().optional(),
     tenantId: z.string().optional(),
+    projectId: mongoObjectId.optional(),
     skip: z.string().optional(),
     limit: z.string().optional(),
   }),

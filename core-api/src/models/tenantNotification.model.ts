@@ -5,6 +5,7 @@ export type TenantNotificationType =
   | 'catalog_vm_request'
   | 'dedicated_server_request'
   | 'project_expiring_soon'
+  | 'project_grace_period'
   | 'project_archived';
 
 export interface ITenantNotification extends Document {
@@ -38,7 +39,7 @@ const tenantNotificationSchema = new Schema<ITenantNotification>(
     },
     type: {
       type: String,
-      enum: ['vm_plan_expiring_soon', 'catalog_vm_request', 'dedicated_server_request', 'project_expiring_soon', 'project_archived'],
+      enum: ['vm_plan_expiring_soon', 'catalog_vm_request', 'dedicated_server_request', 'project_expiring_soon', 'project_grace_period', 'project_archived'],
       required: true,
     },
     title: { type: String, required: true, trim: true, maxlength: 200 },

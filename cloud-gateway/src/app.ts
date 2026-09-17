@@ -57,6 +57,8 @@ const RATE_LIMIT_SKIP_PREFIXES = [
   '/api/org-admin',
   '/api/manage',
   '/api/purchase-intent',
+  '/api/v1/external-vms/sessions/',
+  '/api/v1/tenant-external-vms/sessions/',
 ];
 
 function isRateLimitExemptPath(path: string): boolean {

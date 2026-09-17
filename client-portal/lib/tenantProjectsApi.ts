@@ -5,14 +5,17 @@ import type {
   ProjectNamePreview,
   ProjectReportByProjectRow,
   ProjectReportByServiceRow,
+  ProjectSupportAgent,
 } from './projectsApi';
 
-export type { OrgProject, ProjectNamePreview, ProjectReportByProjectRow, ProjectReportByServiceRow };
+export type {
+  OrgProject,
+  ProjectNamePreview,
+  ProjectReportByProjectRow,
+  ProjectReportByServiceRow,
+  ProjectSupportAgent,
+};
 export { PROJECT_SERVICE_LABELS } from './projectsApi';
-export {
-  formatReminderEmailsInput,
-  parseReminderEmailsInput,
-} from './projectsApi';
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -50,6 +53,25 @@ export async function fetchTenantProject(id: string): Promise<OrgProject> {
   return data.project;
 }
 
+export interface TenantProjectElasticResource {
+  id: string;
+  name: string;
+  ipAddress: string;
+  username: string;
+  protocol: string;
+  assignedUsers: Array<{ email: string | null; username: string | null }>;
+}
+
+export async function fetchTenantProjectElasticResources(
+  projectId: string
+): Promise<TenantProjectElasticResource[]> {
+  const data = await unwrap<{
+    resources: TenantProjectElasticResource[];
+    total: number;
+  }>(tenantPortalRequest(`${BASE}/${projectId}/resources/elastic-servers`));
+  return data.resources;
+}
+
 export async function previewTenantProjectName(): Promise<ProjectNamePreview> {
   return unwrap(tenantPortalRequest(`${BASE}/name-preview`));
 }
@@ -75,7 +97,7 @@ export async function createTenantProject(input: {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
-  reminderEmails?: string[];
+  clientEmail?: string;
   autoArchiveEnabled?: boolean;
 }): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
@@ -87,6 +109,13 @@ export async function createTenantProject(input: {
   return data.project;
 }
 
+export async function fetchTenantProjectSupportAgents(): Promise<ProjectSupportAgent[]> {
+  const data = await unwrap<{ agents: ProjectSupportAgent[] }>(
+    tenantPortalRequest(`${BASE}/support-agents`)
+  );
+  return data.agents;
+}
+
 export async function updateTenantProject(
   id: string,
   input: {
@@ -95,8 +124,9 @@ export async function updateTenantProject(
     description?: string | null;
     startDate?: string | null;
     endDate?: string | null;
-    reminderEmails?: string[] | null;
+    clientEmail?: string | null;
     autoArchiveEnabled?: boolean;
+    supportAgentId?: string | null;
   }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(

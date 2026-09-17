@@ -7,13 +7,24 @@ import { TenantUser } from '../../models/tenantUser.model';
 import { Tenant } from '../../models/tenant.model';
 import { Notification } from '../notification/notification.model';
 import { TenantNotification } from '../../models/tenantNotification.model';
-import { sendProjectExpiryWarningEmail } from '../../utils/email/sender';
+import {
+  sendProjectExpiryClientWarningEmail,
+  sendProjectExpiryWarningEmail,
+} from '../../utils/email/sender';
 import { resolvePlatformEmailBrand, resolveTenantEmailBrand } from '../../utils/email/templates/emailBrand';
 import type { EmailBrand } from '../../utils/email/templates/brandedLayout';
+import { runProjectExpiryCleanup } from './projectExpiryCleanup.service';
 import {
+  summarizeProjectExpiryForAgent,
+  summarizeProjectExpiryForClient,
+} from './projectExpiryResources';
+import {
+  computeGracePeriodEndsAt,
+  formatGracePeriodEndsLabel,
   formatProjectDateLabel,
+  isGracePeriodComplete,
   isProjectEndDateOnWarningDay,
-  isProjectEndDatePast,
+  isProjectOnOrAfterEndDate,
 } from './projectExpiryDates';
 
 let tickInProgress = false;
@@ -36,10 +47,28 @@ function projectArchiveUrl(doc: IProject): string {
   return `${base}/console/projects/${id}?action=archive`;
 }
 
-async function resolveOrgOwnerEmail(orgId: string): Promise<string | null> {
-  const user = await User.findById(orgId).select('email isActive role orgOwnerId').lean();
-  if (!user?.isActive || user.role !== 'admin' || user.orgOwnerId) return null;
-  return user.email?.trim().toLowerCase() || null;
+async function resolveProjectEmailBrand(doc: IProject): Promise<EmailBrand | undefined> {
+  if (doc.ownerType === 'tenant' && doc.tenantId) {
+    const tenant = await Tenant.findById(doc.tenantId).select('name domain branding').lean();
+    if (tenant) {
+      return resolveTenantEmailBrand({
+        name: tenant.name,
+        domain: tenant.domain,
+        branding: tenant.branding,
+      });
+    }
+    return undefined;
+  }
+  return resolvePlatformEmailBrand();
+}
+
+async function resolveSupportAgentEmail(doc: IProject): Promise<string | null> {
+  if (!doc.supportAgentId) return null;
+  const agent = await User.findById(doc.supportAgentId)
+    .select('email isActive role')
+    .lean();
+  if (!agent?.isActive || agent.role !== 'support_agent') return null;
+  return agent.email?.trim().toLowerCase() || null;
 }
 
 async function notifyOrgProjectExpiry(doc: IProject, daysRemaining: number): Promise<void> {
@@ -116,67 +145,133 @@ async function notifyTenantProjectExpiry(doc: IProject, daysRemaining: number): 
   );
 }
 
+async function notifyGracePeriodStarted(doc: IProject): Promise<void> {
+  if (!doc.gracePeriodEndsAt) return;
+  const graceLabel = formatGracePeriodEndsLabel(doc.gracePeriodEndsAt);
+  const title = 'Project grace period started';
+  const message = `"${doc.name}" reached its end date. Assigned VMs will be released and the project archived on ${graceLabel} unless you extend the end date.`;
+  const actionUrl = projectManageUrl(doc);
+
+  if (doc.ownerType === 'tenant' && doc.tenantId) {
+    const tenantId = new mongoose.Types.ObjectId(doc.tenantId);
+    const admins = await TenantUser.find({
+      tenantId,
+      role: 'tenant_admin',
+      isActive: true,
+    })
+      .select('_id')
+      .lean();
+    await Promise.all(
+      admins.map((admin) =>
+        TenantNotification.create({
+          tenantId,
+          tenantUserId: admin._id,
+          type: 'project_grace_period',
+          title,
+          message,
+          severity: 'warning',
+          read: false,
+          metadata: {
+            projectId: doc._id.toString(),
+            event: 'project_grace_period',
+            gracePeriodEndsAt: doc.gracePeriodEndsAt?.toISOString(),
+          },
+        }).catch(() => undefined)
+      )
+    );
+    return;
+  }
+
+  if (doc.orgId) {
+    await Notification.create({
+      userId: new mongoose.Types.ObjectId(doc.orgId),
+      type: 'project_grace_period',
+      title,
+      message,
+      severity: 'warning',
+      read: false,
+      actionUrl,
+      metadata: {
+        projectId: doc._id.toString(),
+        event: 'project_grace_period',
+        gracePeriodEndsAt: doc.gracePeriodEndsAt?.toISOString(),
+      },
+    }).catch(() => undefined);
+  }
+}
+
 async function sendProjectExpiryEmails(doc: IProject, daysRemaining: number): Promise<void> {
   if (!doc.endDate) return;
-  const recipients = new Set<string>((doc.reminderEmails ?? []).map((e) => e.trim().toLowerCase()));
 
-  if (doc.ownerType === 'org' && doc.orgId) {
-    const ownerEmail = await resolveOrgOwnerEmail(doc.orgId);
-    if (ownerEmail) recipients.add(ownerEmail);
-  }
-
-  if (recipients.size === 0) return;
-
-  let brand: EmailBrand | undefined;
-  if (doc.ownerType === 'tenant' && doc.tenantId) {
-    const tenant = await Tenant.findById(doc.tenantId)
-      .select('name domain branding')
-      .lean();
-    if (tenant) {
-      brand = resolveTenantEmailBrand({
-        name: tenant.name,
-        domain: tenant.domain,
-        branding: tenant.branding,
-      });
-    }
-  } else {
-    brand = resolvePlatformEmailBrand();
-  }
-
+  const brand = await resolveProjectEmailBrand(doc);
   const endDateLabel = formatProjectDateLabel(doc.endDate);
   const manageUrl = projectManageUrl(doc);
   const archiveUrl = projectArchiveUrl(doc);
+  const graceHours = config.PROJECT_GRACE_PERIOD_HOURS;
 
-  await Promise.all(
-    [...recipients].map((to) =>
+  const supportAgentEmail = await resolveSupportAgentEmail(doc);
+  const sends: Promise<void>[] = [];
+  const agentSummary = supportAgentEmail
+    ? await summarizeProjectExpiryForAgent(doc)
+    : undefined;
+
+  if (supportAgentEmail) {
+    sends.push(
       sendProjectExpiryWarningEmail({
-        to,
+        to: supportAgentEmail,
         projectName: doc.name,
         clientName: doc.clientName,
         endDateLabel,
         daysRemaining,
+        graceHours,
         manageUrl,
         archiveUrl,
+        agentSummary,
         brand,
       }).catch((err: unknown) => {
-        logger.warn('[ProjectExpiry] Email send failed', {
+        logger.warn('[ProjectExpiry] Support agent email failed', {
           projectId: doc._id.toString(),
-          to,
+          to: supportAgentEmail,
           error: err instanceof Error ? err.message : String(err),
         });
       })
-    )
-  );
+    );
+  }
+
+  const clientEmail = doc.clientEmail?.trim().toLowerCase();
+  if (clientEmail) {
+    const clientSummary = await summarizeProjectExpiryForClient(doc);
+    sends.push(
+      sendProjectExpiryClientWarningEmail({
+        to: clientEmail,
+        projectName: doc.name,
+        clientName: doc.clientName,
+        endDateLabel,
+        daysRemaining,
+        graceHours,
+        clientSummary,
+        brand,
+      }).catch((err: unknown) => {
+        logger.warn('[ProjectExpiry] Client email failed', {
+          projectId: doc._id.toString(),
+          to: clientEmail,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      })
+    );
+  }
+
+  await Promise.all(sends);
 }
 
-async function archiveProjectByEndDate(doc: IProject): Promise<void> {
+async function archiveProjectAfterCleanup(doc: IProject): Promise<void> {
   doc.status = 'archived';
   doc.archivedReason = 'end_date_reached';
   doc.archivedAt = new Date();
   await doc.save();
 
   const title = 'Project archived';
-  const message = `"${doc.name}" reached its end date and was archived automatically. Existing resources were not deleted.`;
+  const message = `"${doc.name}" reached its end date. Assigned VMs were released during the grace period and the project was archived automatically.`;
 
   if (doc.ownerType === 'tenant' && doc.tenantId) {
     const tenantId = new mongoose.Types.ObjectId(doc.tenantId);
@@ -226,6 +321,40 @@ async function archiveProjectByEndDate(doc: IProject): Promise<void> {
   }
 }
 
+async function runCleanupAndArchive(doc: IProject): Promise<void> {
+  if (doc.expiryCleanupCompletedAt) return;
+
+  await runProjectExpiryCleanup(doc);
+  doc.expiryCleanupCompletedAt = new Date();
+  await archiveProjectAfterCleanup(doc);
+
+  logger.info('[ProjectExpiry] Grace cleanup + archive completed', {
+    projectId: doc._id.toString(),
+    gracePeriodEndsAt: doc.gracePeriodEndsAt?.toISOString(),
+  });
+}
+
+async function enterGracePeriodIfNeeded(doc: IProject, now: Date): Promise<boolean> {
+  if (!doc.endDate || doc.gracePeriodEndsAt || doc.autoArchiveEnabled === false) {
+    return false;
+  }
+  if (!isProjectOnOrAfterEndDate(doc.endDate, now)) return false;
+
+  doc.gracePeriodEndsAt = computeGracePeriodEndsAt(
+    doc.endDate,
+    config.PROJECT_GRACE_PERIOD_HOURS
+  );
+  await notifyGracePeriodStarted(doc);
+  await doc.save();
+
+  logger.info('[ProjectExpiry] Grace period started', {
+    projectId: doc._id.toString(),
+    endDate: doc.endDate.toISOString(),
+    gracePeriodEndsAt: doc.gracePeriodEndsAt.toISOString(),
+  });
+  return true;
+}
+
 export async function runProjectExpiryCheck(): Promise<void> {
   const now = new Date();
   const warningDays = config.PROJECT_EXPIRY_WARNING_DAYS;
@@ -241,13 +370,27 @@ export async function runProjectExpiryCheck(): Promise<void> {
     try {
       if (
         doc.autoArchiveEnabled !== false &&
-        isProjectEndDatePast(doc.endDate, now)
+        doc.gracePeriodEndsAt &&
+        !doc.expiryCleanupCompletedAt &&
+        isGracePeriodComplete(doc.gracePeriodEndsAt, now)
       ) {
-        await archiveProjectByEndDate(doc);
-        logger.info('[ProjectExpiry] Auto-archived project', {
-          projectId: doc._id.toString(),
-          endDate: doc.endDate.toISOString(),
-        });
+        await runCleanupAndArchive(doc);
+        continue;
+      }
+
+      const enteredGrace = await enterGracePeriodIfNeeded(doc, now);
+      if (enteredGrace) {
+        if (
+          doc.gracePeriodEndsAt &&
+          isGracePeriodComplete(doc.gracePeriodEndsAt, now) &&
+          !doc.expiryCleanupCompletedAt
+        ) {
+          await runCleanupAndArchive(doc);
+        }
+        continue;
+      }
+
+      if (doc.gracePeriodEndsAt) {
         continue;
       }
 
@@ -305,5 +448,6 @@ export function startProjectExpiryScheduler(): void {
   logger.info('[ProjectExpiry] Scheduler started', {
     intervalMs,
     warningDays: config.PROJECT_EXPIRY_WARNING_DAYS,
+    graceHours: config.PROJECT_GRACE_PERIOD_HOURS,
   });
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { ChevronLeft, Maximize, RefreshCw, LogOut } from 'lucide-react';
 import {
   closeConsoleSession,
@@ -11,6 +11,7 @@ import {
   type ConsoleSession,
 } from '../../lib/consoleApi';
 import { ApiError } from '../../lib/apiClient';
+import { exitGuacamoleConsolePage } from '../../lib/consoleLaunch';
 import {
   RESIZE_REFETCH_DEBOUNCE_MS,
   dimensionsDrifted,
@@ -55,15 +56,17 @@ export interface VMConsoleViewProps {
     protocol: ConsoleProtocol,
     dimensions?: ConsoleDimensions
   ) => Promise<ConsoleSession>;
+  /** Defaults to POST /api/v1/vms/:vmId/console/close */
+  closeSession?: (vmId: string) => void;
 }
 
 export function VMConsoleView({
   backHref,
   disconnectHref,
   getSession = getConsoleSession,
+  closeSession = closeConsoleSession,
 }: VMConsoleViewProps) {
   const { vmId } = useParams<{ vmId: string }>();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const protocol = parseProtocol(searchParams.get('protocol'));
 
@@ -173,12 +176,26 @@ export function VMConsoleView({
     return () => {
       clearTimeout(timer);
       ctrl.abort();
-      const cached = sessionRef.current;
-      if (cached) {
-        void closeConsoleSession(cached.connectionId);
+      if (sessionRef.current && vmId) {
+        closeSession(vmId);
       }
     };
-  }, [fetchSession]);
+  }, [fetchSession, vmId, closeSession]);
+
+  useEffect(() => {
+    if (!vmId) return;
+    const onPageHide = () => {
+      if (sessionRef.current) {
+        closeSession(vmId);
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+    };
+  }, [vmId, closeSession]);
 
   useEffect(() => {
     if (!session) return;
@@ -327,15 +344,13 @@ export function VMConsoleView({
   };
 
   const handleDisconnect = () => {
-    const cached = sessionRef.current;
-    if (cached) void closeConsoleSession(cached.connectionId);
-    router.push(disconnectHref);
+    if (sessionRef.current && vmId) closeSession(vmId);
+    exitGuacamoleConsolePage(disconnectHref);
   };
 
   const handleBack = () => {
-    const cached = sessionRef.current;
-    if (cached) void closeConsoleSession(cached.connectionId);
-    router.push(backHref);
+    if (sessionRef.current && vmId) closeSession(vmId);
+    exitGuacamoleConsolePage(backHref);
   };
 
   const badge = protocolColors[protocol];

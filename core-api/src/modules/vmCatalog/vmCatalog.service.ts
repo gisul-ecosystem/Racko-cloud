@@ -732,7 +732,7 @@ class VmCatalogService {
     const message = `${requesterEmail} paid ₹${doc.pricingSnapshot.total} for ${doc.quantity}× ${doc.planName} (${doc.billing}). Status: provisioning.`;
     const requestId = doc._id.toString();
     const actionUrl = opts?.tenantId
-      ? `/super-admin-console/webyne-vm-requests`
+      ? `/super-admin-console/webyne-vm-requests/${opts.tenantId}?scope=tenant`
       : `/super-admin-console/webyne-vm-requests/${doc.adminId?.toString() ?? ''}`;
 
     const results = await Promise.allSettled(
@@ -1688,21 +1688,42 @@ class VmCatalogService {
             .filter((id): id is string => Boolean(id))
         ),
       ];
-      const admins = await User.find({
-        _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
-      })
-        .select('email')
-        .lean();
+      const tenantIds = [
+        ...new Set(
+          openDocs
+            .map((d) => d.tenantId?.toString())
+            .filter((id): id is string => Boolean(id))
+        ),
+      ];
+      const [admins, tenants] = await Promise.all([
+        adminIds.length
+          ? User.find({
+              _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
+            })
+              .select('email')
+              .lean()
+          : Promise.resolve([]),
+        tenantIds.length
+          ? Tenant.find({
+              _id: { $in: tenantIds.map((id) => new mongoose.Types.ObjectId(id)) },
+            })
+              .select('name')
+              .lean()
+          : Promise.resolve([]),
+      ]);
       const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
+      const tenantNameById = new Map(tenants.map((t) => [t._id.toString(), t.name]));
 
       for (const doc of openDocs) {
         const requestId = doc._id.toString();
         const requesterLabel = doc.adminId
           ? emailById.get(doc.adminId.toString()) ?? 'Admin'
-          : 'Tenant';
+          : tenantNameById.get(doc.tenantId?.toString() ?? '') ?? 'Tenant';
         const actionUrl = doc.adminId
           ? `/super-admin-console/webyne-vm-requests/${doc.adminId.toString()}`
-          : '/super-admin-console/webyne-vm-requests';
+          : doc.tenantId
+            ? `/super-admin-console/webyne-vm-requests/${doc.tenantId.toString()}?scope=tenant`
+            : '/super-admin-console/webyne-vm-requests';
         for (const sa of superAdmins) {
           const exists = await Notification.exists({
             userId: sa._id,
@@ -1745,62 +1766,93 @@ class VmCatalogService {
     }
   }
 
-  /** Super-admin: one card per requesting admin with pending/total counts. */
+  /** Super-admin: one card per requesting admin or tenant with pending/total counts. */
   async listRequesterGroups(): Promise<CatalogVmRequesterGroup[]> {
     // Repair: ensure open requests have super-admin notifications (older buys may have missed them)
     await this.ensureSuperAdminNotificationsForOpenRequests();
 
-    const groups = await CatalogVmModel.aggregate<{
-      _id: mongoose.Types.ObjectId;
-      pendingCount: number;
-      totalCount: number;
-      lastRequestedAt: Date | null;
-    }>([
-      { $match: { adminId: { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: '$adminId',
-          pendingCount: {
-            $sum: {
-              $cond: [
-                {
-                  $in: ['$status', OPEN_FOR_SUPER_ADMIN],
-                },
-                1,
-                0,
-              ],
-            },
-          },
-          totalCount: { $sum: 1 },
-          lastRequestedAt: { $max: '$createdAt' },
+    const groupStage = {
+      pendingCount: {
+        $sum: {
+          $cond: [{ $in: ['$status', OPEN_FOR_SUPER_ADMIN] }, 1, 0],
         },
       },
-      { $sort: { pendingCount: -1, lastRequestedAt: -1 } },
+      totalCount: { $sum: 1 },
+      lastRequestedAt: { $max: '$createdAt' },
+    } as const;
+
+    const [adminGroups, tenantGroups] = await Promise.all([
+      CatalogVmModel.aggregate<{
+        _id: mongoose.Types.ObjectId;
+        pendingCount: number;
+        totalCount: number;
+        lastRequestedAt: Date | null;
+      }>([
+        { $match: { adminId: { $exists: true, $ne: null } } },
+        { $group: { _id: '$adminId', ...groupStage } },
+      ]),
+      CatalogVmModel.aggregate<{
+        _id: mongoose.Types.ObjectId;
+        pendingCount: number;
+        totalCount: number;
+        lastRequestedAt: Date | null;
+      }>([
+        { $match: { tenantId: { $exists: true, $ne: null } } },
+        { $group: { _id: '$tenantId', ...groupStage } },
+      ]),
     ]);
 
-    if (groups.length === 0) return [];
+    if (adminGroups.length === 0 && tenantGroups.length === 0) return [];
 
-    const adminIds = groups.map((g) => g._id);
-    const admins = await User.find({ _id: { $in: adminIds } })
-      .select('email')
-      .lean();
+    const [admins, tenants] = await Promise.all([
+      adminGroups.length
+        ? User.find({ _id: { $in: adminGroups.map((g) => g._id) } })
+            .select('email')
+            .lean()
+        : Promise.resolve([]),
+      tenantGroups.length
+        ? Tenant.find({ _id: { $in: tenantGroups.map((g) => g._id) } })
+            .select('name')
+            .lean()
+        : Promise.resolve([]),
+    ]);
     const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
+    const tenantNameById = new Map(tenants.map((t) => [t._id.toString(), t.name]));
 
-    return groups.map((g) => ({
-      adminId: g._id.toString(),
-      adminEmail: emailById.get(g._id.toString()) ?? g._id.toString(),
-      pendingCount: g.pendingCount,
-      totalCount: g.totalCount,
-      lastRequestedAt: g.lastRequestedAt ? g.lastRequestedAt.toISOString() : null,
-    }));
+    const cards: CatalogVmRequesterGroup[] = [
+      ...adminGroups.map((g) => ({
+        adminId: g._id.toString(),
+        kind: 'admin' as const,
+        adminEmail: emailById.get(g._id.toString()) ?? g._id.toString(),
+        pendingCount: g.pendingCount,
+        totalCount: g.totalCount,
+        lastRequestedAt: g.lastRequestedAt ? g.lastRequestedAt.toISOString() : null,
+      })),
+      ...tenantGroups.map((g) => ({
+        adminId: g._id.toString(),
+        kind: 'tenant' as const,
+        adminEmail: tenantNameById.get(g._id.toString()) ?? g._id.toString(),
+        pendingCount: g.pendingCount,
+        totalCount: g.totalCount,
+        lastRequestedAt: g.lastRequestedAt ? g.lastRequestedAt.toISOString() : null,
+      })),
+    ];
+
+    cards.sort((a, b) => {
+      if (b.pendingCount !== a.pendingCount) return b.pendingCount - a.pendingCount;
+      return (b.lastRequestedAt ?? '').localeCompare(a.lastRequestedAt ?? '');
+    });
+    return cards;
   }
 
   async listRequestsForSuperAdmin(opts: {
     status?: VmCatalogStatus | 'all';
     adminId?: mongoose.Types.ObjectId;
+    tenantId?: mongoose.Types.ObjectId;
   }): Promise<CatalogVmResponse[]> {
     const filter: Record<string, unknown> = {};
-    if (opts.adminId) filter.adminId = opts.adminId;
+    if (opts.tenantId) filter.tenantId = opts.tenantId;
+    else if (opts.adminId) filter.adminId = opts.adminId;
     if (opts.status && opts.status !== 'all') filter.status = opts.status;
 
     const docs = await CatalogVmModel.find(filter).sort({ createdAt: -1 });
@@ -1809,12 +1861,42 @@ class VmCatalogService {
         docs.map((d) => d.adminId?.toString()).filter((id): id is string => Boolean(id))
       ),
     ];
-    const admins = await User.find({
-      _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
-    })
-      .select('email')
-      .lean();
+    const tenantIds = [
+      ...new Set(
+        docs.map((d) => d.tenantId?.toString()).filter((id): id is string => Boolean(id))
+      ),
+    ];
+    const tenantUserIds = [
+      ...new Set(
+        docs.map((d) => d.tenantUserId?.toString()).filter((id): id is string => Boolean(id))
+      ),
+    ];
+    const [admins, tenants, tenantUsers] = await Promise.all([
+      adminIds.length
+        ? User.find({
+            _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
+          })
+            .select('email')
+            .lean()
+        : Promise.resolve([]),
+      tenantIds.length
+        ? Tenant.find({
+            _id: { $in: tenantIds.map((id) => new mongoose.Types.ObjectId(id)) },
+          })
+            .select('name')
+            .lean()
+        : Promise.resolve([]),
+      tenantUserIds.length
+        ? TenantUser.find({
+            _id: { $in: tenantUserIds.map((id) => new mongoose.Types.ObjectId(id)) },
+          })
+            .select('email')
+            .lean()
+        : Promise.resolve([]),
+    ]);
     const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
+    const tenantNameById = new Map(tenants.map((t) => [t._id.toString(), t.name]));
+    const tenantUserEmailById = new Map(tenantUsers.map((u) => [u._id.toString(), u.email]));
     const projects = await this.resolveProjectLabels(docs);
     const postReadyByRequest = await this.resolvePostReadyJobSummary(docs);
     const instances = await CatalogVmInstanceModel.find({
@@ -1834,9 +1916,15 @@ class VmCatalogService {
       const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
       const postReady = postReadyByRequest.get(doc._id.toString());
       const instanceRows = instancesByRequest.get(doc._id.toString()) || [];
+      const tenantLabel = doc.tenantId
+        ? tenantUserEmailById.get(doc.tenantUserId?.toString() ?? '') ??
+          tenantNameById.get(doc.tenantId.toString())
+        : undefined;
       return {
         ...this.toResponse(doc, {
-        adminEmail: doc.adminId ? emailById.get(doc.adminId.toString()) : undefined,
+        adminEmail: doc.adminId
+          ? emailById.get(doc.adminId.toString())
+          : tenantLabel,
         includeSecrets: true,
         role: 'super_admin',
         ...(postReady ? { postReadyOverride: postReady } : {}),

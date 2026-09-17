@@ -92,6 +92,9 @@ const envSchema = z.object({
   VM_BULK_DELETE_BATCH_SIZE: z.string().regex(/^\d+$/).transform(Number).default('5'),
   VM_TASK_POLL_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('2000'),
   VM_TASK_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
+  /** Default per-credential rate limit for /api/v1/public/* (requests per minute). */
+  PUBLIC_API_RATE_LIMIT_PER_MIN: z.string().regex(/^\d+$/).transform(Number).default('120'),
+
   VM_MAX_BULK_COUNT: z.string().regex(/^\d+$/).transform(Number).default('100'),
   VM_CPU_OVERCOMMIT_RATIO: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).default('4'),
   VM_RAM_OVERCOMMIT_RATIO: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).default('1.5'),
@@ -143,6 +146,7 @@ const envSchema = z.object({
     .default('3600000'),
 
   PROJECT_EXPIRY_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('1'),
+  PROJECT_GRACE_PERIOD_HOURS: z.string().regex(/^\d+$/).transform(Number).default('24'),
   PROJECT_EXPIRY_CHECK_INTERVAL_MS: z
     .string()
     .regex(/^\d+$/)

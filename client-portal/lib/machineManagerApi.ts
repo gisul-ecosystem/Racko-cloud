@@ -27,6 +27,12 @@ export interface IMachine {
   };
   agentVersion?: string;
   rackoAppVersion?: string;
+  lastReset?: {
+    status: 'pending' | 'success' | 'failed';
+    success?: boolean;
+    error?: string;
+    completedAt?: string;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }

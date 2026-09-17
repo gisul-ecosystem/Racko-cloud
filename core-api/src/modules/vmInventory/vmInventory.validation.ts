@@ -186,6 +186,8 @@ export const updateNotificationSettingsSchema = z.object({
     providerExpiryRecipients: z
       .array(z.string().trim().toLowerCase().email('Enter a valid email address.').max(200))
       .max(20),
+    /** 0 = on the expiry day, 1 = one day before, up to 30. */
+    warningDays: z.number().int().min(0).max(30).optional(),
   }),
 });
 
@@ -302,6 +304,16 @@ export const mapOwnerSchema = z.object({
     .refine((b) => !(b.adminId && b.tenantId), {
       message: 'Provide either adminId or tenantId, not both.',
     }),
+});
+
+export const seriesPreviewSchema = z.object({
+  query: z.object({
+    emailPrefix: z.string().email('emailPrefix must be a valid email address').max(200).trim(),
+    count: z.coerce.number().int().min(1).max(250),
+    targetType: z.enum(['admin', 'tenant']),
+    targetId: mongoObjectId,
+    projectId: mongoObjectId,
+  }),
 });
 
 export const ownerQuerySchema = z.object({

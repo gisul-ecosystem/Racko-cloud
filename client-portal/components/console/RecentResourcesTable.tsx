@@ -19,6 +19,7 @@ import { VMStatusBadge } from '../dashboard/VMStatusBadge';
 import { useConsoleShell } from './ConsoleContext';
 import type { ExternalVMProtocol } from '../../lib/externalVmApi';
 import type { VMStatus } from '../../lib/vmApi';
+import { openGuacamoleConsolePage } from '../../lib/consoleLaunch';
 
 const PAGE_SIZE = 6;
 
@@ -257,13 +258,24 @@ export function RecentResourcesTable() {
                     }`}
                   >
                     <td className="px-6 py-3.5">
-                      <Link
-                        href={item.href}
-                        className="flex items-center gap-3 font-medium text-gray-900 hover:text-[#B91C1C]"
-                      >
-                        <ResourceIcon kind={item.kind} />
-                        <span className="truncate">{item.name}</span>
-                      </Link>
+                      {item.kind === 'elastic' ? (
+                        <button
+                          type="button"
+                          onClick={() => openGuacamoleConsolePage(item.href)}
+                          className="flex w-full items-center gap-3 text-left font-medium text-gray-900 hover:text-[#B91C1C]"
+                        >
+                          <ResourceIcon kind={item.kind} />
+                          <span className="truncate">{item.name}</span>
+                        </button>
+                      ) : (
+                        <Link
+                          href={item.href}
+                          className="flex items-center gap-3 font-medium text-gray-900 hover:text-[#B91C1C]"
+                        >
+                          <ResourceIcon kind={item.kind} />
+                          <span className="truncate">{item.name}</span>
+                        </Link>
+                      )}
                     </td>
                     <td className="px-4 py-3.5 text-gray-600">{item.serviceLabel}</td>
                     <td className="px-4 py-3.5 font-mono text-xs text-gray-600">{item.detail}</td>

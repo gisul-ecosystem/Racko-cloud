@@ -1,4 +1,5 @@
 import { apiRequest } from './apiClient';
+import { closeConsoleSessionAtPath } from './consoleApi';
 import type { AccessSchedule, AccessScheduleInput } from './accessSchedule';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -165,6 +166,14 @@ export async function getExternalVMConsole(
     `/api/v1/external-vms/${id}/console${qs}`
   );
   return res.data;
+}
+
+export function platformExternalVmConsoleClosePath(id: string): string {
+  return `/api/v1/external-vms/${encodeURIComponent(id)}/console/close`;
+}
+
+export function closeExternalVMConsole(id: string): void {
+  closeConsoleSessionAtPath(platformExternalVmConsoleClosePath(id));
 }
 
 // ─── Assignment (admin) ───────────────────────────────────────────────────────

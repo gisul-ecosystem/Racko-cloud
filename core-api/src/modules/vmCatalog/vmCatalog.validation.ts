@@ -115,6 +115,7 @@ export const listCatalogVmRequestsQuerySchema = z.object({
       .optional()
       .default('provisioning'),
     adminId: mongoObjectId.optional(),
+    tenantId: mongoObjectId.optional(),
   }),
 });
 
