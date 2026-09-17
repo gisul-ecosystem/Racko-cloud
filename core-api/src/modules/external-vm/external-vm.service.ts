@@ -1515,6 +1515,7 @@ class ExternalVMService {
       protocol: doc.protocol,
       clientUrl: session.clientUrl,
       connectionId: session.connectionId,
+      expiresInSec: session.expiresInSec,
     };
   }
 

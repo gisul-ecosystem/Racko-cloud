@@ -35,6 +35,7 @@ interface GuacamoleEnv {
   username: string;
   password: string;
   requestTimeoutMs: number;
+  sessionTtlMs: number;
 }
 
 let cachedEnv: GuacamoleEnv | null = null;
@@ -58,6 +59,8 @@ function getEnv(): GuacamoleEnv {
     username,
     password,
     requestTimeoutMs: 10_000,
+    sessionTtlMs:
+      Math.max(300, Number(process.env['GUACAMOLE_SESSION_TTL_SECONDS']) || 3600) * 1000,
   };
   return cachedEnv;
 }
@@ -149,8 +152,9 @@ interface CachedToken {
 }
 
 let cachedToken: CachedToken | null = null;
-// Guacamole token lifetime is 1h by default — refresh proactively after 50m.
-const TOKEN_TTL_MS = 50 * 60 * 1000;
+// Keep backend REST authentication cached, but refresh before Guacamole's
+// configured session timeout. Browser console URLs never use this aged token.
+const BACKEND_TOKEN_REFRESH_BUFFER_MS = 10 * 60 * 1000;
 
 async function login(): Promise<CachedToken> {
   const env = getEnv();
@@ -182,7 +186,7 @@ async function login(): Promise<CachedToken> {
     return {
       authToken: res.data.authToken,
       dataSource: res.data.dataSource,
-      expiresAt: Date.now() + TOKEN_TTL_MS,
+      expiresAt: Date.now() + env.sessionTtlMs,
       srvName,
     };
   } catch (err) {
@@ -196,7 +200,11 @@ async function login(): Promise<CachedToken> {
 }
 
 async function getToken(forceRefresh = false): Promise<CachedToken> {
-  if (!forceRefresh && cachedToken && cachedToken.expiresAt > Date.now()) {
+  if (
+    !forceRefresh &&
+    cachedToken &&
+    cachedToken.expiresAt - BACKEND_TOKEN_REFRESH_BUFFER_MS > Date.now()
+  ) {
     return cachedToken;
   }
   cachedToken = await login();
@@ -500,7 +508,9 @@ export class GuacamoleClient {
 
     const connection = await upsertConnection(name, protocol, params);
     const displaced = await this.clearActiveSessionsForConnectionId(connection.identifier);
-    const token = await getToken();
+    // A browser must never inherit the remaining lifetime of the shared
+    // backend REST token. Mint a fresh Guacamole token for every launch.
+    const token = await login();
     const clientUrl = buildClientUrl(
       connection.identifier,
       token.authToken,

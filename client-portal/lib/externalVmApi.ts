@@ -94,6 +94,8 @@ export interface ExternalVMConsoleSession {
   protocol: ExternalVMProtocol;
   clientUrl: string;
   connectionId: string;
+  /** Guacamole authentication lifetime remaining when this URL was minted. */
+  expiresInSec?: number;
 }
 
 // ─── API response wrapper ─────────────────────────────────────────────────────

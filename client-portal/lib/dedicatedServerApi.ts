@@ -76,6 +76,7 @@ export interface DedicatedConsoleSession {
   protocol: DedicatedServerProtocol;
   clientUrl: string;
   connectionId: string;
+  expiresInSec?: number;
 }
 
 interface ApiResponse<T> {

@@ -134,4 +134,5 @@ export interface ExternalVMConsoleSession {
   protocol: ExternalVMProtocol;
   clientUrl: string;
   connectionId: string;
+  expiresInSec: number;
 }

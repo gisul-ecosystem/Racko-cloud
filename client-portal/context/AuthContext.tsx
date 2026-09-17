@@ -24,6 +24,7 @@ import {
   SUPER_ADMIN_OVERVIEW_PATH,
 } from '../lib/rbacApi';
 import { isTenantWorkspacePath } from '../lib/portalMode';
+import { broadcastConsoleLogout } from '../lib/consoleLogoutSync';
 
 export type UserRole = 'super_admin' | 'staff' | 'admin' | 'support_agent' | 'user';
 export type AccountType = 'legacy' | 'b2c' | 'b2b';
@@ -185,6 +186,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [scheduleTokenRefresh]);
 
   const handleLogout = useCallback(() => {
+    broadcastConsoleLogout('platform');
     clearAccessToken();
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     setState({ user: null, isLoading: false, isAuthenticated: false });

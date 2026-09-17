@@ -12,6 +12,7 @@ import {
 } from '../../lib/externalVmApi';
 import { ApiError } from '../../lib/apiClient';
 import { exitGuacamoleConsolePage } from '../../lib/consoleLaunch';
+import { subscribeToConsoleLogout } from '../../lib/consoleLogoutSync';
 import { useIsTenantPortal } from '../../lib/portalMode';
 import { startConsoleSession, heartbeatConsoleSession, endConsoleSession, endConsoleSessionBeacon, endConsoleSessionByTokenBeacon } from '../../lib/consoleSessionApi';
 import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
@@ -29,6 +30,8 @@ const IFRAME_OVERLAY_MIN_MS = 5000;
 /** Hard cap so a stuck iframe cannot block the console forever. */
 const IFRAME_OVERLAY_MAX_MS = 12000;
 const IFRAME_OVERLAY_FADE_MS = 300;
+const SESSION_RENEW_BUFFER_MS = 60_000;
+const MIN_SESSION_RENEW_DELAY_MS = 30_000;
 
 const protocolColors: Record<ExternalVMProtocol, { bg: string; border: string; text: string }> = {
   rdp: { bg: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.4)', text: '#93c5fd' },
@@ -83,6 +86,7 @@ export function ExternalVMConsoleView({
   const id = params.id ?? params.serverId;
   const [session, setSession] = useState<ExternalVMConsoleSession | null>(null);
   const sessionRef = useRef<ExternalVMConsoleSession | null>(null);
+  const sessionExpiresAtRef = useRef<number | null>(null);
   const hasSessionRef = useRef(false);
   const [vmName, setVmName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,6 +109,7 @@ export function ExternalVMConsoleView({
   const isFullscreenRef = useRef(false);
   /** Blocks resize refetch briefly after fullscreen enter/exit. */
   const fullscreenTransitionUntilRef = useRef(0);
+  const logoutClosingRef = useRef(false);
 
   const sessionIdRef = useRef<string | null>(null);
   const endTokenRef = useRef<string | null>(null);
@@ -168,6 +173,9 @@ export function ExternalVMConsoleView({
         if (signal?.aborted) return;
         setSession(data);
         sessionRef.current = data;
+        sessionExpiresAtRef.current = data.expiresInSec
+          ? Date.now() + data.expiresInSec * 1000
+          : null;
         setIframeKey((k) => k + 1);
       } catch (err) {
         if (signal?.aborted) return;
@@ -236,6 +244,41 @@ export function ExternalVMConsoleView({
     };
   }, [id, closeSession]);
 
+  useEffect(
+    () =>
+      subscribeToConsoleLogout(isTenantPortal ? 'tenant' : 'platform', () => {
+        if (logoutClosingRef.current) return;
+        logoutClosingRef.current = true;
+
+        if (sessionRef.current && id) {
+          closeSession(id);
+          sessionRef.current = null;
+        }
+        if (sessionIdRef.current) {
+          if (endTokenRef.current) {
+            const apiPath = sessionTracking
+              ? '/api/v1/tenant-external-vms/sessions/end-by-token'
+              : '/api/v1/external-vms/sessions/end-by-token';
+            endConsoleSessionByTokenBeacon(endTokenRef.current, getGatewayBaseUrl(), apiPath);
+          } else {
+            const beaconFn = sessionTracking?.endBeacon ?? endConsoleSessionBeacon;
+            beaconFn(sessionIdRef.current, getGatewayBaseUrl());
+          }
+          sessionIdRef.current = null;
+          endTokenRef.current = null;
+          stopHeartbeat();
+        }
+
+        window.close();
+        window.setTimeout(() => {
+          if (!window.closed) {
+            window.location.replace(isTenantPortal ? '/console/login' : '/login');
+          }
+        }, 150);
+      }),
+    [isTenantPortal, id, closeSession, sessionTracking, stopHeartbeat]
+  );
+
   // Resolve the VM name for the toolbar title (best-effort, non-blocking).
   useEffect(() => {
     if (!id) return;
@@ -255,6 +298,19 @@ export function ExternalVMConsoleView({
     startIframeLoading();
     return () => clearIframeTimeout();
   }, [session, iframeKey, startIframeLoading, clearIframeTimeout]);
+
+  // Renew before Guacamole authentication expires so users never fall
+  // through to Guacamole's own login page.
+  useEffect(() => {
+    const expiresInSec = session?.expiresInSec;
+    if (!expiresInSec) return;
+    const delay = Math.max(
+      MIN_SESSION_RENEW_DELAY_MS,
+      expiresInSec * 1000 - SESSION_RENEW_BUFFER_MS
+    );
+    const timer = window.setTimeout(() => void fetchSession(), delay);
+    return () => window.clearTimeout(timer);
+  }, [session, fetchSession]);
 
   // Reconnect only on substantial, settled window resizes — not per-pixel
   // drags and not when entering/exiting fullscreen (Guacamole refits in place).
@@ -379,12 +435,16 @@ export function ExternalVMConsoleView({
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
+        const expiresAt = sessionExpiresAtRef.current;
+        if (expiresAt && expiresAt - SESSION_RENEW_BUFFER_MS <= Date.now()) {
+          void fetchSession();
+        }
         setTimeout(() => iframeRef.current?.focus(), 200);
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+  }, [fetchSession]);
 
   const handleFullscreen = () => {
     // Fullscreen the wrapping container, not the <iframe> itself. Some page

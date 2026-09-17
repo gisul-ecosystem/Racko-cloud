@@ -23,6 +23,8 @@ export interface ConsoleSession {
   clientUrl: string;
   connectionId: string;
   protocol: ConsoleProtocol;
+  /** Guacamole authentication lifetime remaining when this URL was minted. */
+  expiresInSec?: number;
 }
 
 interface ApiResponse<T> {

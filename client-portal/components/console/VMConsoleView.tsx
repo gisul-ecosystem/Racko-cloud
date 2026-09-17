@@ -12,6 +12,8 @@ import {
 } from '../../lib/consoleApi';
 import { ApiError } from '../../lib/apiClient';
 import { exitGuacamoleConsolePage } from '../../lib/consoleLaunch';
+import { subscribeToConsoleLogout } from '../../lib/consoleLogoutSync';
+import { useIsTenantPortal } from '../../lib/portalMode';
 import {
   RESIZE_REFETCH_DEBOUNCE_MS,
   dimensionsDrifted,
@@ -26,6 +28,8 @@ const IFRAME_OVERLAY_MIN_MS = 5000;
 /** Hard cap so a stuck iframe cannot block the console forever. */
 const IFRAME_OVERLAY_MAX_MS = 12000;
 const IFRAME_OVERLAY_FADE_MS = 300;
+const SESSION_RENEW_BUFFER_MS = 60_000;
+const MIN_SESSION_RENEW_DELAY_MS = 30_000;
 
 const protocolColors: Record<ConsoleProtocol, { bg: string; border: string; text: string }> = {
   rdp: { bg: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.4)', text: '#93c5fd' },
@@ -66,6 +70,7 @@ export function VMConsoleView({
   getSession = getConsoleSession,
   closeSession = closeConsoleSession,
 }: VMConsoleViewProps) {
+  const isTenantPortal = useIsTenantPortal();
   const { vmId } = useParams<{ vmId: string }>();
   const searchParams = useSearchParams();
   const protocol = parseProtocol(searchParams.get('protocol'));
@@ -81,6 +86,7 @@ export function VMConsoleView({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<ConsoleSession | null>(null);
+  const sessionExpiresAtRef = useRef<number | null>(null);
   const iframeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayStartedAtRef = useRef(0);
   /** Dimensions actually sent with the last console-session request. */
@@ -92,6 +98,7 @@ export function VMConsoleView({
   const isFullscreenRef = useRef(false);
   /** Blocks resize refetch briefly after fullscreen enter/exit. */
   const fullscreenTransitionUntilRef = useRef(0);
+  const logoutClosingRef = useRef(false);
 
   /**
    * Prefer the iframe's actual container box over window.innerWidth/innerHeight
@@ -149,6 +156,9 @@ export function VMConsoleView({
         if (signal?.aborted) return;
         setSession(data);
         sessionRef.current = data;
+        sessionExpiresAtRef.current = data.expiresInSec
+          ? Date.now() + data.expiresInSec * 1000
+          : null;
         setIframeKey((k) => k + 1);
       } catch (err) {
         if (signal?.aborted) return;
@@ -197,11 +207,43 @@ export function VMConsoleView({
     };
   }, [vmId, closeSession]);
 
+  useEffect(
+    () =>
+      subscribeToConsoleLogout(isTenantPortal ? 'tenant' : 'platform', () => {
+        if (logoutClosingRef.current) return;
+        logoutClosingRef.current = true;
+        if (sessionRef.current && vmId) {
+          closeSession(vmId);
+          sessionRef.current = null;
+        }
+        window.close();
+        window.setTimeout(() => {
+          if (!window.closed) {
+            window.location.replace(isTenantPortal ? '/console/login' : '/login');
+          }
+        }, 150);
+      }),
+    [isTenantPortal, vmId, closeSession]
+  );
+
   useEffect(() => {
     if (!session) return;
     startIframeLoading();
     return () => clearIframeTimeout();
   }, [session, iframeKey, startIframeLoading, clearIframeTimeout]);
+
+  // Renew before Guacamole authentication expires. This replaces the iframe
+  // with a freshly authenticated URL instead of exposing Guacamole's login UI.
+  useEffect(() => {
+    const expiresInSec = session?.expiresInSec;
+    if (!expiresInSec) return;
+    const delay = Math.max(
+      MIN_SESSION_RENEW_DELAY_MS,
+      expiresInSec * 1000 - SESSION_RENEW_BUFFER_MS
+    );
+    const timer = window.setTimeout(() => void fetchSession(), delay);
+    return () => window.clearTimeout(timer);
+  }, [session, fetchSession]);
 
   // Reconnect only on substantial, settled window resizes — not per-pixel
   // drags and not when entering/exiting fullscreen (Guacamole refits in place).
@@ -310,6 +352,10 @@ export function VMConsoleView({
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
+        const expiresAt = sessionExpiresAtRef.current;
+        if (expiresAt && expiresAt - SESSION_RENEW_BUFFER_MS <= Date.now()) {
+          void fetchSession();
+        }
         setTimeout(() => iframeRef.current?.focus(), 200);
       }
     };
@@ -317,7 +363,7 @@ export function VMConsoleView({
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, []);
+  }, [fetchSession]);
 
   const handleReconnect = () => {
     void fetchSession();
