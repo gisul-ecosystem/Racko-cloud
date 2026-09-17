@@ -597,6 +597,10 @@ export default function MyMachinesPage() {
 
   useEffect(() => { void loadJobs(); }, [loadJobs, machines]);
 
+  // Stable ref so SSE closures always call the latest refetch
+  const refetchRef = useRef(refetch);
+  useEffect(() => { refetchRef.current = refetch; }, [refetch]);
+
   // Cleanup SSE on unmount
   useEffect(() => () => { sseRef.current?.(); }, []);
 
@@ -690,7 +694,7 @@ export default function MyMachinesPage() {
       const result = await resetMachines(selectedMachines.map((m) => m._id), sessionId);
 
       // Immediately refetch so the DB 'pending' record shows the spinner
-      refetch();
+      refetchRef.current();
 
       if (result.accepted.length > 0) {
         const ticket = await issueResetStreamTicket(sessionId);
@@ -701,14 +705,14 @@ export default function MyMachinesPage() {
           // On any terminal event, refetch machines — DB is updated, UI reads from it
           (event) => {
             if (event.type === 'reset_complete') {
-              refetch();
+              refetchRef.current();
             }
           },
           () => { sseRef.current = null; },
           () => {
             // Give-up: all retries exhausted — refetch to get latest DB state
             sseRef.current = null;
-            refetch();
+            refetchRef.current();
           },
           result.accepted.length,
         );

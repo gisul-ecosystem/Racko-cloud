@@ -138,7 +138,7 @@ class MachineManagerService {
         { status: 'pending' },
         { completedAt: { $gte: recentCutoff } },
       ],
-    }).sort({ completedAt: -1, createdAt: -1 }).lean();
+    }).sort({ createdAt: -1 }).lean();
 
     // Build machineId -> latest result map (already sorted desc so first wins)
     const resetByMachineId = new Map<string, { status: 'pending' | 'success' | 'failed'; success?: boolean; error?: string; completedAt?: string }>();
