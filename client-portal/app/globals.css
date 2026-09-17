@@ -172,3 +172,48 @@ input[type="date"] {
   color-scheme: dark;
 }
 
+@keyframes racko-hero-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes racko-hero-shine {
+  0% {
+    transform: translateX(-140%) skewX(-18deg);
+  }
+  100% {
+    transform: translateX(240%) skewX(-18deg);
+  }
+}
+
+@keyframes racko-hero-badge {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(185, 28, 28, 0.28);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(185, 28, 28, 0);
+  }
+}
+
+.racko-hero-shine {
+  transform: translateX(-140%) skewX(-18deg);
+}
+
+.group:hover .racko-hero-shine {
+  animation: racko-hero-shine 0.95s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .racko-hero-float,
+  .racko-hero-badge-pulse,
+  .racko-hero-shine {
+    animation: none !important;
+  }
+}
+

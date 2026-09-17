@@ -1,13 +1,30 @@
 import type { InsightCard, NavItem, SolutionCard } from "@/types";
 
 export const NAV_LINKS: NavItem[] = [
-  { label: "Products", href: "/products", hasDropdown: false },
-  { label: "Solutions", href: "/solutions", hasDropdown: false },
-  { label: "Industries", href: "/industries", hasDropdown: true },
-  { label: "Platform", href: "/platform", hasDropdown: false },
-  { label: "Resources", href: "/resources", hasDropdown: false },
-  { label: "Company", href: "/company", hasDropdown: true },
+  { label: "Products", href: "/products", hasDropdown: true },
+  { label: "Solution", href: "/solutions", hasDropdown: true },
+  { label: "Pricing", href: "/products", hasDropdown: false },
 ];
+
+export const PRODUCT_NAV_LINKS = [
+  { label: "Cloud VPS", href: "/products/cloud-vps" },
+  { label: "VPS", href: "/products/vps" },
+  { label: "Dedicated Server", href: "/products/dedicated-server" },
+  { label: "Dedicated Cloud", href: "/products/dedicated-cloud" },
+  { label: "GPU Cloud", href: "/products/gpu-cloud" },
+  { label: "Private Cloud", href: "/products/private-cloud" },
+  { label: "S3 Storage", href: "/products/s3-storage" },
+  { label: "Backup Storage", href: "/products/backup-storage" },
+] as const;
+
+export const SOLUTION_NAV_LINKS = [
+  { label: "Workload Cloud", href: "/products" },
+  { label: "AI-Ready Cloud", href: "/products/gpu-cloud" },
+  { label: "CloudLabs for Teams", href: "/cloudlabs" },
+  { label: "Backup & DR", href: "/products/backup-storage" },
+  { label: "Cloud Cost Benchmarking", href: "/benchmark" },
+  { label: "Secure Workspaces", href: "/products/private-cloud" },
+] as const;
 
 export const TRUST_LOGOS = [
   "Sutherland",
