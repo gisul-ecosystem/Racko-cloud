@@ -17,7 +17,7 @@ import { useJobStream } from '../../../../hooks/useJobStream';
 import { useSoftwareCatalog } from '../../../../hooks/useSoftwareCatalog';
 import {
   Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp,
-  RotateCcw, CheckCircle2, XCircle, Loader2, X, Package, Terminal, Search, WifiOff,
+  RotateCcw, CheckCircle2, XCircle, Loader2, X, Package, Terminal, Search,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -147,30 +147,13 @@ function SoftwareProgress({ jobs, isAuthenticated }: { jobs: IJob[]; isAuthentic
   );
 }
 
-// ─── Reset status types ───────────────────────────────────────────────────────
-type ResetPhase = 'pending' | 'resetting' | 'success' | 'failed' | 'offline';
-
-interface ResetRowState {
-  phase: ResetPhase;
-  error?: string;
-  /** timestamp (ms) when success was set — used to auto-clear after 8 s */
-  clearedAt?: number;
-}
-
-// ─── Reset Status Cell ────────────────────────────────────────────────────────
-function ResetStatusCell({ state }: { state: ResetRowState | undefined }) {
-  if (!state || state.phase === 'idle' as string) {
+// ─── Reset Status Cell — reads directly from machine.lastReset (DB-driven) ────
+function ResetStatusCell({ lastReset }: { lastReset: IMachine['lastReset'] }) {
+  if (!lastReset) {
     return <span className="text-xs text-gray-400">—</span>;
   }
-  switch (state.phase) {
+  switch (lastReset.status) {
     case 'pending':
-      return (
-        <span className="inline-flex items-center gap-1.5 text-xs text-gray-500">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
-          Queued
-        </span>
-      );
-    case 'resetting':
       return (
         <span className="inline-flex items-center gap-1.5 text-xs text-blue-600 font-medium">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -188,17 +171,10 @@ function ResetStatusCell({ state }: { state: ResetRowState | undefined }) {
       return (
         <span
           className="inline-flex items-center gap-1.5 text-xs text-red-600 font-medium cursor-help"
-          title={state.error ?? 'Reset failed'}
+          title={lastReset.error ?? 'Reset failed'}
         >
           <XCircle className="h-3.5 w-3.5" />
           Failed
-        </span>
-      );
-    case 'offline':
-      return (
-        <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
-          <WifiOff className="h-3.5 w-3.5" />
-          Agent offline
         </span>
       );
   }
@@ -601,8 +577,6 @@ export default function MyMachinesPage() {
   // Reset confirm + status
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
-  // Per-machine inline reset status — replaces the old blocking modal
-  const [resetById, setResetById] = useState<Record<string, ResetRowState>>({});
   const sseRef = useRef<(() => void) | null>(null);
 
   // Jobs keyed by machineId
@@ -625,56 +599,6 @@ export default function MyMachinesPage() {
 
   // Cleanup SSE on unmount
   useEffect(() => () => { sseRef.current?.(); }, []);
-
-  // Auto-clear success states after 8 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setResetById((prev) => {
-        const now = Date.now();
-        const next = { ...prev };
-        let changed = false;
-        for (const [id, state] of Object.entries(next)) {
-          if (state.phase === 'success' && state.clearedAt && now - state.clearedAt > 8000) {
-            delete next[id];
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Hydrate resetById from DB on every machines refresh — same pattern as jobs.
-  // DB snapshot only seeds entries that have NO existing in-memory state.
-  // If a machine already has any state in resetById (from SSE or user action),
-  // the in-memory state always wins — prevents DB from overwriting active resets.
-  useEffect(() => {
-    if (!machines.length) return;
-    setResetById((prev) => {
-      const additions: typeof prev = {};
-      for (const m of machines) {
-        // Only seed from DB if this machine has no in-memory state at all
-        if (m.lastReset && !prev[m._id]) {
-          const phase = m.lastReset.status === 'pending'
-            ? 'resetting'
-            : m.lastReset.status === 'success'
-              ? 'success'
-              : 'failed';
-          additions[m._id] = {
-            phase,
-            error: m.lastReset.error,
-            // Use Date.now() (local time) as clearedAt so the 8s auto-clear
-            // starts from when the UI first sees it, not from the server timestamp.
-            // If server completedAt is >8s old it would otherwise clear immediately.
-            clearedAt: phase === 'success' ? Date.now() : undefined,
-          };
-        }
-      }
-      // Merge — existing in-memory states are never touched
-      return Object.keys(additions).length > 0 ? { ...additions, ...prev } : prev;
-    });
-  }, [machines]);
 
   const handleRefresh = () => { refetch(); void loadJobs(); };
 
@@ -761,31 +685,12 @@ export default function MyMachinesPage() {
     setResetting(true);
     setShowResetConfirm(false);
 
-    // Mark all selected machines as pending in the inline column
-    setResetById((prev) => {
-      const next = { ...prev };
-      for (const m of selectedMachines) {
-        next[m._id] = { phase: 'pending' };
-      }
-      return next;
-    });
-
     try {
       const sessionId = `reset-${Date.now()}`;
       const result = await resetMachines(selectedMachines.map((m) => m._id), sessionId);
 
-      // Immediately resolve offline/accepted states
-      setResetById((prev) => {
-        const next = { ...prev };
-        for (const m of selectedMachines) {
-          if (result.offline.includes(m._id)) {
-            next[m._id] = { phase: 'offline' };
-          } else {
-            next[m._id] = { phase: 'resetting' };
-          }
-        }
-        return next;
-      });
+      // Immediately refetch so the DB 'pending' record shows the spinner
+      refetch();
 
       if (result.accepted.length > 0) {
         const ticket = await issueResetStreamTicket(sessionId);
@@ -793,34 +698,17 @@ export default function MyMachinesPage() {
         const stop = openResetStatusStreamWithReconnect(
           sessionId,
           ticket.streamToken,
+          // On any terminal event, refetch machines — DB is updated, UI reads from it
           (event) => {
-            if (event.type === 'reset_complete' && event.machineId) {
-              const mid = event.machineId;
-              setResetById((prev) => ({
-                ...prev,
-                [mid]: {
-                  phase: event.success ? 'success' : 'failed',
-                  error: event.error,
-                  clearedAt: event.success ? Date.now() : undefined,
-                },
-              }));
+            if (event.type === 'reset_complete') {
+              refetch();
             }
           },
           () => { sseRef.current = null; },
           () => {
+            // Give-up: all retries exhausted — refetch to get latest DB state
             sseRef.current = null;
-            setResetById((prev) => {
-              const next = { ...prev };
-              for (const [id, state] of Object.entries(next)) {
-                if (state.phase === 'resetting') {
-                  next[id] = {
-                    phase: 'failed',
-                    error: 'Connection lost — reset may have completed. Check the machine status.',
-                  };
-                }
-              }
-              return next;
-            });
+            refetch();
           },
           result.accepted.length,
         );
@@ -829,18 +717,8 @@ export default function MyMachinesPage() {
       }
 
       setSelectedIds(new Set());
-      // Do NOT auto-refetch here — the 3s timeout was causing useEffect([machines])
-      // to fire mid-reset and overwrite active SSE states with the DB snapshot.
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to initiate reset.');
-      // Clear the pending states on error
-      setResetById((prev) => {
-        const next = { ...prev };
-        for (const m of selectedMachines) {
-          delete next[m._id];
-        }
-        return next;
-      });
     } finally {
       setResetting(false);
     }
@@ -1044,7 +922,6 @@ export default function MyMachinesPage() {
                   {filteredMachines.map((m, i) => {
                     const isSelected = selectedIds.has(m._id);
                     const isOnline = m.status === 'online';
-                    const resetState = resetById[m._id];
                     return (
                       <tr
                         key={m._id}
@@ -1073,7 +950,7 @@ export default function MyMachinesPage() {
                           <SoftwareProgress jobs={jobsByMachine[m._id] ?? []} isAuthenticated={isAuthenticated} />
                         </td>
                         <td className="px-5 py-3">
-                          <ResetStatusCell state={resetState} />
+                          <ResetStatusCell lastReset={m.lastReset ?? null} />
                         </td>
                         <td className="px-5 py-3 text-xs text-gray-400">
                           {m.lastSeen ? new Date(m.lastSeen).toLocaleString() : '—'}
