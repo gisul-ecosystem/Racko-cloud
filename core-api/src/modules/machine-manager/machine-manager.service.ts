@@ -51,7 +51,7 @@ setInterval(() => {
 class MachineManagerService {
   // ─── Mappers ───────────────────────────────────────────────────────────────
 
-  private toMachineResponse(doc: IMachine): MachineResponse {
+  private toMachineResponse(doc: IMachine, lastReset?: { success: boolean; error?: string; completedAt: string } | null): MachineResponse {
     return {
       _id: doc._id.toString(),
       name: doc.name,
@@ -71,6 +71,7 @@ class MachineManagerService {
       } : undefined,
       agentVersion: doc.agentVersion,
       rackoAppVersion: doc.rackoAppVersion,
+      lastReset: lastReset ?? null,
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };
@@ -125,7 +126,31 @@ class MachineManagerService {
 
   async listMachines(adminId: mongoose.Types.ObjectId): Promise<MachineResponse[]> {
     const docs = await MachineModel.find({ adminId, deleted: { $ne: true } }).sort({ createdAt: -1 });
-    return docs.map((d) => this.toMachineResponse(d));
+
+    // Batch-query the most recent reset result per machine (within 15 minutes)
+    // Same pattern as jobs — source of truth is DB so refresh restores status
+    const { ResetResultModel } = await import('../../models/resetResult.model');
+    const recentCutoff = new Date(Date.now() - 15 * 60 * 1000);
+    const machineIds = docs.map((d) => d._id);
+    const resetResults = await ResetResultModel.find({
+      machineId: { $in: machineIds },
+      completedAt: { $gte: recentCutoff },
+    }).sort({ completedAt: -1 }).lean();
+
+    // Build machineId -> latest result map (already sorted desc so first wins)
+    const resetByMachineId = new Map<string, { success: boolean; error?: string; completedAt: string }>();
+    for (const r of resetResults) {
+      const key = r.machineId.toString();
+      if (!resetByMachineId.has(key)) {
+        resetByMachineId.set(key, {
+          success: r.success,
+          error: r.error,
+          completedAt: r.completedAt.toISOString(),
+        });
+      }
+    }
+
+    return docs.map((d) => this.toMachineResponse(d, resetByMachineId.get(d._id.toString()) ?? null));
   }
 
   async getMachine(

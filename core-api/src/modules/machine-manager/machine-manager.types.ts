@@ -32,6 +32,11 @@ export interface MachineResponse {
   };
   agentVersion?: string;
   rackoAppVersion?: string;
+  lastReset?: {
+    success: boolean;
+    error?: string;
+    completedAt: string;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
