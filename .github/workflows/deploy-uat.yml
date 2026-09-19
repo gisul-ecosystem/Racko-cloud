@@ -9,6 +9,8 @@
 # client-portal bakes NEXT_PUBLIC_GATEWAY_URL to the public API (e.g. https://api-test.racko.ai).
 # cloud-automation large-lab batch sizes are also set in docker-compose.yml (defaults: 25).
 # Nginx must proxy /api/ → :8000 on uat.racko.ai and each tenant domain (proxy_read_timeout >= 300s).
+#
+# Docker images are multi-arch (linux/amd64 + linux/arm64), same pattern as production.
 
 name: Build & Deploy UAT via SSH
 
@@ -39,24 +41,34 @@ jobs:
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build core-api image
-        run: |
-          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt | tr -d '[:space:]')
-          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt | tr -d '[:space:]')
-          AGENT_VERSION=$(cat agent-artifacts/agent-linux/agent-version.txt | tr -d '[:space:]')
-          RACKO_APP_VERSION=$(cat agent-artifacts/agent-windows/racko-app-version.txt | tr -d '[:space:]')
-          RACKO_APP_CHECKSUM=$(cat agent-artifacts/agent-windows/racko-app-checksum.txt | tr -d '[:space:]')
-          docker build \
-            --build-arg AGENT_VERSION=$AGENT_VERSION \
-            --build-arg AGENT_CHECKSUM_WINDOWS=$CHECKSUM_WINDOWS \
-            --build-arg AGENT_CHECKSUM_LINUX=$CHECKSUM_LINUX \
-            --build-arg RACKO_APP_VERSION=$RACKO_APP_VERSION \
-            --build-arg RACKO_APP_CHECKSUM=$RACKO_APP_CHECKSUM \
-            -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:uat \
-            -f core-api/Dockerfile core-api/
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Push core-api image
-        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:uat
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Load agent build args from artifacts
+        run: |
+          echo "CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt | tr -d '[:space:]')" >> $GITHUB_ENV
+          echo "CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt | tr -d '[:space:]')" >> $GITHUB_ENV
+          echo "AGENT_VERSION=$(cat agent-artifacts/agent-linux/agent-version.txt | tr -d '[:space:]')" >> $GITHUB_ENV
+          echo "RACKO_APP_VERSION=$(cat agent-artifacts/agent-windows/racko-app-version.txt | tr -d '[:space:]')" >> $GITHUB_ENV
+          echo "RACKO_APP_CHECKSUM=$(cat agent-artifacts/agent-windows/racko-app-checksum.txt | tr -d '[:space:]')" >> $GITHUB_ENV
+
+      - name: Build and push core-api image
+        uses: docker/build-push-action@v5
+        with:
+          context: core-api/
+          file: core-api/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:uat
+          build-args: |
+            AGENT_VERSION=${{ env.AGENT_VERSION }}
+            AGENT_CHECKSUM_WINDOWS=${{ env.CHECKSUM_WINDOWS }}
+            AGENT_CHECKSUM_LINUX=${{ env.CHECKSUM_LINUX }}
+            RACKO_APP_VERSION=${{ env.RACKO_APP_VERSION }}
+            RACKO_APP_CHECKSUM=${{ env.RACKO_APP_CHECKSUM }}
 
   build-cloud-gateway:
     name: Build & Push cloud-gateway
@@ -68,11 +80,20 @@ jobs:
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build cloud-gateway image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:uat -f cloud-gateway/Dockerfile cloud-gateway/
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Push cloud-gateway image
-        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:uat
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push cloud-gateway image
+        uses: docker/build-push-action@v5
+        with:
+          context: cloud-gateway/
+          file: cloud-gateway/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:uat
 
   build-cloud-automation:
     name: Build & Push cloud-automation
@@ -84,11 +105,20 @@ jobs:
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build cloud-automation image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:uat -f cloud_automation/Dockerfile cloud_automation/
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Push cloud-automation image
-        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:uat
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push cloud-automation image
+        uses: docker/build-push-action@v5
+        with:
+          context: cloud_automation/
+          file: cloud_automation/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:uat
 
   build-cloud-automation-aws:
     name: Build & Push cloud-automation-aws
@@ -100,11 +130,20 @@ jobs:
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build cloud-automation-aws image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:uat -f cloud_automation_aws/Dockerfile cloud_automation_aws/
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Push cloud-automation-aws image
-        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:uat
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push cloud-automation-aws image
+        uses: docker/build-push-action@v5
+        with:
+          context: cloud_automation_aws/
+          file: cloud_automation_aws/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:uat
 
   build-cloud-automation-reseller:
     name: Build & Push cloud-automation-reseller
@@ -116,11 +155,20 @@ jobs:
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build cloud-automation-reseller image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-reseller:uat -f cloud_automation_reseller/Dockerfile cloud_automation_reseller/
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Push cloud-automation-reseller image
-        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-reseller:uat
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push cloud-automation-reseller image
+        uses: docker/build-push-action@v5
+        with:
+          context: cloud_automation_reseller/
+          file: cloud_automation_reseller/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-reseller:uat
 
   build-cloud-automation-training:
     name: Build & Push cloud-automation-training
@@ -132,11 +180,20 @@ jobs:
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build cloud-automation-training image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:uat -f cloud_automation_training/Dockerfile cloud_automation_training/
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Push cloud-automation-training image
-        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:uat
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push cloud-automation-training image
+        uses: docker/build-push-action@v5
+        with:
+          context: cloud_automation_training/
+          file: cloud_automation_training/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:uat
 
   build-client-portal:
     name: Build & Push client-portal
@@ -148,16 +205,23 @@ jobs:
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build client-portal image
-        run: |
-          docker build \
-            --build-arg NEXT_PUBLIC_VM_MAX_BULK_COUNT=50 \
-            --build-arg NEXT_PUBLIC_GATEWAY_URL=https://api-test.racko.ai \
-            -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:uat \
-            -f client-portal/Dockerfile client-portal/
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Push client-portal image
-        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:uat
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push client-portal image
+        uses: docker/build-push-action@v5
+        with:
+          context: client-portal/
+          file: client-portal/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:uat
+          build-args: |
+            NEXT_PUBLIC_VM_MAX_BULK_COUNT=50
+            NEXT_PUBLIC_GATEWAY_URL=https://api-test.racko.ai
 
   build-create-vm-catalog-agent:
     name: Build & Push create-vm-catalog-agent
@@ -169,11 +233,20 @@ jobs:
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build create-vm-catalog-agent image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:uat -f create-vm-catalog-agent/Dockerfile create-vm-catalog-agent/
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Push create-vm-catalog-agent image
-        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:uat
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push create-vm-catalog-agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: create-vm-catalog-agent/
+          file: create-vm-catalog-agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:uat
 
   build-agent:
     name: Build Agent Binaries (${{ matrix.os }})
